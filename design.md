@@ -1531,11 +1531,19 @@ foreman 把每行 `- [ ] <id> <description>` 当一个 sprint item；
   2. hard rule 加一条「**7 个 step 必须连续走完，commit+push 之后必须 open PR**，不要在 commit 之后假死或等下游事件——open PR 是 specialist 责任不是 foreman 责任」
 - 来源：本项目 2026-05-23 ~ 2026-05-24 实测，M1-followup PR #18（commit `73acb0f`，ruff format 漏）+ M1-cleanup PR #22（commit `7ceda51`，ruff format 漏 + 无 PR 开两份病灶）。
 
-**🟠 R25：foreman session 不返 final JSON 就 exit（v1.3 新增，M1-followup / M1-cleanup 反复踩坑）**
+**🟠 R25：foreman session 不返 final JSON 就 exit（v1.3 新增，M1-followup / M1-cleanup / M1-cleanup-p1 连续 3 次踩坑——spec 硬化未起效）**
 - 触发：foreman dispatch specialist 后等响应，但因为 round budget tight / specialist 半路死 / 自己 idle 太久某种内部超时，**session 退出但没 print final JSON 到 stdout**。output 末尾留下一句中间态消息（如 "Continuing to wait on backend-fixer." 或 "PR #21 confirmed merged (gate=SUCCESS). Continuing to wait."）——非 JSON、非 final。
-- 后果：下游（cron-fired reporter / 人手 reconciliation）必须 grep PR 列表 + git log + worktree 状态把 session 实际做了什么逆向重建，每次浪费 5-10 min 人工。M1-followup + M1-cleanup 两个 session 都犯，连续两次。
-- 正确做法：foreman.md hard rule 8 强化「**EVERY exit path 必须 print final JSON 到 stdout 作为最后一个动作**」，包括 mid-flight bail 也要 print partial-progress JSON with `status="blocked-escalate"` + `last_failures` 解释退出原因。state.json 写盘不算替代——caller parse 的是 stdout JSON。
-- 来源：本项目 2026-05-23 ~ 2026-05-24 实测，state.json 里 `last_failures.symptom_hash = "foreman:no-final-json-on-exit"` 各记一次。
+- 后果：下游（cron-fired reporter / 人手 reconciliation）必须 grep PR 列表 + git log + worktree 状态把 session 实际做了什么逆向重建，每次浪费 5-10 min 人工。
+- spec 硬化无效（重要）：commit `126bba3` 给 `.claude/agents/foreman.md` 加 hard rule 8 + Loop step 8「EVERY exit path 必须 print final JSON to stdout」**5 分钟后** M1-cleanup-p1 session 启动，**仍然犯**——模型对自己 system prompt 里的新加规则不可靠遵守。这是 R25 之前以为是 spec 漏洞，**v1.3 后期承认是模型行为问题**。
+- **mitigation（v1.3 内补，commit `<本节 commit>`，用户决策"option A 包装层"）**：新增 `scripts/dispatch-foreman.sh` wrapper：
+  - 调度前 snapshot `origin/main` SHA + ISO ts
+  - 跑 `claude --print --agent foreman ...` 捕获 stdout 到 `docs/foreman-runs/<sprint>-<ts>.log`
+  - 调度后再 fetch + 跑 `gh pr list --state merged --search "merged:>=<start_ts>"` 列窗口内实际 merged PR + `git log <start_sha>..<end_sha>` 列窗口内 new commit
+  - 尝试 best-effort 从 stdout 提 foreman 的 JSON（fenced ```json 块优先，balanced-brace 兜底）
+  - 写 reconciled JSON 到 `docs/foreman-runs/<sprint>-<ts>.json` 含 `r25_violation: bool` + `verified_merged_prs_in_window` + `new_commits_on_main_in_window` + `foreman_self_report` (extracted JSON or null)
+  - **caller parse 这份 wrapper JSON**，foreman 自己返不返 stdout JSON 不影响——R25 实际影响降到 0
+- 正确使用：所有 foreman dispatch **都通过 wrapper**：`echo "<prompt>" | scripts/dispatch-foreman.sh <sprint-label> [--model opus|sonnet]`。foreman.md hard rule 8 / Loop step 8 保留作 model best-effort 指引，但不再依赖。
+- 来源：本项目 2026-05-23 ~ 2026-05-24 实测，state.json 里 `last_failures.symptom_hash = "foreman:no-final-json-on-exit"` 各记一次（共 3 次）；wrapper option A 由用户 2026-05-24 决策选 A 后落地。
 
 ### 14.3 中危级（积累到一定规模会触发）
 
