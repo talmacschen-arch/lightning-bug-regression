@@ -370,3 +370,85 @@ async def test_non_explain_query_has_no_plan_text() -> None:
         result = await execute_sql_step(pool, "s_select", "default", "SELECT 1")
     assert result.status is StepStatus.PASS
     assert result.plan_text is None
+
+
+# ---------------------------------------------------------------------------
+# (n) Autocommit DDL branch issues SET statement_timeout BEFORE switching
+#     to autocommit (§14 R5 — symmetric timeout layering).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_autocommit_ddl_sets_statement_timeout_before_autocommit() -> None:
+    """DDL path must SET statement_timeout while still inside the implicit tx,
+    i.e. BEFORE conn.autocommit = True. Once autocommit is True there is no
+    implicit transaction context for SET to live in.
+
+    This test pins the ordering: we record which SQL strings hit conn.execute
+    (driver-level, used for SET) vs cursor.execute (DDL itself) and verify the
+    SET happens first in conn.executed AND that autocommit was flipped True
+    *after* the SET (we observe via the rollback->SET->autocommit ordering).
+    """
+    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
+
+    # Track autocommit transition timestamps relative to executed-list growth.
+    # We override __setattr__ via a subclass so we can capture WHEN the
+    # autocommit flag flipped relative to the conn.executed list snapshot.
+    class _OrderingConn(_FakeAsyncConnection):
+        def __init__(self, cur: _FakeAsyncCursor) -> None:
+            super().__init__(cur)
+            self.executed_len_when_autocommit_set: int | None = None
+
+        def __setattr__(self, name: str, value: object) -> None:
+            if name == "autocommit" and value is True:
+                # Capture the size of executed at the moment autocommit flips True.
+                # Use object.__setattr__ to avoid recursion / the not-yet-initialized
+                # attribute case during base __init__.
+                executed = self.__dict__.get("executed")
+                if executed is not None:
+                    object.__setattr__(self, "executed_len_when_autocommit_set", len(executed))
+            object.__setattr__(self, name, value)
+
+    conn = _OrderingConn(cursor)
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        result = await execute_sql_step(
+            pool,
+            "ddl-timeout",
+            "default",
+            "DROP DATABASE IF EXISTS mydb",
+            timeout_ms=5000,
+        )
+    assert result.status is StepStatus.PASS
+    # SET statement_timeout was issued.
+    set_indices = [i for i, q in enumerate(conn.executed) if "statement_timeout = 5000" in q]
+    assert set_indices, f"expected SET statement_timeout in conn.executed, got {conn.executed!r}"
+    # The SET must appear BEFORE autocommit was switched to True. The captured
+    # length equals the number of conn.execute() calls completed prior to the
+    # flip — the SET's index must be < that length.
+    assert conn.executed_len_when_autocommit_set is not None, "autocommit was never set to True"
+    assert set_indices[0] < conn.executed_len_when_autocommit_set, (
+        f"SET (idx={set_indices[0]}) must precede autocommit flip "
+        f"(executed_len at flip={conn.executed_len_when_autocommit_set})"
+    )
+    # And rollback happened before SET (clears any pre-existing tx state).
+    assert conn.rollbacks >= 1
+
+
+# ---------------------------------------------------------------------------
+# (o) Autocommit DDL branch with timeout_ms=None issues NO SET — preserve
+#     existing behavior when caller declines a timeout (§14 R5: opt-in).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_autocommit_ddl_without_timeout_issues_no_set() -> None:
+    """When timeout_ms is None or 0, the DDL path must not issue any SET on
+    the connection (matches the tx branch's opt-in behavior)."""
+    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
+    conn = _FakeAsyncConnection(cursor)
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        result = await execute_sql_step(
+            pool, "ddl-no-timeout", "default", "DROP DATABASE IF EXISTS mydb"
+        )
+    assert result.status is StepStatus.PASS
+    assert not any("statement_timeout" in q for q in conn.executed), (
+        f"expected no SET statement_timeout when timeout_ms=None, got {conn.executed!r}"
+    )
