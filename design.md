@@ -177,12 +177,10 @@ id: lg-bug-0001-hashjoin-right-table   # 全局唯一，与文件名一致；英
                                        # 命名：bug → lg-bug-NNNN-<slug>；extension → lg-ext-<extname>-<slug>
 title: hashjoin 右表(小表)的选择正确性   # 自由文本，可中文；面向人读
 category: bug_regression               # v0.7 新增。**取值不在 schema 写死**，由 §4.5 `case_categories` 表驱动
-                                       # 当前 seed：bug_regression（默认） / extension
+                                       # 当前活跃 category 清单见 §4.5 seed 表；schema doc 不重复枚举（§14 R4b）
                                        # 决定 status 词汇白名单、id 前缀、目录归属、看板分组
 status: open                           # 合法值取决于 category（§4.5 status_whitelist 字段）。
-                                       # 当前 seed 下：
-                                       #   bug_regression: open | fixed | wontfix | stub
-                                       #   extension:      stable | experimental | deprecated | stub
+                                       # 具体清单见 §4.5 status_whitelist 字段；schema doc 不重复枚举（§14 R4b）
                                        # stub 在所有 category 下含义一致：仅录入元信息、缺可执行 steps，run 时 skip
 severity: high                         # high | medium | low
 
