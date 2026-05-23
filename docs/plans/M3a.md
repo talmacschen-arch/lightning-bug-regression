@@ -31,7 +31,7 @@ reviewer 必须按 §14 cross-reference + §6.4 8 条逐项核对（详 `.claude
 
 ### Sprint M3a-frontend-skeleton — 编辑器骨架（依赖 M3a-1/2/3 stub）
 
-- [ ] M3a-4 `/cases/new` editor page 骨架：`frontend/src/routes/CaseNewPage.tsx`。布局：上方 Tab（A/B 入口）+ 中间 textarea（plain，先不 monaco，后期 M5 升级）+ 下方 3 按钮（Validate / Try / Save） + 右侧 step result panel。`data-testid` 全标（§14 R6）。`App.tsx` 加 `<Route path="/cases/new" element={<CaseNewPage />} />`，导航栏加链接
+- [x] M3a-4 `/cases/new` editor page 骨架：`frontend/src/routes/CaseNewPage.tsx`。布局：上方 Tab（A/B 入口）+ 中间 textarea（plain，先不 monaco，后期 M5 升级）+ 下方 3 按钮（Validate / Try / Save） + 右侧 step result panel。`data-testid` 全标（§14 R6）。`App.tsx` 加 `<Route path="/cases/new" element={<CaseNewPage />} />`，导航栏加链接
 
 ### Sprint M3a-frontend-flow — 双入口 + 三段闸门（依赖 M3a-4）
 

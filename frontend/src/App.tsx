@@ -6,6 +6,7 @@ import CaseDetailPage from './routes/CaseDetailPage';
 import RunsPage from './routes/RunsPage';
 import RunNewPage from './routes/RunNewPage';
 import RunDetailPage from './routes/RunDetailPage';
+import CaseNewPage from './routes/CaseNewPage';
 import NotFoundPage from './routes/NotFoundPage';
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<Navigate to="/cases" replace />} />
           <Route path="/cases" element={<CasesPage />} />
+          <Route path="/cases/new" element={<CaseNewPage />} />
           <Route path="/cases/:id" element={<CaseDetailPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/new" element={<RunNewPage />} />
