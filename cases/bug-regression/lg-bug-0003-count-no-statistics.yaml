@@ -1,7 +1,7 @@
 id: lg-bug-0003-count-no-statistics
-title: "select count(*) 提示列无统计信息，analyze 也不解决"
+title: ANALYZE 后 select count(*) 仍提示 "one or more columns ... do not have statistics"
 category: bug_regression
-status: stub
+status: open
 severity: medium
 destructive: false
 
@@ -14,16 +14,19 @@ issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issue
 tags: [optimizer, statistics, count]
 
 description: |
-  跑 `SELECT count(*)` 时优化器/执行器提示 "one or more columns in the
-  following tables do not have statistics"，对相关表 ANALYZE 也不消除该
-  warning。stub：当前仅录入元信息，等本机能复现后再补可执行 SQL。
+  对表执行 ANALYZE 后，SELECT count(*) 仍然输出 "one or more columns in
+  the following tables do not have statistics" 提示。本 case 用空表与
+  10000 行两种规模分别验证 ANALYZE 之后 count(*) 都不应再出现该提示。
 procedure: |
-  待补：飞书原文未给出可独立复现的最小 SQL；首次手工 reproduce 通过后
-  把触发 SQL（含表 DDL / 数据规模 / 是否分区 / 是否 mirror）落进 steps，
-  并把 status 从 stub 升到 open。
+  1) DROP + CREATE 一张空 test001 (id bigint, name text) DISTRIBUTED BY (id)；
+  2) ANALYZE test001（空表）；
+  3) SELECT count(*) FROM test001：不应出现 "do not have statistics" 提示，
+     count 应为 0；
+  4) INSERT 10000 行（id + md5(random())），再 ANALYZE；
+  5) 再次 SELECT count(*)：同样不应出现该提示，count 应为 10000。
 expected: |
-  - count(*) 正常返回；
-  - 不出现 "one or more columns ... do not have statistics" 提示。
+  - 两次 count(*) 查询的输出/NOTICE 流里都不含 "do not have statistics" 子串；
+  - 空表查询 scalar = 0；populated 查询 scalar = 10000。
 
 applies_to: {}
 preconditions: {}
@@ -32,12 +35,40 @@ external_deps: []
 defaults:
   database: postgres
 
-# stub：steps 留空；runner 见 status:stub 会 skip 并在报告里标"待补可执行 SQL"。
-steps: []
+setup:
+  - DROP TABLE IF EXISTS test001
+
+steps:
+  - name: "空表 ANALYZE 后 count(*) 不应提示无统计"
+    kind: sql
+    sql: |
+      CREATE TABLE IF NOT EXISTS test001 (id bigint, name text) DISTRIBUTED BY (id);
+      ANALYZE test001;
+      SELECT count(*) FROM test001
+    expect:
+      scalar: 0
+      not_contains: "do not have statistics"
+
+  - name: "INSERT 10000 行 + ANALYZE 后 count(*) 不应提示无统计"
+    kind: sql
+    sql: |
+      INSERT INTO test001 SELECT id, md5(random()::text) FROM generate_series(1, 10000) id;
+      ANALYZE test001;
+      SELECT count(*) FROM test001
+    expect:
+      scalar: 10000
+      not_contains: "do not have statistics"
+
+teardown:
+  - DROP TABLE IF EXISTS test001
 
 created_by: chenqiang
 created_at: "2026-05-23"
 notes: |
-  停留在 stub 的理由（与 Q13 一致）：可执行 SQL 缺失 ≠ 修复状态未知；这两件
-  事正交。等手工复现拿到稳定 trigger 后单独 PR 把本文件改成 status:open
-  + 完整 steps。
+  从 status:stub 升 status:open——飞书原文补齐了可执行 SQL（DDL +
+  两段 ANALYZE/count(*) 子测试），不再需要 stub。
+
+  "do not have statistics" 是 pg/Greenplum 的 NOTICE 级输出；runner 实跑
+  时需要把 psycopg connection.notices 拼接进 step 输出流，让 expect
+  not_contains 可以匹配——同 lg-bug-0002 的 NOTICE 捕获依赖。M1 runner
+  实现 sql_driver 时统一处理。
