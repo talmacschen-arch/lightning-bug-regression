@@ -4,14 +4,22 @@ const BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http:
 
 type Method = 'get' | 'post' | 'put' | 'delete' | 'patch';
 
+export interface ApiFetchInit {
+  body?: unknown;
+  query?: Record<string, string | number | undefined>;
+  path?: Record<string, string | number>;
+  /**
+   * Additional HTTP status codes beyond 2xx that should be treated as
+   * non-error (i.e. response body is returned rather than thrown).
+   * Callers use this to read error-shaped response bodies (e.g. 409).
+   */
+  allowedStatuses?: number[];
+}
+
 export async function apiFetch<P extends keyof paths, M extends keyof paths[P] & Method>(
   path: P,
   method: M,
-  init?: {
-    body?: unknown;
-    query?: Record<string, string | number | undefined>;
-    path?: Record<string, string | number>;
-  },
+  init?: ApiFetchInit,
 ): Promise<unknown> {
   let url: string = BASE + (path as string);
 
@@ -44,7 +52,9 @@ export async function apiFetch<P extends keyof paths, M extends keyof paths[P] &
 
   const res = await fetch(url, fetchInit);
 
-  if (!res.ok) {
+  const isAllowed = init?.allowedStatuses?.includes(res.status) ?? false;
+
+  if (!res.ok && !isAllowed) {
     throw new Error(`API ${method as string} ${path as string} failed: ${res.status} ${res.statusText}`);
   }
 
