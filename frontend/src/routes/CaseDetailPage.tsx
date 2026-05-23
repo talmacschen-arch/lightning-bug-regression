@@ -1,6 +1,248 @@
-import { useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { apiFetch } from '@/api/client';
+import type { components } from '@/api/client';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+
+type CaseDetail = components['schemas']['CaseDetail'];
+
+// Status badge styling — keep it data-driven (no hardcoded category logic per §14 R4b).
+function StatusBadge({ status }: { status: string }) {
+  const colorMap: Record<string, string> = {
+    active: 'bg-green-100 text-green-800',
+    skip: 'bg-yellow-100 text-yellow-800',
+    invalid: 'bg-red-100 text-red-800',
+  };
+  const cls = colorMap[status] ?? 'bg-gray-100 text-gray-800';
+  return (
+    <span
+      data-testid="case-detail-status-badge"
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${cls}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function ParsedSection({ label, content, testId }: { label: string; content: string; testId: string }) {
+  return (
+    <Card data-testid={testId}>
+      <CardHeader>
+        <CardTitle className="text-base">{label}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="whitespace-pre-wrap break-words text-sm">{content}</p>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function CaseDetailPage() {
   const { id } = useParams<{ id: string }>();
-  return <div data-testid="page-case-detail">Case detail (M2-6 placeholder) — id: {id}</div>;
+  const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    setLoading(true);
+    setNotFound(false);
+
+    apiFetch('/cases/{case_id}', 'get', { path: { case_id: id } })
+      .then((data) => {
+        if (!cancelled) {
+          setCaseDetail(data as CaseDetail);
+          setLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setLoading(false);
+          // Detect 404 from the error message produced by apiFetch.
+          if (err instanceof Error && err.message.includes('404')) {
+            setNotFound(true);
+          } else {
+            setNotFound(true);
+          }
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  if (loading) {
+    return (
+      <div data-testid="case-detail-loading" className="p-6 space-y-4">
+        <Skeleton className="h-8 w-1/2" />
+        <Skeleton className="h-4 w-1/4" />
+        <Skeleton className="h-32 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
+  }
+
+  if (notFound || !caseDetail) {
+    return (
+      <div data-testid="case-detail-not-found" className="p-6 text-center">
+        <h2 className="text-xl font-semibold mb-2">Case not found</h2>
+        <p className="text-muted-foreground mb-4">
+          The case <span className="font-mono">{id}</span> could not be found.
+        </p>
+        <Link
+          to="/cases"
+          data-testid="case-detail-back-link"
+          className="text-primary underline hover:no-underline"
+        >
+          Back to cases
+        </Link>
+      </div>
+    );
+  }
+
+  const parsed = caseDetail.parsed ?? {};
+  const description = typeof parsed['description'] === 'string' ? parsed['description'] : null;
+  const procedure = typeof parsed['procedure'] === 'string' ? parsed['procedure'] : null;
+  const expected = typeof parsed['expected'] === 'string' ? parsed['expected'] : null;
+  const artifacts = typeof parsed['artifacts'] === 'string' ? parsed['artifacts'] : null;
+
+  // Collect related links from parsed fields.
+  const linkEntries: { label: string; href: string }[] = [];
+  if (typeof parsed['related_pr'] === 'string' && parsed['related_pr']) {
+    linkEntries.push({ label: 'Related PR', href: parsed['related_pr'] as string });
+  }
+  if (typeof parsed['related_issue'] === 'string' && parsed['related_issue']) {
+    linkEntries.push({ label: 'Related Issue', href: parsed['related_issue'] as string });
+  }
+  const links = parsed['links'];
+  if (Array.isArray(links)) {
+    for (const l of links) {
+      if (typeof l === 'string' && l) {
+        linkEntries.push({ label: l, href: l });
+      } else if (l && typeof l === 'object') {
+        const lo = l as Record<string, unknown>;
+        const href = typeof lo['url'] === 'string' ? lo['url'] : typeof lo['href'] === 'string' ? lo['href'] : null;
+        const label = typeof lo['label'] === 'string' ? lo['label'] : href;
+        if (href && label) {
+          linkEntries.push({ label, href });
+        }
+      }
+    }
+  }
+
+  return (
+    <div data-testid="page-case-detail" className="p-6 space-y-6">
+      {/* Header */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 data-testid="case-detail-title" className="text-2xl font-bold">
+            {caseDetail.title ?? caseDetail.id}
+          </h1>
+          <StatusBadge status={caseDetail.status} />
+          {caseDetail.destructive && (
+            <span
+              data-testid="case-detail-destructive-badge"
+              className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-600/20"
+            >
+              destructive
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
+          <span data-testid="case-detail-id">
+            <span className="font-mono">{caseDetail.id}</span>
+          </span>
+          {caseDetail.category && (
+            <span data-testid="case-detail-category">{caseDetail.category}</span>
+          )}
+        </div>
+
+        {caseDetail.tags && caseDetail.tags.length > 0 && (
+          <div data-testid="case-detail-tags" className="flex flex-wrap gap-2">
+            {caseDetail.tags.map((tag) => (
+              <span
+                key={tag}
+                data-testid={`case-detail-tag-${tag}`}
+                className="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Parsed narrative sections */}
+      {description && (
+        <ParsedSection label="Description" content={description} testId="case-detail-section-description" />
+      )}
+      {procedure && (
+        <ParsedSection label="Procedure" content={procedure} testId="case-detail-section-procedure" />
+      )}
+      {expected && (
+        <ParsedSection label="Expected" content={expected} testId="case-detail-section-expected" />
+      )}
+      {artifacts && (
+        <ParsedSection label="Artifacts / Links" content={artifacts} testId="case-detail-section-artifacts" />
+      )}
+
+      {/* YAML raw view */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Raw YAML</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <pre
+            data-testid="case-yaml-raw"
+            className="font-mono text-sm whitespace-pre-wrap break-words bg-muted rounded-md p-4 overflow-x-auto"
+          >
+            {caseDetail.yaml_raw}
+          </pre>
+        </CardContent>
+      </Card>
+
+      {/* Related links */}
+      {linkEntries.length > 0 && (
+        <Card data-testid="case-detail-links-section">
+          <CardHeader>
+            <CardTitle className="text-base">Related Links</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-1">
+              {linkEntries.map((entry, idx) => (
+                <li key={idx}>
+                  <a
+                    data-testid={`case-link-${idx}`}
+                    href={entry.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline hover:no-underline text-sm"
+                  >
+                    {entry.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Error notice for invalid YAML cases */}
+      {caseDetail.error && (
+        <Card data-testid="case-detail-error" className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-base text-red-600">Parse Error</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-red-700 whitespace-pre-wrap break-words">{caseDetail.error}</p>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
 }
