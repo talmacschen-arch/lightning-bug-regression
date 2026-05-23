@@ -37,6 +37,8 @@ from sqlalchemy import select
 from app.api.cases import _iter_case_files, _load_categories
 from app.runner import orchestrator
 from app.runner.case_normalizer import normalize_case
+from app.runner.dsn_builder import dsn_map_from_env
+from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory, Run
 
@@ -175,7 +177,14 @@ async def _execute_run(
 ) -> None:
     """Background task body. Folds all exceptions: status flips to
     'aborted' on unexpected failure, never re-raises (BackgroundTasks
-    swallows exceptions but logs them — we want our own structured log)."""
+    swallows exceptions but logs them — we want our own structured log).
+
+    Builds a SqlSessionPool from PG* env vars (host/port/user/database)
+    before invoking orchestrator. Without this, SQL steps unconditionally
+    error with "sql step requires sql_pool to be configured" — M2 dogfood
+    2026-05-24 followup.
+    """
+    sql_pool = SqlSessionPool(dsn_map_from_env(cases))
     try:
         summary = await orchestrator.run_suite(
             cases,
@@ -184,6 +193,7 @@ async def _execute_run(
             jinja_context=jinja_context,
             dut_hosts=dut_hosts,
             session_factory=sqlite_store.get_session,
+            sql_pool=sql_pool,
         )
         with sqlite_store.get_session() as sess:
             sqlite_store.finish_run(
@@ -208,6 +218,13 @@ async def _execute_run(
                 )
         except Exception:  # noqa: BLE001
             logger.exception("failed to mark run %d aborted", run_id)
+    finally:
+        # Close pooled connections so they don't leak across runs (each
+        # run gets a fresh pool — different cases may target different DBs).
+        try:
+            await sql_pool.close_all()
+        except Exception:  # noqa: BLE001
+            logger.exception("run %d: sql_pool.close_all failed", run_id)
 
 
 # ---------------------------------------------------------------------------
