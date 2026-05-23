@@ -1,53 +1,59 @@
 {
-  "session_id": "m1-2026-05-24T0030Z",
-  "started_at": "2026-05-24T00:26:00Z",
-  "last_heartbeat": "2026-05-24T02:35:00Z",
-  "sprint_label": "M1",
-  "round": 6,
+  "session_id": "m1-followup-2026-05-24T0250Z",
+  "started_at": "2026-05-24T00:30:00+08:00",
+  "last_heartbeat": "2026-05-24T02:35:00+08:00",
+  "sprint_label": "M1-followup",
+  "round": 7,
   "round_budget": 10,
   "wall_budget_hours": 2,
   "status": "done",
+  "note": "M1-followup session 由 foreman (sonnet override 一次例外，用户 2026-05-24 授权) 推 F-1/F-2/F-3 主体；最后 F-3 PR #18 因 F-2 merged 导致 sql_driver/test 冲突，由人手 resolve + 推 psql -c convention 收尾。整个 M1 + M1-followup chain 闭环，5/5 dogfood PASS。",
   "items_done": [
-    {"name": "M1-1", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/2", "merged_at": "2026-05-23T15:14:38Z", "merge_commit": "879e89f"},
-    {"name": "M1-prep-runner-types", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/3", "merged_at": "2026-05-23T15:20:56Z", "merge_commit": "d502aa9"},
-    {"name": "M1-4", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/4", "merged_at": "2026-05-23T15:24:46Z", "merge_commit": "19d6090"},
-    {"name": "M1-3", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/5", "merged_at": "2026-05-23T15:25:04Z", "merge_commit": "1cca90e"},
-    {"name": "M1-2", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/6", "merged_at": "2026-05-23T15:25:11Z", "merge_commit": "19c9d20", "note": "yaml_loader.py implements a stricter schema than design.md §4.1; rejects all 5 real cases (kind/name/sql vs id/on/driver/run, category=bug-regression vs bug_regression). Realignment deferred to M2. M1-11 sidesteps this via the dogfood script normalizer."},
-    {"name": "M1-7", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/7", "merged_at": "2026-05-23T15:28:33Z", "merge_commit": "6a08abb"},
-    {"name": "M1-6", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/8", "merged_at": "2026-05-23T15:29:18Z", "merge_commit": "ea78235", "follow_up_pr": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/11"},
-    {"name": "M1-8", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/9", "merged_at": "2026-05-23T15:30:56Z", "merge_commit": "d3f8821"},
-    {"name": "M1-5", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/10", "merged_at": "2026-05-23T15:41:07Z", "merge_commit": "3726b82"},
-    {"name": "M1-9", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/12", "merged_at": "2026-05-23T16:39:56Z", "merge_commit": "4239644"},
-    {"name": "M1-10", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/13", "merged_at": "2026-05-23T16:59:22Z", "merge_commit": "8bb6d5f"},
-    {"name": "M1-11-prep-dogfood-script", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/14", "merged_at": "2026-05-23T17:13:25Z", "merge_commit": "5915ab9", "note": "Adds backend/scripts/run_m1_dogfood.py — normalizer + runner that side-steps yaml_loader."},
-    {"name": "M1-11-prep-plan-contains-fix", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/15", "merged_at": "2026-05-23T17:18:34Z", "merge_commit": "e80dc65", "note": "fix(runner): _plan_contains accepts list[str] per §4.1 — unblocks lg-bug-0001 from spurious TypeError."},
-    {"name": "M1-11", "evidence": "smoke-runner GO at 2026-05-23T17:24:30Z; docs/m1-dogfood-2026-05-23-172355.md committed in THIS PR; 3 pass / 1 fail / 1 error per-case verdict; runner+drivers wired correctly end-to-end on synxdb-0001", "smoke_verdict": "GO", "report_path": "docs/m1-dogfood-2026-05-23-172355.md"}
+    {
+      "name": "F-1",
+      "evidence": "PR #19 squash-merged as 1fa3b07 at 2026-05-23T17:51:40Z — yaml_loader 与 §4.1 对齐",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/19",
+      "merged_at": "2026-05-23T17:51:40Z",
+      "merge_commit": "1fa3b07"
+    },
+    {
+      "name": "F-2",
+      "evidence": "PR #17 squash-merged as c5a9d11 at 2026-05-23T17:57:39Z — sql_driver populate plan_text from EXPLAIN",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/17",
+      "merged_at": "2026-05-23T17:57:39Z",
+      "merge_commit": "c5a9d11"
+    },
+    {
+      "name": "F-3",
+      "evidence": "PR #18 squash-merged as b49b766 at 2026-05-23T18:20:01Z — sql_driver _NON_TX_DDL_RE + autocommit；首选写法变为 `su - gpadmin -c \"psql -c '<DDL>'\"` (design.md §4.1 convention) 由收尾 commit 落地",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/18",
+      "merged_at": "2026-05-23T18:20:01Z",
+      "merge_commit": "b49b766"
+    },
+    {
+      "name": "F-3-followup-psql-convention",
+      "evidence": "收尾 commit 218c8fe — dogfood normalizer 加 `psql ` 子串路由 → shell driver；lg-bug-0005 setup/teardown 改 su gpadmin wrap；design.md §4.1 加 convention 备注",
+      "pr_url": null,
+      "merged_at": "2026-05-24T02:30:00+08:00",
+      "merge_commit": "218c8fe"
+    },
+    {
+      "name": "M1-followup-dogfood-rerun",
+      "evidence": "docs/m1-dogfood-2026-05-23-1828.md (5/5 PASS)；lg-bug-0001 (F-2 起效) / 0002 / 0003 / 0004 / 0005 (F-3 + psql convention 综合奏效)；teardown DROP DATABASE 因 sql_driver step 持 mydb 连接 fail，但 R9 fold + best-effort 保留 case status pass，符合 §15 设计",
+      "pr_url": null,
+      "merged_at": "2026-05-24T02:28:32+08:00",
+      "merge_commit": null
+    }
   ],
   "item_in_progress": null,
   "items_remaining": [],
-  "needs_human": [
-    {
-      "kind": "design_decision",
-      "summary": "yaml_loader.py (M1-2 / PR #6) implemented a stricter schema than design.md §4.1 — rejects all 5 real cases (field-name mismatch: id/on/driver/run vs name/kind/sql; category=bug-regression vs bug_regression; setup/teardown as list[step] vs list[str]). The M1-11 dogfood script side-steps this with an in-script normalizer. M2 should re-align yaml_loader with §4.1 (and update API /cases to surface them as valid).",
-      "blocking_item": "M2-yaml-loader-§4.1-alignment",
-      "first_seen_at": "2026-05-23T17:00:00Z",
-      "attempt_count": 0
-    },
-    {
-      "kind": "design_decision",
-      "summary": "sql_driver (M1-5 / PR #10) does not populate StepResult.plan_text from EXPLAIN output — the EXPLAIN result rows land in stdout, not plan_text. lg-bug-0001 dogfood shows assertion `plan_contains: [Hash, tmp_test02]` FAILing because plan_text is None even though the EXPLAIN plain text in stdout clearly shows tmp_test02 as hash build side (i.e., BUG actually upstream-fixed). M2 should: (a) detect EXPLAIN-shaped queries in sql_driver and store the concatenated result rows in StepResult.plan_text, OR (b) make assertions._plan_contains fall back to stdout when plan_text is None. Option (b) is the smaller change.",
-      "blocking_item": "M2-sql-driver-plan-text-population",
-      "first_seen_at": "2026-05-23T17:24:00Z",
-      "attempt_count": 0
-    },
-    {
-      "kind": "design_decision",
-      "summary": "lg-bug-0005 setup step `DROP DATABASE IF EXISTS mydb` errors because psycopg's default autocommit=False puts DROP DATABASE inside a transaction (DROP DATABASE cannot run in a transaction block). Either (a) sql_driver should detect DDL-that-cannot-run-in-tx (CREATE DATABASE, DROP DATABASE, ALTER SYSTEM, REINDEX with CONCURRENTLY etc.) and switch the connection to autocommit before running, OR (b) the case YAML should add a per-step flag like `autocommit: true`. preflight runner has the same issue documented somewhere. M2 task.",
-      "blocking_item": "M2-sql-driver-autocommit-for-DDL",
-      "first_seen_at": "2026-05-23T17:24:00Z",
-      "attempt_count": 0
-    }
-  ],
+  "needs_human": [],
   "last_failures": [],
-  "notes": "M1 sprint complete. 11 items done (M1-1 through M1-11) + 4 prep items + 1 phase-2 follow-up. 15 PRs merged total. M1-11 dogfood verdict: GO with 3 pass / 1 fail / 1 error — runner is wired correctly; 2 case-specific issues (lg-bug-0001 plan_text wiring, lg-bug-0005 autocommit-for-DDL) recorded as M2 needs_human items."
+  "previous_session": {
+    "id": "m1-2026-05-24T0030Z",
+    "sprint": "M1",
+    "status": "done",
+    "items_done": 14,
+    "note": "M1 main (含 M1a 9 个 + M1-9 + M1-10 + M1-11) 全 done，留 3 个 design_decision needs_human → 本 sprint M1-followup 清掉"
+  }
 }
