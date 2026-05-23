@@ -1,0 +1,235 @@
+name: ci-gate
+
+# Single aggregated workflow that produces ONE required status check
+# (`ci-gate / gate`) for main-branch protection. The previous design
+# (separate backend.yml / frontend.yml / agents-lint.yml, each path-filtered
+# at the workflow level) was incompatible with `gh pr merge --auto`:
+# without a required status check on main, GitHub considers a PR's
+# requirements met immediately and merges before any CI even starts,
+# turning all path-filtered workflows into post-merge advisory runs.
+# See design.md §15.2.3 (corrected in v1.3 after M0/M1 implementation) and
+# §14 R22.
+#
+# This workflow ALWAYS triggers on PRs and pushes to main (no path filter).
+# Inside the single `gate` job, dorny/paths-filter detects which areas
+# changed and conditionally runs the corresponding checks. Areas that
+# didn't change get skipped silently. A docs-only PR runs through to the
+# final `gate ok` step and passes; a backend PR runs backend checks; etc.
+# Multiple areas at once → all relevant blocks run sequentially.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci-gate.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci-gate.yml'
+            agents:
+              - '.claude/agents/**'
+              - '.claude/scripts/**'
+              - '.github/workflows/ci-gate.yml'
+
+      # ─────────────────────────────────────────────────────────────────
+      # backend block (only runs if backend/** or this workflow changed)
+      # ─────────────────────────────────────────────────────────────────
+
+      - if: steps.changes.outputs.backend == 'true'
+        id: backend_init
+        run: |
+          if [ -f backend/pyproject.toml ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "backend/pyproject.toml present — running backend checks"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::backend/pyproject.toml not found — skipping backend checks (M0 placeholder period)"
+          fi
+
+      - if: steps.changes.outputs.backend == 'true' && steps.backend_init.outputs.ready == 'true'
+        name: backend / set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - if: steps.changes.outputs.backend == 'true' && steps.backend_init.outputs.ready == 'true'
+        name: backend / install (editable + dev extras)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - if: steps.changes.outputs.backend == 'true' && steps.backend_init.outputs.ready == 'true'
+        name: backend / ruff check
+        working-directory: backend
+        run: ruff check .
+
+      - if: steps.changes.outputs.backend == 'true' && steps.backend_init.outputs.ready == 'true'
+        name: backend / ruff format --check
+        working-directory: backend
+        run: ruff format --check .
+
+      - if: steps.changes.outputs.backend == 'true' && steps.backend_init.outputs.ready == 'true'
+        name: backend / pytest
+        working-directory: backend
+        run: pytest -q
+
+      # ─────────────────────────────────────────────────────────────────
+      # frontend block (only runs if frontend/** or this workflow changed)
+      # ─────────────────────────────────────────────────────────────────
+
+      - if: steps.changes.outputs.frontend == 'true'
+        id: frontend_init
+        run: |
+          if [ -f frontend/package.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "frontend/package.json present — running frontend checks"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::frontend/package.json not found — skipping frontend checks (M3a placeholder period)"
+          fi
+
+      - if: steps.changes.outputs.frontend == 'true' && steps.frontend_init.outputs.ready == 'true'
+        name: frontend / set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - if: steps.changes.outputs.frontend == 'true' && steps.frontend_init.outputs.ready == 'true'
+        name: frontend / install + tsc + lint + vitest
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm run lint
+          npm test -- --run
+
+      - if: steps.changes.outputs.frontend == 'true' && steps.frontend_init.outputs.ready == 'true'
+        name: frontend / playwright e2e
+        working-directory: frontend
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      # ─────────────────────────────────────────────────────────────────
+      # agents block (only runs if .claude/agents|scripts or this workflow changed)
+      # check_agent_dispatch.sh self-test (6 cases) + frontmatter sanity
+      # ─────────────────────────────────────────────────────────────────
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / jq available
+        run: jq --version
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint pass — backend-fixer with isolation:worktree
+        run: |
+          echo '{"subagent_type":"backend-fixer","isolation":"worktree"}' \
+            | .claude/scripts/check_agent_dispatch.sh
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint pass — reviewer needs no worktree
+        run: |
+          echo '{"subagent_type":"reviewer"}' \
+            | .claude/scripts/check_agent_dispatch.sh
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint pass — empty array
+        run: |
+          echo '[]' | .claude/scripts/check_agent_dispatch.sh
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint fail — backend-fixer missing isolation (must exit 1)
+        run: |
+          set +e
+          echo '{"subagent_type":"backend-fixer"}' \
+            | .claude/scripts/check_agent_dispatch.sh
+          rc=$?
+          if [ "$rc" -ne 1 ]; then
+            echo "expected exit 1, got $rc"
+            exit 1
+          fi
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint fail — array with one missing isolation (must exit 1)
+        run: |
+          set +e
+          echo '[{"subagent_type":"backend-fixer","isolation":"worktree"},{"subagent_type":"frontend-fixer"}]' \
+            | .claude/scripts/check_agent_dispatch.sh
+          rc=$?
+          if [ "$rc" -ne 1 ]; then
+            echo "expected exit 1, got $rc"
+            exit 1
+          fi
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint fail — malformed JSON (must exit 2)
+        run: |
+          set +e
+          echo 'not json' | .claude/scripts/check_agent_dispatch.sh
+          rc=$?
+          if [ "$rc" -ne 2 ]; then
+            echo "expected exit 2, got $rc"
+            exit 1
+          fi
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / frontmatter sanity (name + description + model + tools)
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in .claude/agents/*.md; do
+            head -10 "$f" | grep -q '^name:'        || { echo "$f: missing name";        fail=1; }
+            head -10 "$f" | grep -q '^description:' || { echo "$f: missing description"; fail=1; }
+            head -10 "$f" | grep -q '^model:'       || { echo "$f: missing model";       fail=1; }
+            head -10 "$f" | grep -q '^tools:'       || { echo "$f: missing tools";       fail=1; }
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "OK: $(ls .claude/agents/*.md | wc -l) agent files have name/description/model/tools"
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / every agent declares one of the §8.1 models
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in .claude/agents/*.md; do
+            model="$(awk '/^model:/{print $2; exit}' "$f")"
+            case "$model" in
+              opus|sonnet|haiku) ;;
+              *) echo "$f: model=$model is not one of opus|sonnet|haiku"; fail=1 ;;
+            esac
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: agents / lint script is executable
+        run: test -x .claude/scripts/check_agent_dispatch.sh
+
+      # ─────────────────────────────────────────────────────────────────
+      # final gate verdict
+      # ─────────────────────────────────────────────────────────────────
+
+      - name: gate ok
+        run: |
+          echo "ci-gate: all required checks for this change set passed."
+          echo "  backend changed:  ${{ steps.changes.outputs.backend }}"
+          echo "  frontend changed: ${{ steps.changes.outputs.frontend }}"
+          echo "  agents changed:   ${{ steps.changes.outputs.agents }}"
