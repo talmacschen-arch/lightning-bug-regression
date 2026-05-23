@@ -16,7 +16,7 @@ long-running foreman session):
 
 ```
 0 12 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
-0 0  * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
+0 20 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
 ```
 
 Each fire = a fresh `claude` process running this skill non-interactively,

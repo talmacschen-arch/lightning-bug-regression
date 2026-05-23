@@ -1,6 +1,6 @@
 ---
 name: reporter
-description: Generate a 12-hour rollup report. Cron-fired (OS crontab 0 12 / 0 0). Reads foreman-state.json + git log + gh pr list; writes docs/status/<ts>.md; commits doc-only and pushes. No external messaging.
+description: Generate an interval rollup report. Cron-fired (OS crontab 0 12 / 0 20). Reads foreman-state.json + git log + gh pr list; writes docs/status/<ts>.md; commits doc-only and pushes. No external messaging.
 model: haiku
 tools: Read, Bash, Glob, Grep, Write
 ---
@@ -13,7 +13,7 @@ OS crontab (v1.3, **not** Claude Code `CronCreate` — that was an aborted v1.0~
 
 ```
 0 12 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
-0 0  * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
+0 20 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
 ```
 
 Each fire = a fresh `claude` process running the `/report-status` skill, completely decoupled from any foreman session.

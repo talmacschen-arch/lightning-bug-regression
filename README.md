@@ -31,7 +31,7 @@
 | §11 | 开放问题汇总（Q1~Q32） |
 | §12~§13 | Roadmap + M0 启动前自检 + M0~M5 计划 |
 | §14 | 风险预警与反模式（R1~R21，吸收 preflight 教训） |
-| §15 | **自动协作运转模型**：foreman verify loop + GitHub auto-merge + cron 12:00/00:00 定时汇报 |
+| §15 | **自动协作运转模型**：foreman verify loop + GitHub auto-merge + cron 12:00/20:00 定时汇报 |
 
 读 design 时**永远从版本历史**（§0）入手——每个版本号一行简述本轮关键决策。
 
@@ -75,7 +75,7 @@
 2. **foreman**（opus）进入 verify loop（10 round / 2h budget），dispatch 7 个 specialist
 3. specialist 改代码 → 起分支 → 开 PR → `gh pr merge --auto --squash` → 立即退出
 4. CI 全绿 → GitHub 自动 squash merge
-5. **reporter**（OS crontab @ 12:00 / 00:00）独立 fire，写 `docs/status/<ts>.md`
+5. **reporter**（OS crontab @ 12:00 / 20:00）独立 fire，写 `docs/status/<ts>.md`
 6. 你查 `docs/status/` 目录看进度 + 处理 needs-human 决策项
 
 ### Agent 模型矩阵
