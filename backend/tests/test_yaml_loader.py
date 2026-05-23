@@ -1,9 +1,11 @@
 """Table-driven tests for ``app.storage.yaml_loader``.
 
 Each test writes a case YAML into ``tmp_path`` and exercises one §4.1
-schema rule. ``categories_whitelist`` defaults to
-``{"bug-regression", "feature-validation"}`` — kept narrow so we can also
-verify the "category not in whitelist" path without false negatives.
+schema rule. ``categories`` is built from ``_default_categories()``,
+which mirrors the §4.5 seed (``bug_regression`` + ``extension``) plus
+the legacy dash form ``bug-regression`` used by these test fixtures —
+kept narrow so we can also verify the "category not in whitelist" path
+without false negatives.
 """
 
 from __future__ import annotations
@@ -15,12 +17,43 @@ import pytest
 from app.storage.yaml_loader import (
     Case,
     CaseValidationError,
+    CategoryMeta,
     ExpectClause,
     Step,
     load_case,
 )
 
-DEFAULT_WHITELIST = {"bug-regression", "feature-validation"}
+
+def _default_categories() -> dict[str, CategoryMeta]:
+    """The §4.5-seed CategoryMeta dict + the dash-form alias the test
+    fixtures below historically use.
+
+    Real production cases use ``bug_regression`` (underscore); the
+    dash-form key is here purely so the test-only ``_minimal_yaml()``
+    helper keeps working without rewriting every fixture.
+    """
+    bug_statuses = frozenset({"open", "fixed", "wontfix", "stub"})
+    ext_statuses = frozenset({"stable", "experimental", "deprecated", "stub"})
+    return {
+        "bug_regression": CategoryMeta(
+            name="bug_regression",
+            id_prefix="lg-bug-",
+            status_whitelist=bug_statuses,
+        ),
+        "bug-regression": CategoryMeta(
+            name="bug-regression",
+            id_prefix="lg-bug-",
+            status_whitelist=bug_statuses,
+        ),
+        "extension": CategoryMeta(
+            name="extension",
+            id_prefix="lg-ext-",
+            status_whitelist=ext_statuses,
+        ),
+    }
+
+
+DEFAULT_WHITELIST = _default_categories()
 
 
 # ---------------------------------------------------------------------------
@@ -195,22 +228,43 @@ def test_category_not_in_whitelist(tmp_path: Path) -> None:
     assert "unknown-cat" in msg
 
 
-def test_category_in_whitelist_but_no_prefix_rule(tmp_path: Path) -> None:
-    """Forward-compat: category in whitelist but not in _CATEGORY_PREFIX
-    must NOT enforce a prefix, so any id stem matches."""
-    src = _minimal_yaml(case_id="some-future-cat-xyz")
+def test_category_prefix_is_data_driven(tmp_path: Path) -> None:
+    """The id_prefix enforced for a category is whatever the caller's
+    CategoryMeta says — not a hardcoded module-level table. Register a
+    hypothetical ``future-cat`` with prefix ``fc-`` and verify both the
+    accept path (id starts with ``fc-``) and the reject path."""
+    extra = dict(DEFAULT_WHITELIST)
+    extra["future-cat"] = CategoryMeta(
+        name="future-cat",
+        id_prefix="fc-",
+        status_whitelist=frozenset({"open"}),
+    )
+
+    # accept: id starts with the registered prefix
+    src = _minimal_yaml(case_id="fc-0001-xyz")
     src = src.replace("category: bug-regression", "category: future-cat")
-    path = _write(tmp_path, src, stem="some-future-cat-xyz")
-    case = load_case(path, DEFAULT_WHITELIST | {"future-cat"})
+    path = _write(tmp_path, src, stem="fc-0001-xyz")
+    case = load_case(path, extra)
     assert case.category == "future-cat"
-    assert case.id == "some-future-cat-xyz"
+    assert case.id == "fc-0001-xyz"
 
 
 def test_category_underscore_form_accepted(tmp_path: Path) -> None:
-    """bug_regression (underscore) is equivalent to bug-regression (dash)."""
+    """The canonical §4.5 key is ``bug_regression`` (underscore). When
+    only the underscore form is registered, a YAML using the underscore
+    form loads cleanly."""
     src = _minimal_yaml().replace("category: bug-regression", "category: bug_regression")
     path = _write(tmp_path, src)
-    case = load_case(path, {"bug_regression"})
+    case = load_case(
+        path,
+        {
+            "bug_regression": CategoryMeta(
+                name="bug_regression",
+                id_prefix="lg-bug-",
+                status_whitelist=frozenset({"open", "fixed", "wontfix", "stub"}),
+            )
+        },
+    )
     assert case.category == "bug_regression"
 
 
@@ -474,12 +528,92 @@ def test_malformed_yaml(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Data-driven status + id_prefix (post-M1-cleanup P0-A; §4.5 CategoryMeta)
+# ---------------------------------------------------------------------------
+
+
+def test_load_case_accepts_status_fixed_for_bug_regression(tmp_path: Path) -> None:
+    """``status: fixed`` is legal for bug_regression per §4.5 seed —
+    previously rejected because the loader's hardcoded _VALID_STATUSES
+    only knew ``{open, closed, stub}``."""
+    src = (
+        _minimal_yaml().replace("category: bug-regression", "category: bug_regression")
+        + "status: fixed\n"
+    )
+    path = _write(tmp_path, src)
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.status == "fixed"
+
+
+def test_load_case_accepts_status_stable_for_extension(tmp_path: Path) -> None:
+    """``category: extension`` + ``status: stable`` is legal per §4.5 —
+    previously rejected because the loader had no ``extension`` entry in
+    its hardcoded prefix map and ``stable`` was not in _VALID_STATUSES."""
+    src = (
+        _minimal_yaml(case_id="lg-ext-pgvector-install").replace(
+            "category: bug-regression", "category: extension"
+        )
+        + "status: stable\n"
+    )
+    path = _write(tmp_path, src, stem="lg-ext-pgvector-install")
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.category == "extension"
+    assert case.id == "lg-ext-pgvector-install"
+    assert case.status == "stable"
+
+
+def test_load_case_rejects_status_closed(tmp_path: Path) -> None:
+    """``status: closed`` is REJECTED — it was a fabrication of the old
+    hardcoded _VALID_STATUSES and is not present in either §4.5 seed."""
+    # bug_regression rejects "closed"
+    src_bug = (
+        _minimal_yaml().replace("category: bug-regression", "category: bug_regression")
+        + "status: closed\n"
+    )
+    path_bug = _write(tmp_path, src_bug)
+    with pytest.raises(CaseValidationError, match=r"status 'closed' .* whitelist"):
+        load_case(path_bug, DEFAULT_WHITELIST)
+
+    # extension rejects "closed" too
+    src_ext = (
+        _minimal_yaml(case_id="lg-ext-pgvector-install").replace(
+            "category: bug-regression", "category: extension"
+        )
+        + "status: closed\n"
+    )
+    path_ext = _write(tmp_path, src_ext, stem="lg-ext-pgvector-install")
+    with pytest.raises(CaseValidationError, match=r"status 'closed' .* whitelist"):
+        load_case(path_ext, DEFAULT_WHITELIST)
+
+
+def test_load_case_enforces_lg_ext_prefix(tmp_path: Path) -> None:
+    """``category: extension`` with an ``id: lg-bug-...`` is REJECTED.
+    Before the refactor the loader had no ``extension`` entry in its
+    hardcoded prefix map and silently accepted any id stem."""
+    src = _minimal_yaml(case_id="lg-bug-1234-mislabeled").replace(
+        "category: bug-regression", "category: extension"
+    )
+    path = _write(tmp_path, src, stem="lg-bug-1234-mislabeled")
+    with pytest.raises(CaseValidationError) as exc_info:
+        load_case(path, DEFAULT_WHITELIST)
+    msg = str(exc_info.value)
+    assert "lg-ext-" in msg
+    assert "extension" in msg
+
+
+# ---------------------------------------------------------------------------
 # Real case round-trip tests (§4.1 dogfood — cases/bug-regression/*.yaml)
 # ---------------------------------------------------------------------------
 
 _CASES_DIR = Path(__file__).parent.parent.parent / "cases" / "bug-regression"
 _REAL_CASE_FILES = sorted(_CASES_DIR.glob("*.yaml"))
-_BUG_REGRESSION_WHITELIST = {"bug_regression"}
+_BUG_REGRESSION_CATEGORIES = {
+    "bug_regression": CategoryMeta(
+        name="bug_regression",
+        id_prefix="lg-bug-",
+        status_whitelist=frozenset({"open", "fixed", "wontfix", "stub"}),
+    )
+}
 
 
 @pytest.mark.parametrize(
@@ -489,7 +623,7 @@ _BUG_REGRESSION_WHITELIST = {"bug_regression"}
 )
 def test_real_case_round_trip(case_path: Path) -> None:
     """All real case files in cases/bug-regression/ must load without raising."""
-    case = load_case(case_path, _BUG_REGRESSION_WHITELIST)
+    case = load_case(case_path, _BUG_REGRESSION_CATEGORIES)
     assert isinstance(case, Case)
     assert case.id, "case.id must be a non-empty string"
     assert case.category == "bug_regression"

@@ -22,6 +22,7 @@ the repo root). M1-11 uses the default; tests set it explicitly.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ from sqlalchemy import select
 
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
-from app.storage.yaml_loader import CaseValidationError, load_case
+from app.storage.yaml_loader import CaseValidationError, CategoryMeta, load_case
 
 router = APIRouter(tags=["cases"])
 
@@ -97,6 +98,31 @@ def _load_categories() -> list[CaseCategory]:
         return list(sess.scalars(stmt).all())
 
 
+def _build_category_meta(categories: list[CaseCategory]) -> dict[str, CategoryMeta]:
+    """Project ``CaseCategory`` rows into the ``{name: CategoryMeta}`` shape
+    the loader consumes (design.md §4.5 → loader contract).
+
+    ``status_whitelist`` on the row is a TEXT column holding a JSON array
+    string (e.g. ``'["open","fixed","wontfix","stub"]'``); we parse it
+    here so the loader receives a plain ``frozenset[str]``.
+    """
+    out: dict[str, CategoryMeta] = {}
+    for c in categories:
+        try:
+            whitelist_raw = json.loads(c.status_whitelist)
+        except (TypeError, ValueError):
+            # Defensive: a corrupted row shouldn't 500 the whole API; skip it.
+            continue
+        if not isinstance(whitelist_raw, list):
+            continue
+        out[c.name] = CategoryMeta(
+            name=c.name,
+            id_prefix=c.id_prefix,
+            status_whitelist=frozenset(str(s) for s in whitelist_raw),
+        )
+    return out
+
+
 def _safe_parse_raw(path: Path) -> tuple[str, dict[str, Any] | None, str | None]:
     """Read raw YAML text and best-effort parse it.
 
@@ -121,7 +147,7 @@ def _summary_from_raw(
     path: Path,
     raw_dict: dict[str, Any] | None,
     parse_err: str | None,
-    whitelist: set[str],
+    category_meta: dict[str, CategoryMeta],
 ) -> CaseSummary:
     """Build a CaseSummary from a raw YAML dict.
 
@@ -140,7 +166,7 @@ def _summary_from_raw(
 
     # Try strict validation. On success we trust the parsed fields.
     try:
-        case = load_case(path, whitelist)
+        case = load_case(path, category_meta)
         tags_raw = raw_dict.get("tags")
         tags = [str(t) for t in tags_raw] if isinstance(tags_raw, list) else None
         return CaseSummary(
@@ -202,7 +228,7 @@ def list_cases(category: str | None = None, q: str | None = None) -> list[CaseSu
     populated; the endpoint never 500s on a single bad file.
     """
     categories = _load_categories()
-    whitelist = {c.name for c in categories}
+    category_meta = _build_category_meta(categories)
 
     # category filter narrows which dirs we scan.
     scanning = [c for c in categories if c.name == category] if category is not None else categories
@@ -211,7 +237,7 @@ def list_cases(category: str | None = None, q: str | None = None) -> list[CaseSu
     for path, _cat_name in _iter_case_files(scanning):
         raw_text, raw_dict, parse_err = _safe_parse_raw(path)
         del raw_text  # not needed for list endpoint
-        summary = _summary_from_raw(path, raw_dict, parse_err, whitelist)
+        summary = _summary_from_raw(path, raw_dict, parse_err, category_meta)
 
         # category filter: drop entries whose parsed category doesn't match
         # (we already narrowed by dir_path above, but a malformed file
@@ -240,7 +266,7 @@ def get_case(case_id: str) -> CaseDetail:
     human fix it.
     """
     categories = _load_categories()
-    whitelist = {c.name for c in categories}
+    category_meta = _build_category_meta(categories)
 
     for path, _cat_name in _iter_case_files(categories):
         if path.stem != case_id:
@@ -248,7 +274,7 @@ def get_case(case_id: str) -> CaseDetail:
         raw_text, raw_dict, parse_err = _safe_parse_raw(path)
         # Try strict load — if it succeeds we report status from YAML.
         try:
-            case = load_case(path, whitelist)
+            case = load_case(path, category_meta)
             tags_raw = (raw_dict or {}).get("tags")
             tags = [str(t) for t in tags_raw] if isinstance(tags_raw, list) else None
             return CaseDetail(
