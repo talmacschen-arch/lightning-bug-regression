@@ -10,20 +10,8 @@
  * failing with an unintelligible launcher error.
  */
 import { test, expect } from '@playwright/test';
-import { execSync } from 'child_process';
+import { chromiumCanLaunch, SKIP_REASON } from './_helpers';
 
-// Detect whether chromium can actually launch on this OS.
-// This is a declaration-level guard per §14 R8.
-function chromiumCanLaunch(): boolean {
-  try {
-    execSync('ldconfig -p 2>/dev/null | grep libgbm', { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const SKIP_REASON = 'libgbm.so.1 not found — chromium cannot launch on this host (§14 R8 declaration-level skip)';
 const canLaunch = chromiumCanLaunch();
 
 const FAKE_CATEGORIES = [
