@@ -41,3 +41,4 @@ select = ["E", "F", "I", "B", "UP", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+asyncio_mode = "auto"
