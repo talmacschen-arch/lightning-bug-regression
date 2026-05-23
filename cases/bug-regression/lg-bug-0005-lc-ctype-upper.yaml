@@ -1,14 +1,14 @@
 id: lg-bug-0005-lc-ctype-upper
 title: LC_CTYPE='C' 的 DB 里 SELECT upper(multibyte 字符串) 报 invalid multibyte
 category: bug_regression
-status: open
+status: fixed
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "lightning-2.2-2.3-upgrade-regression"
   reported_at: "2025-12-01"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/727
 tags: [locale, lc_ctype, upper, multibyte]
@@ -62,3 +62,11 @@ notes: |
   时若仍有连接驻留在 mydb，DROP DATABASE 会失败——runner 在 teardown
   前应当断开 step 留的 mydb 连接（M1 runner 实现细节）。M0 阶段先 schema
   dogfooding，不执行。
+
+  ---
+  **Verified upstream-fixed (M2 API dogfood, 2026-05-24)**: POST /runs run #6 on
+  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → case PASS
+  with real per-step duration (not 0ms instant-error of pre-PR #42/#43 era).
+  Double evidence chain: CLI dogfood (M1, scripts/run_m1_dogfood.py) also PASS.
+  fixed_version above = verified-non-reproducing version, NOT the specific fix
+  introduction build / commit (not yet researched against 飞书 LG history).
