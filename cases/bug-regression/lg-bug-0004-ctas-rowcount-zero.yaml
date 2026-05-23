@@ -1,0 +1,72 @@
+id: lg-bug-0004-ctas-rowcount-zero
+title: ORCA off + clock_timestamp() + DISTRIBUTED REPLICATED 时 CTAS 产生 0 行
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "lightning-2.2-2.3-upgrade-regression"
+  reported_at: "2025-12-01"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/599
+tags: [ctas, optimizer, replicated, data-loss]
+
+description: |
+  当 CTAS 的源 SELECT 投影里含 clock_timestamp() 且目标表 DISTRIBUTED
+  REPLICATED + optimizer=off 时，新表里没有任何行（静默数据丢失）。
+  本 case 验证 BUG 已不再触发。
+procedure: |
+  1) 建源 temp 表 tmp_test01，DISTRIBUTED RANDOMLY 单行；
+  2) 关闭 ORCA：set optimizer to off；
+  3) CTAS 创建 tmp_test02：SELECT *, clock_timestamp() FROM tmp_test01
+     DISTRIBUTED REPLICATED；
+  4) select count(*) from tmp_test02 应 >= 1。
+expected: |
+  - 步骤 4 的 count 至少为 1（与源表行数一致）；
+  - CTAS 没有静默把行数变成 0。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+setup:
+  - DROP TABLE IF EXISTS tmp_test01
+  - DROP TABLE IF EXISTS tmp_test02
+  - |
+    CREATE TEMP TABLE tmp_test01
+      WITH (appendonly=true, compresstype=zstd, compresslevel=7) AS
+      SELECT 'a'::text AS c
+      DISTRIBUTED RANDOMLY
+
+steps:
+  - name: "ORCA off + clock_timestamp() + DISTRIBUTED REPLICATED 的 CTAS"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      CREATE TEMP TABLE tmp_test02
+        WITH (appendonly=true, compresstype=zstd, compresslevel=7) AS
+        SELECT *, clock_timestamp() AS ts FROM tmp_test01
+        DISTRIBUTED REPLICATED
+    expect:
+      not_contains: "ERROR"
+
+  - name: "tmp_test02 至少 1 行（与源表一致），不能 silent 0"
+    kind: sql
+    sql: SELECT count(*) FROM tmp_test02
+    expect:
+      scalar_ge: 1
+
+teardown:
+  - DROP TABLE IF EXISTS tmp_test01
+  - DROP TABLE IF EXISTS tmp_test02
+
+created_by: chenqiang
+created_at: "2026-05-23"
+notes: |
+  飞书原文：单行源表 → CTAS 后 0 行。验证修复时若想加强，可把源表行数
+  调到 1000 行，count 用 scalar_ge: 1000；M0 阶段先按最小复现路径写。

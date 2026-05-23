@@ -1,0 +1,59 @@
+id: lg-bug-0005-lc-ctype-upper
+title: LC_CTYPE='C' 的 DB 里 SELECT upper(multibyte 字符串) 报 invalid multibyte
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "lightning-2.2-2.3-upgrade-regression"
+  reported_at: "2025-12-01"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/727
+tags: [locale, lc_ctype, upper, multibyte]
+
+description: |
+  用 TEMPLATE template0 + LC_COLLATE='C' + LC_CTYPE='C' 创建数据库后，
+  对含多字节字符（如韩文 / 中文）的字符串调 upper() 报 "invalid multibyte
+  character for locale"。本 case 验证 BUG 已不再触发。
+procedure: |
+  1) 用 template0 + LC_COLLATE/CTYPE='C' 创建 db mydb（如已存在先 drop）；
+  2) 切到 mydb，跑 SELECT upper('AAAAAX/안녕 / XXXXXX')；
+  3) 验证 scalar 返回与输入完全一致（upper 对非字母字符无影响，对韩文应当
+     保持原状或正常大写化，绝不该 ERROR）。
+expected: |
+  - 步骤 2 返回 'AAAAAX/안녕 / XXXXXX'（韩文部分保持，ASCII 段已是大写）；
+  - 不出现 "invalid multibyte character for locale" 报错。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+setup:
+  - DROP DATABASE IF EXISTS mydb
+  - CREATE DATABASE mydb TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'
+
+steps:
+  - name: "在 mydb 里跑 SELECT upper(multibyte 字符串)"
+    kind: sql
+    database: mydb
+    sql: SELECT upper('AAAAAX/안녕 / XXXXXX')
+    expect:
+      scalar: "AAAAAX/안녕 / XXXXXX"
+      not_contains: "invalid multibyte character"
+
+teardown:
+  - DROP DATABASE IF EXISTS mydb
+
+created_by: chenqiang
+created_at: "2026-05-23"
+notes: |
+  setup / teardown 跑在 defaults.database=postgres 上；step 用 database:
+  mydb 覆盖，runner 应当为该 step 开一条到 mydb 的连接。注意 teardown
+  时若仍有连接驻留在 mydb，DROP DATABASE 会失败——runner 在 teardown
+  前应当断开 step 留的 mydb 连接（M1 runner 实现细节）。M0 阶段先 schema
+  dogfooding，不执行。

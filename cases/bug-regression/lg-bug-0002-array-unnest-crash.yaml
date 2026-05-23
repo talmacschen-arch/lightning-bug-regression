@@ -1,0 +1,128 @@
+id: lg-bug-0002-array-unnest-crash
+title: 缺 immutable 的 plpgsql 函数中 array+unnest 触发数据库 crash
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "lightning-2.2-2.3-upgrade-regression"
+  reported_at: "2025-12-01"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/642
+tags: [crash, plpgsql, unnest, array]
+
+description: |
+  当一个 plpgsql 函数（内部用 unnest WITH ORDINALITY 等数组操作）**没有**
+  标 immutable 时，从 temp table 里调用它会让整个数据库进入 recover mode。
+  workaround：把函数加 immutable 修饰。本 case 验证该 BUG 已不再触发。
+procedure: |
+  1) 创建 glbfnc schema 与不带 immutable 的 array helper 函数；
+  2) 创建 public.array_positions（同样不带 immutable）；
+  3) 测试 1：用 WITH CTE 喂入数据 — 历史上不触发 crash（对照组）；
+  4) 测试 2：把 CTE 改成 temp table 再调函数 — 历史上触发 FATAL recover mode；
+  5) 跑 coordinator log_grep，确认期间没有 "FATAL: ... recover mode" 行。
+expected: |
+  - 步骤 3、4 的 SQL 都成功返回，**不**出现 connection lost / recover mode；
+  - 步骤 5 的 log_grep 匹配 0 行。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+setup:
+  - DROP TABLE IF EXISTS tmp_data
+  - DROP FUNCTION IF EXISTS public.array_positions(text[], text[])
+  - DROP SCHEMA IF EXISTS glbfnc CASCADE
+  - CREATE SCHEMA glbfnc
+  - |
+    CREATE OR REPLACE FUNCTION glbfnc.f_array_position2(arr text[], p_el text)
+    RETURNS integer[]
+    LANGUAGE plpgsql
+    AS $function$
+    DECLARE
+      v_pos _int4;
+    BEGIN
+      SELECT array_agg(u.pos)
+      INTO v_pos
+      FROM unnest(arr) WITH ORDINALITY u(el, pos)
+      WHERE u.el = p_el;
+      RETURN v_pos;
+    EXCEPTION
+      WHEN others THEN
+        RAISE EXCEPTION 'f_array_position ::: Exception => %', sqlstate;
+    END;
+    $function$
+  - |
+    CREATE OR REPLACE FUNCTION public.array_positions(arr1 text[], arr2 text[])
+    RETURNS integer[]
+    LANGUAGE plpgsql
+    AS $function$
+    DECLARE
+      v_arr _int4 := null;
+      v_tmp _int4 := null;
+    BEGIN
+      FOR i IN 1..array_upper(arr2, 1) LOOP
+        v_tmp := glbfnc.f_array_position2(arr1, arr2[i]);
+        IF v_tmp IS NULL THEN
+          v_arr := v_arr || array[null::int4];
+        ELSE
+          v_arr := v_arr || v_tmp;
+        END IF;
+      END LOOP;
+      RETURN v_arr;
+    EXCEPTION
+      WHEN others THEN
+        RAISE EXCEPTION 'array_positions ::: Exception => %, %', sqlstate, sqlerrm;
+    END;
+    $function$
+
+steps:
+  - name: "测试 1：CTE 喂入数据，预期无报错（对照组）"
+    kind: sql
+    sql: |
+      WITH tmp_data AS (
+        SELECT 'a' AS col, array[null]::text[] AS array_null
+        UNION ALL
+        SELECT 'b' AS col, array[null]::text[] AS array_null
+      )
+      SELECT (SELECT unnest(public.array_positions(array_null, array_null)) ORDER BY 1)
+      FROM tmp_data
+    expect:
+      not_contains: "ERROR"
+
+  - name: "测试 2：temp table 喂入数据，历史上触发 recover mode；修复后应无报错"
+    kind: sql
+    sql: |
+      CREATE TEMP TABLE tmp_data AS
+      SELECT 'a' AS col, array[null]::text[] AS array_null
+      UNION ALL
+      SELECT 'b' AS col, array[null]::text[] AS array_null;
+
+      SELECT (SELECT unnest(public.array_positions(array_null, array_null)) ORDER BY 1)
+      FROM tmp_data
+    expect:
+      not_contains: "FATAL"
+
+  - name: "服务端日志不能含 recover mode 关键行"
+    kind: log_grep
+    pattern: "FATAL: the database system is in recover mode"
+    expect:
+      matches: 0
+
+teardown:
+  - DROP TABLE IF EXISTS tmp_data
+  - DROP FUNCTION IF EXISTS public.array_positions(text[], text[])
+  - DROP SCHEMA IF EXISTS glbfnc CASCADE
+
+created_by: chenqiang
+created_at: "2026-05-23"
+notes: |
+  workaround：把 public.array_positions 加 immutable 修饰即可绕过 crash。
+  本 case 故意不加 immutable，这样在 BUG 复发时立刻能抓到。log_grep 的
+  log_path 不显式指定，runner 从 system_settings 读集群默认路径
+  （Alembic 0001 落表后；M0 阶段先 schema dogfooding，不执行）。
