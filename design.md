@@ -20,7 +20,7 @@
 | v1.0 | 2026-05-23 | pm-designer (Claude) | **形成"放后台不用管"开发闭环。**（用户核心诉求）三件事：**(1) §8 重排 agent 表**：`scheduler` → `foreman`（按 preflight foreman.md 范本重写），新增 `reporter` agent（haiku，只读，cron 触发）；**(2) 新增 §15 完整设计自动协作运转模型**：foreman verify loop（10 round / 2h budget，preflight 默认 10 + 用户决策）/ stop conditions（DONE / BLOCKED-ESCALATE / BUDGET-EXHAUSTED）/ "同症状 fail 2 次 立即停 + escalate" 规则 / `docs/status/foreman-state.json` 心跳与状态共享 / GitHub auto-merge 集成（specialist push → `gh pr merge --auto --squash` → CI green 自动合并，配套 §7.1 已有的 Allow auto-merge）/ 12:00 + 00:00 `CronCreate` cron 唤起 reporter → 输出 `docs/status/YYYY-MM-DD-HHMM.md` + 飞书推送（feishu-skills MCP）/ 报告格式 = 上一周期完成 / 进行中 / **needs-human 决策清单** / 阻塞项 / 下周期计划 / "下次报告前不打扰"原则。**(3) §12 Roadmap M0 末加 foreman+reporter+cron 启用步骤**，M1 起就放手让 agent 自跑，人类只在 12:00/24:00 看报告 + 处理 needs-human 项。Q28/Q29/Q30/Q31 落账。 |
 | v1.1 | 2026-05-23 | pm-designer (Claude) | **§13.0 新增 M0 启动前自检 5 项**（用户确认全部纳入）：(1) `gh auth status` 确认 PAT 含 `repo + workflow` scope；(2) trivial cron（5 分钟后 echo）验证 `CronCreate` 真能登记本机 cron——这是 §15 整套自动汇报机制的硬前提；(3) `feishu_list_chats` 取私聊 chat_id，写进 `system_settings.feishu_report_chat_id`；(4) `su - gpadmin` 跑 `psql -c "select version()"` + `gp_segment_configuration` + `ssh sdw1 hostname` 三件套验集群可达；(5) 约定 `docs/plans/M<n>.md` 是 foreman 读 sprint 清单的固定位置（与 preflight 同款）。任一不通过 = 不开 M0。 |
 | v1.2 | 2026-05-23 | pm-designer (Claude) | **去 reporter 推飞书路径**（用户：飞书 chat 没打通，改人工查目录）。(1) §13.0 自检 5 → 4 项，去掉 C "拿飞书 chat_id"；(2) §15.3 reporter 工作流去掉 "feishu_send_*" step，唯一输出 = `docs/status/<ts>.md`；(3) §15.3.5 "不打扰"原则简化——所有事件都进下次定时报告，**无即时通知通道**；仓库不可访问类"系统级"事件 reporter 检测到时在报告顶部加 `🚨 SYSTEM_ALERT:` 红字行；(4) §15.4 失控防护表去掉飞书 alert 行；(5) §15.5 落地步骤去掉飞书 stub；(6) §8.1 reporter 产出列去 "+ 飞书推送"；(7) §8.4 reporter 工具权限去掉 "调 feishu MCP"；(8) §13.1 step 6 Alembic 0001 seed 去掉 `feishu_report_chat_id` 项；(9) Q29 决议改 "仅本地 docs/status/，人工查目录"，Q31 改 "立即停 + 写 state.json，下次定时报告高亮"，去掉飞书 alert 例外。**注意**：飞书作为**BUG 数据源**仍保留——M4a 接入新 BUG 时 skill 模式 A `<feishu-url>` 仍用 feishu MCP 拉文档原文，这是另一条路径。 |
-| v1.3 | 2026-05-23 | pm-designer (Claude) | **A/B/D 自检实测完毕，B 戳破 CronCreate 假设——v1.0~v1.2 错把 Claude Code 内置 `CronCreate` 当作 OS-level cron。实测确认：CronCreate 是 session-only（session 退出即死）+ 必须 REPL idle 才 fire（foreman 持续 mid-query 时永远不 fire）。**改用户决策的 OS crontab 路径：(1) §15.3.1 cron 注册从 `CronCreate` 改 **`crontab -e` 写两条 entry，命令 = `cd <repo> && claude --print "/report-status" >> docs/status/cron.log 2>&1`**——OS 级独立进程，与 foreman session 完全解耦；(2) §13.0 自检 B 改成"`echo hello \| claude --print` 实测能跑 + root crontab 可写"，已通过；(3) §13.1 step 8 改 OS crontab 注册命令；(4) §15.4 失控防护表 cron 那一行同步；(5) §11 加 Q32（CronCreate vs OS crontab 选型）。**自检 A 结果**：PAT 长度 40，`repo` ✅，**缺 `workflow`** ⚠️——用户需要去 GitHub Settings → Developer settings → Personal access tokens 给现有 PAT 加 workflow scope（或重发一张），写进 §13.0 A 项的"修复操作"。**自检 D 结果**（mdw=synxdb-0001，实测）：SynxDB4 4.5.0 build 130 / PostgreSQL 14.4 base / 18 segs / ssh sdw1=synxdb-0003 免密通——填进 §3.1 与 §13.0 D 项实测栏。**v1.3 内追加（不升版号）**：(a) A workflow scope 已补（实测 `x-oauth-scopes: repo, workflow`）；(b) **backend-fixer 从 sonnet 升 opus**（用户决策，backend 是公信力关键路径，opus + reviewer 双层稳健；其他 agent 模型不动）；(c) **M0 step 1 仓库已创建并切 private**——initial commit 29b2507 含 LICENSE / README / .gitignore / design.md 共 2170 行 push 到 main；切 private 后 Wiki 因 GitHub Free 限制自动禁用，§7.1 / §11 Q12 同步修订。(d) **cron 时间从 12:00/00:00 调到 12:00/20:00**（用户决策，2026-05-23 step 7 收尾时）——理由：用户作息下 12:00 + 20:00 比 12:00 + 00:00 更贴用户每日"早扫一眼 / 晚扫一眼"的实际查目录节奏，凌晨 00:00 报告通常要次日上午才被看到，价值低；§15.3 / §13.1 step 8 / §9 文件名示例 / §11 Q28 Q29 / §15.5 / install-cron.sh / `.claude/{agents,skills}/report*` 同步修订；报告时窗调整为：12:00 报告覆盖前一天 20:00→今天 12:00（16h 夜间），20:00 报告覆盖 12:00→20:00（8h 白天）。 |
+| v1.3 | 2026-05-23 | pm-designer (Claude) | **A/B/D 自检实测完毕，B 戳破 CronCreate 假设——v1.0~v1.2 错把 Claude Code 内置 `CronCreate` 当作 OS-level cron。实测确认：CronCreate 是 session-only（session 退出即死）+ 必须 REPL idle 才 fire（foreman 持续 mid-query 时永远不 fire）。**改用户决策的 OS crontab 路径：(1) §15.3.1 cron 注册从 `CronCreate` 改 **`crontab -e` 写两条 entry，命令 = `cd <repo> && claude --print "/report-status" >> docs/status/cron.log 2>&1`**——OS 级独立进程，与 foreman session 完全解耦；(2) §13.0 自检 B 改成"`echo hello \| claude --print` 实测能跑 + root crontab 可写"，已通过；(3) §13.1 step 8 改 OS crontab 注册命令；(4) §15.4 失控防护表 cron 那一行同步；(5) §11 加 Q32（CronCreate vs OS crontab 选型）。**自检 A 结果**：PAT 长度 40，`repo` ✅，**缺 `workflow`** ⚠️——用户需要去 GitHub Settings → Developer settings → Personal access tokens 给现有 PAT 加 workflow scope（或重发一张），写进 §13.0 A 项的"修复操作"。**自检 D 结果**（mdw=synxdb-0001，实测）：SynxDB4 4.5.0 build 130 / PostgreSQL 14.4 base / 18 segs / ssh sdw1=synxdb-0003 免密通——填进 §3.1 与 §13.0 D 项实测栏。**v1.3 内追加（不升版号）**：(a) A workflow scope 已补（实测 `x-oauth-scopes: repo, workflow`）；(b) **backend-fixer 从 sonnet 升 opus**（用户决策，backend 是公信力关键路径，opus + reviewer 双层稳健；其他 agent 模型不动）；(c) **M0 step 1 仓库已创建并切 private**——initial commit 29b2507 含 LICENSE / README / .gitignore / design.md 共 2170 行 push 到 main；切 private 后 Wiki 因 GitHub Free 限制自动禁用，§7.1 / §11 Q12 同步修订。(d) **cron 时间从 12:00/00:00 调到 12:00/20:00**（用户决策，2026-05-23 step 7 收尾时）——理由：用户作息下 12:00 + 20:00 比 12:00 + 00:00 更贴用户每日"早扫一眼 / 晚扫一眼"的实际查目录节奏，凌晨 00:00 报告通常要次日上午才被看到，价值低；§15.3 / §13.1 step 8 / §9 文件名示例 / §11 Q28 Q29 / §15.5 / install-cron.sh / `.claude/{agents,skills}/report*` 同步修订；报告时窗调整为：12:00 报告覆盖前一天 20:00→今天 12:00（16h 夜间），20:00 报告覆盖 12:00→20:00（8h 白天）。(e) **M0 step 8 实测把"cron 直调 claude --print"细化为"cron 调 wrapper、wrapper 调 claude"** (2026-05-23): cron 的 minimal env 缺 3 件 claude 必需的东西——HTTP proxy（本机走 10.13.11.1:1080 → 直连 Anthropic 返 403）、`GH_TOKEN`（skill 第 4 步要 gh pr list / gh auth status）、permission-bypass flag（`--print` non-interactive 没法批 tool prompt，但 `--dangerously-skip-permissions` 在 root 下被拒、`acceptEdits` / `dontAsk` 都挡 `gh pr list`，**只有 `--permission-mode auto` 同时放行 Bash 通用 + git + gh + Write to docs/status/**）；新增 `scripts/cron-report-status.sh` 把三件事一并补齐；`scripts/install-cron.sh` 改为 tag-based idempotent（先 grep -Fv 移除旧 CRON_TAG 行再加新行，应对 entry 格式升级）。step 8 实测两轮 smoke 全过（commit `7d97986` / `31f8653`，docs/status/2026-05-23-2211.md / 2217.md）。§15.3.1 / §13.1 step 8 / SKILL.md / reporter.md 同步修订。 |
 
 > 迭代约定：每次重要修订 +0.1，发布前定稿为 v1.0。修订时新增一行，**简述本轮关键决策**（不要只写"修改若干处"）。讨论点在 §11 同步收敛/新增。
 
@@ -1319,12 +1319,17 @@ foreman 把每行 `- [ ] <id> <description>` 当一个 sprint item；
    - `cases/extension/` 目录建空，**M4b 才填**首批 extension 用例（不阻塞 M0）。
 6. Alembic 0001：建 `runs / case_results / case_skip_list / system_settings / case_categories` 五张表（含 §4.2 唯一约束 + §4.5 seed 两条 category 记录）。
 7. **写 `/report-status` skill 骨架**（§15.3.3）：`.claude/skills/report-status/SKILL.md`，跑通"读 git log + gh pr list → 写 docs/status/<ts>.md"即可（v1.2 已去飞书推送，无外部消息通道）。
-8. **注册 OS crontab**（M0 收尾的最后一步，**用户亲手执行一次**；v1.3 改路径）：root 跑 `crontab -e`，加两行（详 §15.3.1）：
+8. **注册 OS crontab**（M0 收尾的最后一步；v1.3 改路径，step 8 实测细化）：
+   ```bash
+   sudo ./scripts/install-cron.sh --apply   # idempotent；写 wrapper 路径，不直接 inline claude
+   sudo ./scripts/install-cron.sh --check   # 两个 ✓
    ```
-   0 12 * * * cd <repo-abs-path> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
-   0 20 * * * cd <repo-abs-path> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
+   两条 entry 调 wrapper（详 §15.3.1）：
    ```
-   `crontab -l` 看到两行后，**临时**把第一行改成 5 分钟后的时间点（如当前 14:30 → 改成 `35 14 23 5 *` recurring once）做端到端验证，确认 docs/status/ 出现新 md + cron.log 有调用记录 → 改回 `0 12`。
+   0 12 * * * <repo>/scripts/cron-report-status.sh >> <repo>/docs/status/cron.log 2>&1
+   0 20 * * * <repo>/scripts/cron-report-status.sh >> <repo>/docs/status/cron.log 2>&1
+   ```
+   wrapper 承担三件 cron-context-only 事：source `/root/.bashrc` 拉 proxy / inline GH_TOKEN / `claude --print --permission-mode auto`（详 §15.3.1 wrapper 三件事段）。端到端验证已在 step 8 当场实测两轮，分别产出 `docs/status/2026-05-23-2211.md`（commit `7d97986`）与 `docs/status/2026-05-23-2217.md`（commit `31f8653`），8 段 schema 全渲染、§3 PR 数据正确 empty array、push 直达 origin/main。
 9. **第一次启动 foreman 做 dry-run**：用户跑 `claude` → `/foreman M0-validate`，给 foreman 一个 trivial 清单（"开一个 docs PR 改 README typo"），观察 foreman→fixer→PR→auto-merge→state.json 全链路；后续 M1 起就真正放手。
 
 ### 13.2 待跟进项（不阻塞 M0）
@@ -1656,33 +1661,42 @@ Settings → Actions → General:
 
 #### 15.3.1 cron 注册（M0 末一次性 setup；v1.3 改 OS crontab）
 
-**v1.3 关键改动**：v1.0~v1.2 用 Claude Code 内置 `CronCreate`，实测发现是 session-only + 必须 REPL idle 才 fire——foreman 持续 mid-query 时永远 fire 不了，**不适用**。改用 **OS-level crontab**，与 Claude session 完全解耦：
+**v1.3 关键改动**：v1.0~v1.2 用 Claude Code 内置 `CronCreate`，实测发现是 session-only + 必须 REPL idle 才 fire——foreman 持续 mid-query 时永远 fire 不了，**不适用**。改用 **OS-level crontab**，与 Claude session 完全解耦。**v1.3 内 step 8 实测又细化一层**（2026-05-23）：cron 的 minimal env 缺 proxy / GH_TOKEN，且 `claude --print` 在 root 下不能用 `--dangerously-skip-permissions`——所以 cron entry 不直接调 claude，而是调 wrapper `scripts/cron-report-status.sh`，由 wrapper 把所有 env 与 permission flag 补齐。
 
 ```bash
-# root crontab -e，加两行（cron 不读用户 PATH，必须写绝对路径）：
-0 12 * * * cd /data0/chenqiang/project009/lightning-bug-regression && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
-0 20 * * * cd /data0/chenqiang/project009/lightning-bug-regression && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
+# root crontab -e（或用 scripts/install-cron.sh --apply 一键写入；idempotent），
+# 两条 entry 直接调 wrapper：
+0 12 * * * /data0/chenqiang/project009/lightning-bug-regression/scripts/cron-report-status.sh >> /data0/chenqiang/project009/lightning-bug-regression/docs/status/cron.log 2>&1
+0 20 * * * /data0/chenqiang/project009/lightning-bug-regression/scripts/cron-report-status.sh >> /data0/chenqiang/project009/lightning-bug-regression/docs/status/cron.log 2>&1
 
 # 验证：
-crontab -l   # 看到两行
+crontab -l                                    # 看到两行
+scripts/install-cron.sh --check               # 两个 ✓
 # 等到下个 12:00 / 20:00 后查 docs/status/ 有新 md + docs/status/cron.log 有调用日志
 ```
 
-**每次 fire 的执行模型**（OS crontab + `claude --print`）：
-1. OS cron 在 12:00 / 20:00 启动一个**全新的 claude 进程**——独立于任何在跑的 foreman session
-2. `claude --print` 走 non-interactive 模式：输入 prompt `/report-status` → 执行 → 输出到 stdout
-3. stdout 重定向到 `docs/status/cron.log`（保存原始执行记录）
-4. reporter agent 内部跑 §15.3.2 工作流，**写**真正的 `docs/status/<ts>.md`（不是 stdout）
-5. claude 进程退出，cron 任务结束
+**`cron-report-status.sh` wrapper 做的三件 cron-context-only 事**：
 
-**对比 v1.2 假设**（CronCreate）vs v1.3 落地（OS crontab）：
+1. `. /root/.bashrc` 拉 proxy exports（`http_proxy` / `https_proxy` / `NO_PROXY`）。**理由**：本机走公司代理 `http://10.13.11.1:1080`；裸 cron env 不带这些 → Anthropic API 返回 `403 Request not allowed`。`.bashrc` 没 non-interactive 守卫，cron 可直接 source。
+2. 从 `~/.git-credentials` inline 提取 `GH_TOKEN` 并 export（per `feedback-gh-token-auto` 记忆）。**理由**：skill 第 4 步要跑 `gh pr list / gh auth status`，cron env 不带 token → `gh auth status` 失败 → 触发 SYSTEM_ALERT #3，`gh pr list` 返空，§3 永远渲不出实数据。
+3. 用 `claude --print --permission-mode auto "/report-status"`。**理由**：claude `--print` 是 non-interactive，没人能批 tool prompt；`--dangerously-skip-permissions` 在 root 下被拒（"cannot be used with root/sudo privileges"），`--permission-mode bypassPermissions` 同样被拒，`acceptEdits` 与 `dontAsk` 都挡 `gh pr list`——**只有 `auto` mode 同时放行 Bash 通用 + git ops + gh ops + Write to docs/status/**。
 
-| 维度 | v1.2 CronCreate（错） | v1.3 OS crontab（对） |
-|------|----------------------|----------------------|
+**每次 fire 的执行模型**（OS crontab + wrapper + `claude --print`）：
+1. OS cron 在 12:00 / 20:00 启动 `cron-report-status.sh`——独立于任何在跑的 foreman session
+2. wrapper source bashrc + export GH_TOKEN → `exec claude --print --permission-mode auto "/report-status"`
+3. `claude --print` 走 non-interactive 模式：执行 skill → 输出 stdout
+4. stdout 重定向到 `docs/status/cron.log`（保存原始执行记录 + wrapper 的时间戳 banner）
+5. reporter agent 内部跑 §15.3.2 工作流，**写**真正的 `docs/status/<ts>.md`（不是 stdout）+ commit + push
+6. claude 进程退出，cron 任务结束
+
+**对比 v1.2 假设**（CronCreate）vs v1.3 落地（OS crontab + wrapper）：
+
+| 维度 | v1.2 CronCreate（错） | v1.3 OS crontab + wrapper（对） |
+|------|----------------------|--------------------------------|
 | 触发是否依赖 foreman session | ❌ 是（同 session + REPL idle） | ✅ 独立 OS 进程 |
 | session 退出后是否还能 fire | ❌ 不能（session-only） | ✅ 能 |
-| 工具调用 | `CronCreate({...})` | `crontab -e` |
-| 实测验证 | session 内 mid-query 永不 fire | `echo hello \| claude --print` 实测能跑 |
+| 工具调用 | `CronCreate({...})` | `crontab -e` 或 `install-cron.sh --apply` |
+| 实测验证 | session 内 mid-query 永不 fire | wrapper 实测两轮 smoke 通过，commit `7d97986` / `31f8653` |
 
 #### 15.3.2 reporter agent 工作内容（v1.2 简化为 6 步，无推送）
 

@@ -9,14 +9,14 @@ You are **reporter** for the `lightning-bug-regression` project. Authoritative s
 
 ## Trigger
 
-OS crontab (v1.3, **not** Claude Code `CronCreate` — that was an aborted v1.0~v1.2 path; see Q32):
+OS crontab (v1.3, **not** Claude Code `CronCreate` — that was an aborted v1.0~v1.2 path; see Q32). The entries call a wrapper script, not claude directly, because cron's minimal env lacks proxy / GH_TOKEN / TTY:
 
 ```
-0 12 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
-0 20 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
+0 12 * * * <repo>/scripts/cron-report-status.sh >> <repo>/docs/status/cron.log 2>&1
+0 20 * * * <repo>/scripts/cron-report-status.sh >> <repo>/docs/status/cron.log 2>&1
 ```
 
-Each fire = a fresh `claude` process running the `/report-status` skill, completely decoupled from any foreman session.
+The wrapper sources `/root/.bashrc` (proxy exports), inlines `GH_TOKEN` from `~/.git-credentials`, and runs `claude --print --permission-mode auto "/report-status"`. Each fire = a fresh `claude` process running the skill non-interactively, fully decoupled from any other session.
 
 ## Hard rules
 

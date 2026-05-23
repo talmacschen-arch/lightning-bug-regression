@@ -16,8 +16,8 @@ REPO_ABS="$(cd "$(dirname "$0")/.." && pwd)"
 CLAUDE_BIN="/root/.local/bin/claude"
 CRON_TAG="lightning-bug-regression /report-status"
 
-ENTRY_NOON="0 12 * * * cd ${REPO_ABS} && ${CLAUDE_BIN} --print \"/report-status\" >> docs/status/cron.log 2>&1  # ${CRON_TAG}"
-ENTRY_EVENING="0 20 * * * cd ${REPO_ABS} && ${CLAUDE_BIN} --print \"/report-status\" >> docs/status/cron.log 2>&1  # ${CRON_TAG}"
+ENTRY_NOON="0 12 * * * ${REPO_ABS}/scripts/cron-report-status.sh >> ${REPO_ABS}/docs/status/cron.log 2>&1  # ${CRON_TAG}"
+ENTRY_EVENING="0 20 * * * ${REPO_ABS}/scripts/cron-report-status.sh >> ${REPO_ABS}/docs/status/cron.log 2>&1  # ${CRON_TAG}"
 
 usage() {
   cat <<USAGE
@@ -109,30 +109,25 @@ cmd_dry_run() {
 }
 
 cmd_apply() {
-  local current new
+  # Strategy: tag-based idempotency. Remove every existing line that
+  # contains CRON_TAG (handles format upgrades — old entries that called
+  # claude directly get cleaned out before the new wrapper-based entries
+  # are added). Then write the two canonical entries.
+  local current other
   current="$(read_crontab)"
-  new="${current}"
-  local changed=0
-  if ! has_entry "${current}" "${ENTRY_NOON}"; then
-    new="${new}${new:+$'\n'}${ENTRY_NOON}"
-    changed=1
-  fi
-  if ! has_entry "${new}" "${ENTRY_EVENING}"; then
-    new="${new}${new:+$'\n'}${ENTRY_EVENING}"
-    changed=1
-  fi
-  if [[ "${changed}" -eq 0 ]]; then
-    echo "both entries already present; nothing to do"
-    exit 0
-  fi
+  other="$(grep -Fv "${CRON_TAG}" <<<"${current}" || true)"
+  # Trim trailing blank lines that grep -v can leave behind.
+  other="$(printf '%s' "${other}" | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
+  local new="${other}${other:+$'\n'}${ENTRY_NOON}"$'\n'"${ENTRY_EVENING}"
   printf '%s\n' "${new}" | crontab -
   echo "=== new root crontab ==="
   crontab -l
   echo
   echo "next fires at the next 12:00 or 20:00 (local time)."
-  echo "to force an immediate end-to-end test, edit one entry to "
-  echo "fire in ~2 minutes, wait for docs/status/cron.log + new docs/status/*.md,"
-  echo "then revert to the canonical 0 12 / 0 20 schedule."
+  echo "to force an immediate end-to-end test, add a temp entry that"
+  echo "fires in ~3 minutes pointing at the same wrapper, wait for"
+  echo "docs/status/cron.log + new docs/status/*.md, then remove the"
+  echo "temp entry. The canonical entries stay untouched throughout."
 }
 
 main() {

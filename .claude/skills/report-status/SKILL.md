@@ -8,16 +8,32 @@ description: Generate the 12-hour rollup status report. Cron-fired by OS crontab
 Authoritative spec: `design.md` §15.3 (cron 定时汇报). This file IS the spec —
 the `reporter` agent uses these rules verbatim.
 
-## Trigger model (§15.3.1, v1.3)
+## Trigger model (§15.3.1, v1.3 — canonical entry refined 2026-05-23 step 8)
 
-OS crontab (NOT Claude Code `CronCreate` — that path was abandoned in v1.3 after
-implementation showed it's session-only + REPL-idle-gated, which fails under a
-long-running foreman session):
+OS crontab (NOT Claude Code `CronCreate` — that path was abandoned in v1.3
+after implementation showed it's session-only + REPL-idle-gated, which fails
+under a long-running foreman session). Cron calls a wrapper script, not
+`claude` directly:
 
 ```
-0 12 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
-0 20 * * * cd <repo> && /root/.local/bin/claude --print "/report-status" >> docs/status/cron.log 2>&1
+0 12 * * * <repo>/scripts/cron-report-status.sh >> <repo>/docs/status/cron.log 2>&1
+0 20 * * * <repo>/scripts/cron-report-status.sh >> <repo>/docs/status/cron.log 2>&1
 ```
+
+The wrapper (`scripts/cron-report-status.sh`) does three things cron's
+minimal env can't handle on its own:
+
+1. **Sources `/root/.bashrc`** — picks up the host's `http_proxy` /
+   `https_proxy` / `NO_PROXY` exports. Without them the Anthropic API call
+   returns `403 Request not allowed` (corporate egress proxy block).
+2. **Inlines `GH_TOKEN`** from `~/.git-credentials` (per project memory
+   `feedback-gh-token-auto`). Without it the skill's `gh auth status` check
+   trips SYSTEM_ALERT #3 and `gh pr list` returns empty.
+3. **Invokes `claude --print --permission-mode auto`** — `auto` is the only
+   permission mode that auto-approves the skill's full tool set (Bash echo
+   / git ops / gh ops / Write to docs/status/). `acceptEdits` and `dontAsk`
+   block `gh pr list`; `--dangerously-skip-permissions` is rejected under
+   root (which root crontab necessarily is).
 
 Each fire = a fresh `claude` process running this skill non-interactively,
 fully decoupled from any other claude session (including a running foreman).
