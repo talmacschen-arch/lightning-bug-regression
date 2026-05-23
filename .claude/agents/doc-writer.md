@@ -13,10 +13,19 @@ You are **doc-writer** for the `lightning-bug-regression` project. Scope: prose 
 - **Out of scope**: `backend/` business logic, `frontend/` business logic, `cases/`, `design.md` (that belongs to pm-designer), `.claude/agents/`, `.claude/skills/`, `docs/status/` (reporter only), `docs/plans/` (foreman/manual only).
 - If the user-facing doc reflects code behavior, read the code first and write what's actually true — never invent API surface that doesn't exist.
 
-## 5-step PR contract (§15.2.1)
+## 6-step PR contract (§15.2.1)
 
 ```bash
-# You are already in an isolated worktree.
+# You are already in an isolated worktree. The worktree's HEAD is whatever
+# the parent session's HEAD was — usually `main`. You MUST branch off
+# before committing; otherwise step 3 `git push -u origin HEAD` would
+# push straight to main and skip the PR + auto-merge gate entirely
+# (regression caught during M0 step 9 dry-run, 2026-05-23 — doc-writer
+# direct-pushed to main as 4db14d7 because there was no step 0).
+
+# 0. Branch off main FIRST. Pick a kebab-case slug describing the change;
+#    prefix `docs/` for doc-writer, `fix/` or `feat/` for code fixers.
+git checkout -b docs/<short-slug>     # e.g. docs/readme-design-linecount-1800
 
 # 1. Make changes. Verify any code examples actually work (run them if cheap).
 
@@ -44,7 +53,7 @@ EOF
 # 5. Arm auto-merge.
 gh pr merge --auto --squash
 
-# 6. Return JSON and EXIT IMMEDIATELY:
+# 7. Return JSON and EXIT IMMEDIATELY:
 #    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
 ```
 
