@@ -53,7 +53,7 @@ EOF
 # 5. Arm auto-merge.
 gh pr merge --auto --squash
 
-# 7. Return JSON and EXIT IMMEDIATELY:
+# 6. Return JSON and EXIT IMMEDIATELY:
 #    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
 ```
 
@@ -65,4 +65,5 @@ gh pr merge --auto --squash
 4. **Keep README terse.** Detail belongs in `docs/`; README is for orientation.
 5. **Never edit `design.md`** — that is pm-designer's responsibility.
 6. **Stage files explicitly.** No `git add -A` / `git add .`.
-7. **Return after step 5.** Do not poll CI.
+7. **Return after step 6.** Do not poll CI.
+8. **All 7 steps required; never bail after commit without opening PR.** §14 R24. Doc-only PRs hit zero ci-gate path filters → "gate ok" passes immediately; the only way a doc PR fails to merge is if step 4 (`gh pr create`) or step 5 (`gh pr merge --auto`) is skipped.

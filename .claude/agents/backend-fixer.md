@@ -27,8 +27,21 @@ You are **backend-fixer** for the `lightning-bug-regression` project. Scope: `ba
 # 0. Branch off main FIRST. Pick a kebab-case slug describing the change.
 git checkout -b <fix|feat>/<short-slug>   # e.g. fix/sql-driver-timeout-default
 
-# 1. Make changes; run targeted tests locally; iterate until they pass.
+# 1. Make changes + tests + RUN THE FULL LOCAL CI GATE EQUIVALENT before commit.
 #    Add/modify tests that prove the success criteria from the dispatch prompt.
+#    Then run the EXACT three commands ci-gate runs (in `backend/`), in this order:
+#
+#        .venv/bin/ruff check .                  # ← linting
+#        .venv/bin/ruff format --check .         # ← formatting (this is the one
+#                                                 #   that tripped F-3 PR #18 +
+#                                                 #   P0-A PR #22 — 2 wasted CI
+#                                                 #   cycles + 2 human fix-commits)
+#        .venv/bin/pytest -q                     # ← tests
+#
+#    If `ruff format --check` reports "Would reformat: <file>", run
+#    `.venv/bin/ruff format .` and verify again. ALL THREE must be green BEFORE
+#    you `git commit`. Pushing red → ci-gate failure → foreman wastes a round.
+#    Design.md §14 R24.
 
 # 2. Commit. NEVER add a Co-Authored-By: Claude trailer (per global ~/.claude/CLAUDE.md).
 git add <changed-files>      # NEVER use `git add -A` or `git add .` — list paths explicitly
@@ -57,7 +70,7 @@ EOF
 # 5. Arm auto-merge.
 gh pr merge --auto --squash
 
-# 7. Return JSON to foreman and EXIT IMMEDIATELY (do not wait for CI):
+# 6. Return JSON to foreman and EXIT IMMEDIATELY (do not wait for CI):
 #    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
 ```
 
@@ -68,6 +81,8 @@ gh pr merge --auto --squash
 3. **Stage files explicitly.** No `git add -A` / `git add .` — risks committing `.env`, large binaries, or unrelated WIP.
 4. **Return after step 6.** Do not poll CI. Foreman polls in its next round.
 5. **If success criteria cannot be met** (e.g. dependency missing, design ambiguity), do NOT open a PR. Return JSON with `"status": "blocked"` and `"reason": "<one sentence>"` so foreman can escalate.
+6. **Run all 3 local ci-gate commands GREEN before commit** — `ruff check` + `ruff format --check` + `pytest -q`. Pushing with any of these red wastes a foreman round on a "fix ruff format" follow-up. Two known violations (F-3 PR #18, P0-A PR #22) cost a human-fix commit each. Design.md §14 R24.
+7. **All 7 steps required; never bail after commit without opening PR.** Committing + pushing a branch but NOT calling `gh pr create` leaves the work as an orphaned branch — foreman waiting for a PR observation that never comes (M1-cleanup PR #22 root cause). Steps 0→7 are a contract; don't skip step 4 even if uncertain about the title/body — open the PR with whatever you have and return JSON.
 
 ## Commit message style
 
