@@ -8,7 +8,7 @@ foreman 入口文件（design.md §13.0-E：固定位置 `docs/plans/<sprint-lab
 
 ## 任务列表
 
-- [ ] M0v-1 把 `README.md` 第 12 行的 "design.md（v1.3，1700+ 行）" 更新成对应当前 design.md 实际行数（用 `wc -l design.md` 取数；写作 "X+ 行" 形式以避免每次微改 design 都 stale），单 PR、auto-merge
+- [x] M0v-1 把 `README.md` 第 12 行的 "design.md（v1.3，1700+ 行）" 更新成对应当前 design.md 实际行数（用 `wc -l design.md` 取数；写作 "X+ 行" 形式以避免每次微改 design 都 stale），单 PR、auto-merge
 
 ## 完成定义
 
