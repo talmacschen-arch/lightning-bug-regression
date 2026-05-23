@@ -14,18 +14,23 @@ issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issue
 tags: [optimizer, statistics, count]
 
 description: |
-  对表执行 ANALYZE 后，SELECT count(*) 仍然输出 "one or more columns in
-  the following tables do not have statistics" 提示。本 case 用空表与
-  10000 行两种规模分别验证 ANALYZE 之后 count(*) 都不应再出现该提示。
+  对 **AO_ROW + zstd 压缩** 表执行 ANALYZE 后，SELECT count(*) 仍然输出
+  "one or more columns in the following table(s) do not have statistics"
+  提示。本 case 在 ao_row 存储 + compresstype=zstd 上用空表与 10000 行
+  两种规模分别验证 ANALYZE 之后 count(*) 都不应再出现该提示。表存储
+  类型是已知的触发条件——heap 表上一般不复现，本 case 故意用 ao_row
+  锁住 BUG 的真实形态。
 procedure: |
-  1) DROP + CREATE 一张空 test001 (id bigint, name text) DISTRIBUTED BY (id)；
+  1) DROP + CREATE 一张空 test001 (id bigint, name text)，**USING ao_row
+     WITH (compresstype=zstd, compresslevel=7)**，DISTRIBUTED BY (id)；
   2) ANALYZE test001（空表）；
   3) SELECT count(*) FROM test001：不应出现 "do not have statistics" 提示，
      count 应为 0；
   4) INSERT 10000 行（id + md5(random())），再 ANALYZE；
   5) 再次 SELECT count(*)：同样不应出现该提示，count 应为 10000。
 expected: |
-  - 两次 count(*) 查询的输出/NOTICE 流里都不含 "do not have statistics" 子串；
+  - 两次 count(*) 查询的输出/NOTICE 流里都不含 "do not have statistics" 子串
+    （飞书原文用了 "table(s)"，无括号的 "tables" 也兼容此匹配）；
   - 空表查询 scalar = 0；populated 查询 scalar = 10000。
 
 applies_to: {}
@@ -39,17 +44,19 @@ setup:
   - DROP TABLE IF EXISTS test001
 
 steps:
-  - name: "空表 ANALYZE 后 count(*) 不应提示无统计"
+  - name: "AO_ROW + zstd 空表 ANALYZE 后 count(*) 不应提示无统计"
     kind: sql
     sql: |
-      CREATE TABLE IF NOT EXISTS test001 (id bigint, name text) DISTRIBUTED BY (id);
+      CREATE TABLE IF NOT EXISTS test001 (id bigint, name text)
+        USING ao_row WITH (compresstype=zstd, compresslevel=7)
+        DISTRIBUTED BY (id);
       ANALYZE test001;
       SELECT count(*) FROM test001
     expect:
       scalar: 0
       not_contains: "do not have statistics"
 
-  - name: "INSERT 10000 行 + ANALYZE 后 count(*) 不应提示无统计"
+  - name: "AO_ROW + zstd INSERT 10000 行 + ANALYZE 后 count(*) 不应提示无统计"
     kind: sql
     sql: |
       INSERT INTO test001 SELECT id, md5(random()::text) FROM generate_series(1, 10000) id;
@@ -66,7 +73,13 @@ created_by: chenqiang
 created_at: "2026-05-23"
 notes: |
   从 status:stub 升 status:open——飞书原文补齐了可执行 SQL（DDL +
-  两段 ANALYZE/count(*) 子测试），不再需要 stub。
+  两段 ANALYZE/count(*) 子测试）。
+
+  存储类型是触发条件：飞书 2026-05-23 二次更新把 CREATE TABLE 从普通
+  heap 改成 USING ao_row WITH (compresstype=zstd, compresslevel=7)。
+  推断 BUG 在 AO 表的统计信息路径上，heap 表的 stats 计算可能不走同
+  一条代码路径。本 case 故意保留 ao_row 锁住 BUG 真实形态——回归
+  跑过 = AO 表 stats 路径已修。
 
   "do not have statistics" 是 pg/Greenplum 的 NOTICE 级输出；runner 实跑
   时需要把 psycopg connection.notices 拼接进 step 输出流，让 expect
