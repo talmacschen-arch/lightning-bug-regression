@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.runner.case_normalizer import normalize_case
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
 from app.storage.yaml_loader import CaseValidationError, CategoryMeta, load_case
@@ -67,6 +69,20 @@ class CaseDetail(BaseModel):
     yaml_raw: str
     parsed: dict[str, Any] | None = None
     error: str | None = None
+
+
+class ValidateRequest(BaseModel):
+    yaml: str
+
+
+class ValidateErrorItem(BaseModel):
+    where: str  # e.g. "steps[0].kind", "top-level", "yaml_syntax", "normalize"
+    reason: str
+
+
+class ValidateResponse(BaseModel):
+    ok: bool
+    errors: list[ValidateErrorItem]
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +322,129 @@ def get_case(case_id: str) -> CaseDetail:
                 error=str(e),
             )
     raise HTTPException(status_code=404, detail=f"case {case_id!r} not found")
+
+
+@router.post("/cases/validate", response_model=ValidateResponse)
+def validate_case(req: ValidateRequest) -> ValidateResponse:
+    """Validate a raw YAML case payload without persisting anything.
+
+    Delegates to the same modules the GET /cases path uses (§14 R26):
+
+    * :func:`app.storage.yaml_loader.load_case` for §4.1 schema checks
+    * :func:`app.runner.case_normalizer.normalize_case` for step-kind /
+      template-field checks the schema layer doesn't catch.
+
+    Inline copies of either module's logic would be a dual-code-path
+    violation (§14 R26 — the bug this endpoint exists to prevent in the
+    Web 录入 path); both modules are imported and visibly called below.
+
+    Algorithm (design.md §13.7 M3a-1):
+
+    1. ``yaml.safe_load`` — capture syntax errors as ``where="yaml_syntax"``.
+    2. Top-level mapping check — non-dict → ``where="top-level"``.
+    3. Build the same ``CategoryMeta`` whitelist the GET path uses.
+    4. Write the raw YAML to a tempfile, call ``load_case`` against it,
+       and surface ``CaseValidationError`` as a single error entry whose
+       ``where`` is best-effort parsed from the loader's
+       ``<file>:<key>: <reason>`` format.
+    5. If the schema layer accepted the doc, also run ``normalize_case``
+       on the parsed dict to catch step-kind / required-field violations
+       the schema permits (e.g. log_grep without ``pattern:``); these
+       surface with ``where="normalize"``.
+    """
+    errors: list[ValidateErrorItem] = []
+
+    # 1. YAML syntax.
+    try:
+        parsed = yaml.safe_load(req.yaml)
+    except yaml.YAMLError as e:
+        return ValidateResponse(
+            ok=False,
+            errors=[ValidateErrorItem(where="yaml_syntax", reason=str(e))],
+        )
+
+    # 2. Top-level must be a mapping.
+    if not isinstance(parsed, dict):
+        return ValidateResponse(
+            ok=False,
+            errors=[
+                ValidateErrorItem(
+                    where="top-level",
+                    reason="YAML document must be a mapping",
+                )
+            ],
+        )
+
+    # 3. Reuse the category whitelist the GET path uses.
+    categories = _load_categories()
+    category_meta = _build_category_meta(categories)
+
+    # 4. Delegate to yaml_loader.load_case via a tempfile (load_case takes
+    #    a Path, not a dict; we deliberately do NOT copy its checks inline —
+    #    that would be a §14 R26 dual-code-path violation).
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".yaml",
+            delete=False,
+            encoding="utf-8",
+        ) as tmp:
+            # Filename stem matters for the loader's `id == path.stem` check.
+            # Use the parsed `id` value when present so a well-formed case
+            # doesn't trip that rule purely on a random tempfile name.
+            tmp.write(req.yaml)
+            tmp_path = Path(tmp.name)
+
+        # If the parsed dict carries an `id`, rename the tmpfile so its
+        # stem matches; otherwise leave it — the loader will raise an
+        # informative error which is exactly what the caller wants to see.
+        case_id = parsed.get("id")
+        if isinstance(case_id, str) and case_id:
+            renamed = tmp_path.with_name(f"{case_id}.yaml")
+            try:
+                tmp_path.rename(renamed)
+                tmp_path = renamed
+            except OSError:
+                # Best-effort; if rename fails just let load_case complain.
+                pass
+
+        try:
+            load_case(tmp_path, category_meta)
+        except CaseValidationError as e:
+            # load_case messages are "<file_path>:<where>: <reason>".
+            # Best-effort parse to recover the field name without
+            # leaking the tempfile path into the API response.
+            msg = str(e)
+            prefix = f"{tmp_path}:"
+            where = "schema"
+            reason = msg
+            if msg.startswith(prefix):
+                rest = msg[len(prefix) :]
+                if ": " in rest:
+                    where, reason = rest.split(": ", 1)
+                else:
+                    reason = rest
+            errors.append(ValidateErrorItem(where=where, reason=reason))
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    # 5. Even if schema validation passed, run the normalizer — it catches
+    #    things the schema layer permits (e.g. unknown step kinds the
+    #    normalizer's VALID_KINDS set rejects, or missing sql/cmd fields).
+    #    We always run it when schema passed; if schema already failed we
+    #    skip normalize so the caller fixes the more fundamental error first.
+    if not errors:
+        try:
+            normalize_case(parsed)
+        except (KeyError, ValueError, TypeError) as e:
+            errors.append(ValidateErrorItem(where="normalize", reason=str(e)))
+
+    return ValidateResponse(ok=(len(errors) == 0), errors=errors)
 
 
 __all__ = ["router"]
