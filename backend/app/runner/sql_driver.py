@@ -35,8 +35,8 @@ from app.runner.types import StepError, StepResult, StepStatus
 # Regex: SQL that cannot run inside a transaction block (per §14 R9 / F-3).
 # Matches if ANY statement in the SQL starts with one of these DDL keywords.
 _NON_TX_DDL_RE = re.compile(
-    r'(?:^|;\s*)(?:DROP\s+DATABASE|CREATE\s+DATABASE|VACUUM|REINDEX\s+CONCURRENTLY'
-    r'|ALTER\s+SYSTEM|CLUSTER)\b',
+    r"(?:^|;\s*)(?:DROP\s+DATABASE|CREATE\s+DATABASE|VACUUM|REINDEX\s+CONCURRENTLY"
+    r"|ALTER\s+SYSTEM|CLUSTER)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 

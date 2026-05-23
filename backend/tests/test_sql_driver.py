@@ -303,9 +303,7 @@ async def test_ddl_runs_with_autocommit() -> None:
     conn = _FakeAsyncConnection(cursor)
     pool = SqlSessionPool({"default": "postgresql://stub/db"})
     with _patch_connect(conn):
-        result = await execute_sql_step(
-            pool, "ddl-step", "default", "DROP DATABASE IF EXISTS mydb"
-        )
+        result = await execute_sql_step(pool, "ddl-step", "default", "DROP DATABASE IF EXISTS mydb")
     assert result.status is StepStatus.PASS
     # autocommit was set to True during execution, then restored to False.
     assert conn.autocommit is False  # restored
@@ -337,7 +335,5 @@ async def test_ddl_rollback_called_before_autocommit() -> None:
     conn = _FakeAsyncConnection(cursor)
     pool = SqlSessionPool({"default": "postgresql://stub/db"})
     with _patch_connect(conn):
-        await execute_sql_step(
-            pool, "ddl", "default", "CREATE DATABASE testdb"
-        )
+        await execute_sql_step(pool, "ddl", "default", "CREATE DATABASE testdb")
     assert conn.rollbacks >= 1  # rollback was called before autocommit switch
