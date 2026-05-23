@@ -22,6 +22,7 @@ R9: NEVER let an exception bubble. Catch everything -> StepResult(status=ERROR, 
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -30,6 +31,12 @@ import psycopg
 from psycopg import AsyncConnection
 
 from app.runner.types import StepError, StepResult, StepStatus
+
+_EXPLAIN_RE = re.compile(r'(?:^|;)\s*EXPLAIN\b', re.IGNORECASE)
+
+
+def _is_explain_query(sql: str) -> bool:
+    return bool(_EXPLAIN_RE.search(sql))
 
 
 class SqlSessionPool:
@@ -138,6 +145,14 @@ async def execute_sql_step(
                     stdout = "\n".join(repr(r) for r in last_rows[:20])
                 else:
                     rows_affected = last_rowcount if last_rowcount >= 0 else None
+                plan_text: str | None = None
+                if (
+                    _is_explain_query(sql)
+                    and last_description is not None
+                    and last_rows is not None
+                ):
+                    # EXPLAIN output: each row is typically (plan_line,) — a 1-column text result.
+                    plan_text = "\n".join(str(r[0]) for r in last_rows)
                 return StepResult(
                     status=StepStatus.PASS,
                     step_id=step_id,
@@ -150,6 +165,7 @@ async def execute_sql_step(
                     scalar=scalar,
                     row_count=row_count,
                     rows_affected=rows_affected,
+                    plan_text=plan_text,
                 )
         except Exception as exc:
             try:

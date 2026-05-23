@@ -939,3 +939,37 @@ async def test_run_suite_returns_suite_summary_dataclass(
     )
     assert isinstance(summary, SuiteSummary)
     assert summary.total == 1
+
+
+# ---------------------------------------------------------------------------
+# plan_contains falls back to stdout when plan_text is None (F-2 §5.3)
+# ---------------------------------------------------------------------------
+
+
+async def test_plan_contains_falls_back_to_stdout_when_plan_text_none(
+    tmp_path: Path,
+) -> None:
+    """When plan_text is None (e.g. legacy driver call without EXPLAIN detection),
+    plan_contains must fall back to stdout so the assertion can still pass.
+    This exercises the F-2 fallback wiring in _apply_assertions directly."""
+    from app.runner.orchestrator import _apply_assertions
+
+    now = datetime.utcnow().isoformat()
+    step_result = StepResult(
+        status=StepStatus.PASS,
+        step_id="s_plan",
+        driver="sql",
+        started_at=now,
+        ended_at=now,
+        duration_ms=1,
+        stdout="Hash Join\n  Hash Cond: (t1.id = t2.id)",
+        stderr="",
+        plan_text=None,  # explicitly None — should fall back to stdout
+    )
+    _apply_assertions(step_result, {"plan_contains": ["Hash"]})
+    assert len(step_result.assertions) == 1
+    key, passed, detail = step_result.assertions[0]
+    assert key == "plan_contains"
+    assert passed is True, f"expected assertion to pass but got: {detail}"
+    # step must remain PASS (not downgraded)
+    assert step_result.status is StepStatus.PASS

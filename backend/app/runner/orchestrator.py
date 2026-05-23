@@ -198,6 +198,9 @@ def _apply_assertions(step_result: StepResult, expect: dict[str, Any]) -> None:
     for key, expected_value in expect.items():
         actual_attr = _ACTUAL_SOURCE.get(key)
         actual = getattr(step_result, actual_attr, None) if actual_attr else None
+        # Fallback: plan assertions use stdout when plan_text is None (F-2 fix §5.3)
+        if key in ("plan_contains", "plan_contains_any") and actual is None:
+            actual = step_result.stdout or None
         try:
             passed, detail = evaluate(key, actual, expected_value)
         except UnknownExpectKey as e:
