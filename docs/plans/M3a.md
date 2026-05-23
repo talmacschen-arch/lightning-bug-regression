@@ -35,9 +35,9 @@ reviewer 必须按 §14 cross-reference + §6.4 8 条逐项核对（详 `.claude
 
 ### Sprint M3a-frontend-flow — 双入口 + 三段闸门（依赖 M3a-4）
 
-- [ ] M3a-5 入口 A「从描述生成」**stub**：Tab A 下放 textarea + "生成 YAML 草稿" 按钮。**v1 stub**：click 后弹 toast `"M3a-5 not yet wired — 请用 skill 路径（/add-test-case）或 Tab B 粘贴"`，**不实际调 LLM**。规避 LLM 接入复杂度阻塞主流程；M5 或单独 followup 再做真 LLM。data-testid `tab-entry-a` / `btn-generate-stub`
-- [ ] M3a-6 入口 B「粘贴 YAML」：Tab B 下 textarea 直接接受 YAML。粘贴时若检测到 `─── BEGIN YAML ───` / `─── END YAML ───` 围栏（skill 输出格式），自动剥离围栏 + footer + 把内部 YAML 填到主 editor。data-testid `tab-entry-b` / `textarea-paste`
-- [ ] M3a-7 Validate → Try → Save 三段闸门 UI 状态机：组件 state `{validate_ok: bool, try_ok: bool, try_step_results: list}`。Validate 按钮永远 enabled；Try 按钮在 validate_ok=true 之前置灰；Save 按钮在 try_ok=true 之前置灰 + hover tooltip `"必须先 Try 一次并通过"`（§6.4 强约束 6）。Validate 失败显示 errors 列表；Try 失败显示 per-step status + stderr 预览前 500 char。Save 成功跳转 `/cases/:id`（新 id）或显示 PR URL 链接
+- [x] M3a-5 入口 A「从描述生成」**stub**：Tab A 下放 textarea + "生成 YAML 草稿" 按钮。**v1 stub**：click 后弹 toast `"M3a-5 not yet wired — 请用 skill 路径（/add-test-case）或 Tab B 粘贴"`，**不实际调 LLM**。规避 LLM 接入复杂度阻塞主流程；M5 或单独 followup 再做真 LLM。data-testid `tab-entry-a` / `btn-generate-stub`
+- [x] M3a-6 入口 B「粘贴 YAML」：Tab B 下 textarea 直接接受 YAML。粘贴时若检测到 `─── BEGIN YAML ───` / `─── END YAML ───` 围栏（skill 输出格式），自动剥离围栏 + footer + 把内部 YAML 填到主 editor。data-testid `tab-entry-b` / `textarea-paste`
+- [x] M3a-7 Validate → Try → Save 三段闸门 UI 状态机：组件 state `{validate_ok: bool, try_ok: bool, try_step_results: list}`。Validate 按钮永远 enabled；Try 按钮在 validate_ok=true 之前置灰；Save 按钮在 try_ok=true 之前置灰 + hover tooltip `"必须先 Try 一次并通过"`（§6.4 强约束 6）。Validate 失败显示 errors 列表；Try 失败显示 per-step status + stderr 预览前 500 char。Save 成功跳转 `/cases/:id`（新 id）或显示 PR URL 链接
 
 ### Sprint M3a-frontend-tests-and-polish — 测试 + polling（可并行）
 
