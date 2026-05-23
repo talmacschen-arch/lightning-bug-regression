@@ -9,7 +9,7 @@
 
 两类用例**共用**同一份 runner、schema、UI；通过 `category` 字段（DB 表驱动可扩展）区分，统计 / 看板 / Run 子集按 category 拆分。
 
-> 状态：**M0 项目骨架阶段**。详见 [`design.md`](./design.md)（v1.3，1700+ 行）。
+> 状态：**M0 项目骨架阶段**。详见 [`design.md`](./design.md)（v1.3，1800+ 行）。
 
 ---
 
