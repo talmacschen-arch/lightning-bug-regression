@@ -32,8 +32,24 @@ from psycopg import AsyncConnection
 
 from app.runner.types import StepError, StepResult, StepStatus
 
-# Regex: SQL that cannot run inside a transaction block (per §14 R9 / F-3).
+# Regex: SQL that cannot run inside a transaction block (per §14 R5/R9 / F-3).
 # Matches if ANY statement in the SQL starts with one of these DDL keywords.
+#
+# **Known uncovered patterns** (defense-in-depth gap, accepted per §4.1.2):
+#   - CREATE / DROP INDEX CONCURRENTLY  (PG: explicitly non-tx)
+#   - CREATE / DROP TABLESPACE          (some distros require non-tx)
+#   - other vendor-specific DDL we haven't catalogued
+#
+# We do NOT try to exhaustively enumerate every non-tx-safe DDL — that
+# arms race is brittle (every new PG version may add one). The **first-line
+# defense** is the design.md §4.1.2 convention: YAML authors write
+# `psql -c '<DDL>'` for ANY non-tx-safe DDL, which the dogfood normalizer
+# routes to shell_driver and never enters this sql_driver code path.
+# This regex is the **second-line tripwire** — only catches what we know
+# about. Missing patterns slip through and surface as a clear PG error
+# ("CREATE INDEX CONCURRENTLY cannot run inside a transaction block")
+# in stderr, at which point the YAML author should rewrite the case per
+# §4.1.2 rather than us patching this regex.
 _NON_TX_DDL_RE = re.compile(
     r"(?:^|;\s*)(?:DROP\s+DATABASE|CREATE\s+DATABASE|VACUUM|REINDEX\s+CONCURRENTLY"
     r"|ALTER\s+SYSTEM|CLUSTER)\b",
@@ -42,7 +58,12 @@ _NON_TX_DDL_RE = re.compile(
 
 
 def _needs_autocommit(sql: str) -> bool:
-    """Return True if sql contains non-transaction-safe DDL (F-3)."""
+    """Return True if sql contains non-transaction-safe DDL (F-3 defense-in-depth).
+
+    Primary convention is design.md §4.1.2 (`psql -c '<DDL>'` in YAML);
+    this only catches cases that slipped past it. Known uncovered patterns
+    listed in `_NON_TX_DDL_RE` docstring above.
+    """
     return bool(_NON_TX_DDL_RE.search(sql))
 
 
@@ -218,10 +239,14 @@ async def execute_sql_step(
                         plan_text=plan_text,
                     )
         except Exception as exc:
-            try:
-                await conn.rollback()
-            except Exception:
-                pass
+            # In autocommit mode (F-3 DDL path) there's no open tx to roll back —
+            # `rollback()` is harmless but misleading. Guard so the call only fires
+            # when it's semantically meaningful.
+            if not getattr(conn, "autocommit", False):
+                try:
+                    await conn.rollback()
+                except Exception:
+                    pass
             return _err(step_id, started, t0, f"{type(exc).__name__}: {exc}", notices)
         finally:
             try:

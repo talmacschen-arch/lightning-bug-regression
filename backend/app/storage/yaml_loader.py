@@ -40,15 +40,20 @@ class _CaseYamlLoader(yaml.SafeLoader):
     """
 
 
+# YAML 1.1 bool tag — referenced both to strip the default resolver and to
+# re-register a stricter one below. Kept as a module constant to avoid the
+# magic-string-twice anti-pattern (matters if PyYAML ever changes the tag URI).
+_YAML_BOOL_TAG = "tag:yaml.org,2002:bool"
+
 # Copy resolver map and strip out the default bool resolver, then re-add a
 # stricter one. (PyYAML loaders share `yaml_implicit_resolvers` by reference
 # through inheritance; we copy to keep the change local to _CaseYamlLoader.)
 _CaseYamlLoader.yaml_implicit_resolvers = {
-    ch: [(tag, regex) for (tag, regex) in resolvers if tag != "tag:yaml.org,2002:bool"]
+    ch: [(tag, regex) for (tag, regex) in resolvers if tag != _YAML_BOOL_TAG]
     for ch, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
 _CaseYamlLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool",
+    _YAML_BOOL_TAG,
     re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
     list("tTfF"),
 )
