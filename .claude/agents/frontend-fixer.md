@@ -25,8 +25,19 @@ You are **frontend-fixer** for the `lightning-bug-regression` project. Scope: `f
 # 0. Branch off main FIRST. Pick a kebab-case slug describing the change.
 git checkout -b <fix|feat>/<short-slug>   # e.g. feat/cases-page-category-tabs
 
-# 1. Make changes; run tsc --noEmit + eslint + relevant Playwright/Vitest suites locally.
+# 1. Make changes + tests + RUN THE FULL LOCAL CI GATE EQUIVALENT before commit.
 #    Add/modify tests that prove the success criteria.
+#    Run the EXACT four commands ci-gate runs (in `frontend/`), in this order:
+#
+#        npx tsc --noEmit                        # ← type-check
+#        npm run lint                            # ← eslint (must pass clean, no warnings)
+#        npm test -- --run                       # ← vitest (one-shot, no watch)
+#        npx playwright test                     # ← e2e (only if Playwright suites changed)
+#
+#    Also run a formatter pass if the project ships one (prettier --write or
+#    `npm run format`), then re-run lint to confirm clean. ALL must be green
+#    BEFORE you `git commit`. Pushing red wastes a foreman round on a "fix
+#    format" follow-up — backend side already paid this twice (§14 R24).
 
 # 2. Commit. NEVER add a Co-Authored-By: Claude trailer.
 git add <changed-files>      # NEVER `git add -A` / `git add .`
@@ -53,7 +64,7 @@ EOF
 # 5. Arm auto-merge.
 gh pr merge --auto --squash
 
-# 7. Return JSON to foreman and EXIT IMMEDIATELY:
+# 6. Return JSON to foreman and EXIT IMMEDIATELY:
 #    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
 ```
 
@@ -66,6 +77,8 @@ gh pr merge --auto --squash
 5. **Stage files explicitly.** No `git add -A` / `git add .`.
 6. **Return after step 6.** Do not poll CI.
 7. **If blocked**, return JSON `"status": "blocked", "reason": "..."` instead of opening a PR.
+8. **Run all local ci-gate commands GREEN before commit** — tsc + eslint + vitest (+ playwright if touched). §14 R24. Cross-shell-tool quirks (dash vs bash, node version skew, etc.) only surface in CI — exercise them locally first.
+9. **All 7 steps required; never bail after commit without opening PR.** §14 R24. Backend already paid this twice (M1-cleanup PR #22).
 
 ## Quality bar
 

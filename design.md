@@ -419,6 +419,8 @@ normalizer 检测策略用 `"psql " in stripped`（**子串**不是 prefix），
 
 **§14 R 编号**：本约定 forensic 来自 PR #18 (commit `b49b766`) + lg-bug-0005 在 dogfood 上的 ERROR 实测；defense-in-depth 的 sql_driver autocommit 实现是 F-3 的副产物。本身是正向 prescription 不是反模式，所以**不**新加 R 条目；reviewer 在 cases YAML 审查时如发现 non-tx-safe DDL 没走 `psql -c` 应直接 REQUEST_CHANGES 引用本节。
 
+**v1.3 (j) 后续硬化**（2026-05-24 M1-followup + M1-cleanup 反复踩同款坑）：(1) backend-fixer / frontend-fixer / doc-writer 的 6-step PR contract 在 `.claude/agents/*.md` 升级为 **7-step**，step 1 显式列出本地 ci-gate 等价命令（backend = ruff check + ruff format --check + pytest；frontend = tsc + lint + vitest + 可选 playwright），commit 前必须**全绿**；新增 hard rule "7 个 step 必须连续走完，commit + push 之后必须 open PR"。(2) foreman.md 加 hard rule 8 "EVERY exit path 必须 print final JSON 到 stdout 作为最后一个动作"——M1-followup + M1-cleanup foreman 各栽一次，连续两次得人手 reality-reconciliation；hard rule 9 "检查 specialist 6-step contract 完整性，commit-but-no-PR 算未完成"。§14 加 R24（specialist commit/push 后不 open PR 或不跑本地 ci-gate 等价命令）+ R25（foreman 不返 final JSON 就 exit）两条反模式。reviewer step 5 cross-check 时凡命中 R24/R25 直接 REQUEST_CHANGES。
+
 ### 4.2 运行记录 schema（SQLite）
 
 ```sql
@@ -1521,6 +1523,20 @@ foreman 把每行 `- [ ] <id> <description>` 当一个 sprint item；
 - 正确做法：required_status_checks contexts 用 **job 的 `name` 字段值**（如果 job 有 `name:` 字段；否则用 job id）。验证方法：跑一次 workflow，然后 `gh api repos/.../commits/<sha>/check-runs --jq '.check_runs[].name'` 取实际报告的 name 字符串去匹配。如果多 workflow 各自有同名 job，得用 `app_id` 字段消歧或更严格的 job 命名规范。
 - 来源：本项目 2026-05-23 PR #11 实战 (commit 81e46ec)。PR UI 显示的 "ci-gate / gate" 是为了人类阅读拼出来的展示形式，**不是** API 里的 check name 实际值，是 footgun。
 
+**🟠 R24：specialist agent commit + push 后不 open PR / 不跑本地 ci-gate 等价命令（v1.3 新增，M1 / M1-followup / M1-cleanup 反复踩坑）**
+- 触发场景一：backend-fixer 改完代码 commit + push 分支但**不开 PR**，foreman 等着永远来不到的 merge 事件。M1-cleanup PR #22 真踩了——backend-fixer 推 `2d95576` 到 `refactor/yaml-loader-category-meta` 分支后 session 结束（理由不明），foreman 输出 "Continuing to wait on backend-fixer." 没收到 PR 就退；人手 `gh pr create` 才补上。
+- 触发场景二：backend-fixer / frontend-fixer 改完代码 commit + push **不跑本地 ruff format / tsc / eslint**，依赖 ci-gate 远程发现——ci-gate 红 → foreman 多消耗一 round dispatch 修复 specialist → 修复 specialist 也犯同款错 → 同症状 fail 2 次 escalate。M1-followup F-3 PR #18 + M1-cleanup P0-A PR #22 **连续两次**栽在 `ruff format --check` 上，都靠人手补一个 trivial format commit 收尾。
+- 正确做法：6-step PR contract 在 `.claude/agents/{backend-fixer,frontend-fixer,doc-writer}.md` 同步硬化两条：
+  1. step 1 显式列出**本地 ci-gate 等价命令**（backend: `ruff check` + `ruff format --check` + `pytest -q`；frontend: `tsc --noEmit` + `npm run lint` + `npm test -- --run` + 可能的 playwright），**三者绿了才能 git commit**
+  2. hard rule 加一条「**7 个 step 必须连续走完，commit+push 之后必须 open PR**，不要在 commit 之后假死或等下游事件——open PR 是 specialist 责任不是 foreman 责任」
+- 来源：本项目 2026-05-23 ~ 2026-05-24 实测，M1-followup PR #18（commit `73acb0f`，ruff format 漏）+ M1-cleanup PR #22（commit `7ceda51`，ruff format 漏 + 无 PR 开两份病灶）。
+
+**🟠 R25：foreman session 不返 final JSON 就 exit（v1.3 新增，M1-followup / M1-cleanup 反复踩坑）**
+- 触发：foreman dispatch specialist 后等响应，但因为 round budget tight / specialist 半路死 / 自己 idle 太久某种内部超时，**session 退出但没 print final JSON 到 stdout**。output 末尾留下一句中间态消息（如 "Continuing to wait on backend-fixer." 或 "PR #21 confirmed merged (gate=SUCCESS). Continuing to wait."）——非 JSON、非 final。
+- 后果：下游（cron-fired reporter / 人手 reconciliation）必须 grep PR 列表 + git log + worktree 状态把 session 实际做了什么逆向重建，每次浪费 5-10 min 人工。M1-followup + M1-cleanup 两个 session 都犯，连续两次。
+- 正确做法：foreman.md hard rule 8 强化「**EVERY exit path 必须 print final JSON 到 stdout 作为最后一个动作**」，包括 mid-flight bail 也要 print partial-progress JSON with `status="blocked-escalate"` + `last_failures` 解释退出原因。state.json 写盘不算替代——caller parse 的是 stdout JSON。
+- 来源：本项目 2026-05-23 ~ 2026-05-24 实测，state.json 里 `last_failures.symptom_hash = "foreman:no-final-json-on-exit"` 各记一次。
+
 ### 14.3 中危级（积累到一定规模会触发）
 
 **🟡 R14：`ON CONFLICT DO NOTHING` 用于两阶段 ingest**
@@ -1620,6 +1636,7 @@ $ claude
    - 触发 escalate → BLOCKED-ESCALATE；写 state.json + handoff doc；session 退出。
    - budget 用尽（10 round 或壁钟 2h，取先到者） → BUDGET-EXHAUSTED；写 partial progress；session 退出。
 7. 任何 stop 都必须写 state.json + handoff doc，然后退出 session。reporter 会从 state.json 拼下次汇报。
+8. **ALWAYS print 最终 JSON 到 stdout 作为最后一个动作**，不论 stop 条件是哪种——见 hard rule 8 + §14 R25。即使是 mid-flight 假死（"在等 specialist 但 specialist 没回来"），也要 print 带 `status="blocked-escalate"` + `last_failures` 解释的 partial-progress JSON。
 ```
 
 #### 15.1.2 foreman 硬规则
@@ -1633,6 +1650,8 @@ $ claude
 | 5 | **8+ min 任务用 run_in_background**——不在前台阻塞 | preflight foreman.md §"Time-consuming calls go to background" |
 | 6 | **状态每 round 落地**——写 `docs/status/foreman-state.json`，reporter 离线可读 | 本项目新增 |
 | 7 | **budget = 10 round 或 2h**——用户 v1.0 决策 | 本项目新增（preflight 是 10 round） |
+| 8 | **EVERY exit path 必须 print final JSON 到 stdout 作为最后一个动作**——DONE / BLOCKED-ESCALATE / BUDGET-EXHAUSTED / mid-flight bail 都不例外。state.json 写盘**不算替代**：caller (cron / 人手 / 上层 foreman) parse 的是 stdout JSON。本项目新增 §14 R25，M1-followup + M1-cleanup 2 次踩坑 |
+| 9 | **检查 specialist 6-step contract 完整性**——commit + push 但没 `gh pr create` 的 specialist 算未完成，需要 foreman 补救（开 PR 是允许的 recovery action，与 hard rule 3 "Never commit" 不冲突——后者管 code commit）。本项目新增 §14 R24 |
 
 #### 15.1.3 foreman 状态文件 `docs/status/foreman-state.json`
 
@@ -1688,14 +1707,21 @@ $ claude
 #    否则后面 push -u origin HEAD 等于直推 main，PR + auto-merge 全绕过）
 git checkout -b <feat|fix|docs>/<id>-<slug>   # 例：fix/m1-4-shell-driver-timeout
 
-# 1. 在 worktree 里 commit（**不**加 Co-Authored-By Claude，参考全局规范）
+# 1. 写代码 + 测试 + 跑本地 ci-gate 等价命令（**v1.3 后期硬化**——见 §14 R24）：
+#       backend:  ruff check . && ruff format --check . && pytest -q
+#       frontend: tsc --noEmit && npm run lint && npm test -- --run
+#    三者绿了才能进 step 2。pushing red 让 ci-gate 远程发现 → foreman 多消耗
+#    一 round dispatch 修复——M1-followup PR #18 + M1-cleanup PR #22 连续两次
+#    都栽在 `ruff format --check`，都靠人手补 trivial format commit 收尾。
+
+# 2. 在 worktree 里 commit（**不**加 Co-Authored-By Claude，参考全局规范）
 git add <changed>
 git commit -m "<conventional commit message>"
 
-# 2. push 分支
+# 3. push 分支
 git push -u origin HEAD
 
-# 3. 开 PR
+# 4. 开 PR
 gh pr create --title "..." --body "$(cat <<'EOF'
 ## Summary
 ...
@@ -1710,16 +1736,18 @@ sprint=M1, round=6, item=M1-4 shell_driver
 EOF
 )"
 
-# 4. 给 PR 设 auto-merge（CI 全绿后 GitHub 自动 squash merge）
+# 5. 给 PR 设 auto-merge（CI 全绿后 GitHub 自动 squash merge）
 gh pr merge --auto --squash
 
-# 5. 返回给 foreman 一个 JSON：
+# 6. 返回给 foreman 一个 JSON：
 #    {"pr_number": 13, "pr_url": "...", "branch": "feat/...", "status": "open-auto-merge-armed"}
 ```
 
-**关键**：第 4 步设了 auto-merge 后 specialist **立即返回**，不要等 CI。CI 跑 ~5-25 min，等的话拖住 foreman loop。foreman 在下一 round 才轮询 PR 状态。
+**关键**：第 5 步设了 auto-merge 后 specialist **立即返回**，不要等 CI。CI 跑 ~5-25 min，等的话拖住 foreman loop。foreman 在下一 round 才轮询 PR 状态。
 
 **v1.3 step 0 教训**（2026-05-23 M0-validate dry-run）：doc-writer round 1 跳过 step 0，直推 main 为 commit `4db14d7`。foreman 自动 recover：lease-protected force-push 撤回 main → 重 dispatch doc-writer + 显式步骤 → PR #1 走完 squash auto-merge（`14136da`）。`last_failures[]` 记一条 `doc-writer:direct-push-to-main-no-pr` symptom；spec gap 已修（`.claude/agents/{backend-fixer,frontend-fixer,doc-writer}.md` 全部补 step 0）。
+
+**v1.3 后期 step 1 + 全 7 步连续硬化教训**（2026-05-23 ~ 2026-05-24 M1-followup + M1-cleanup）：(1) backend-fixer 在 PR #18 (F-3) + PR #22 (P0-A) **两次**栽在 `ruff format --check`——commit 前没跑本地 format check；(2) PR #22 backend-fixer 推 `2d95576` 后 session 结束没开 PR，foreman 等 PR 没等到自己也退出。fix：step 1 显式列**本地 ci-gate 等价命令**列表（backend = ruff×2 + pytest，frontend = tsc + lint + vitest），三者绿了才能进 step 2；agent.md hard rule 加"7 个 step 必须连续走完，commit + push 之后必须 open PR，不要 commit 完假死"。详 §14 R24。
 
 #### 15.2.2 foreman 轮询 PR 状态
 
