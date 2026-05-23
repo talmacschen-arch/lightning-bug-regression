@@ -46,6 +46,14 @@ def _needs_autocommit(sql: str) -> bool:
     return bool(_NON_TX_DDL_RE.search(sql))
 
 
+# Regex: detect whether an SQL string starts with EXPLAIN (per F-2 plan_text populate).
+_EXPLAIN_RE = re.compile(r"(?:^|;)\s*EXPLAIN\b", re.IGNORECASE)
+
+
+def _is_explain_query(sql: str) -> bool:
+    return bool(_EXPLAIN_RE.search(sql))
+
+
 class SqlSessionPool:
     """Owns one AsyncConnection per session-name. Idempotent acquire,
     explicit close_all() at suite end."""
@@ -159,7 +167,7 @@ async def execute_sql_step(
                     last_description = cur.description
                     if cur.description is not None:
                         last_rows = await cur.fetchall()
-                    # Cycle through additional result sets if present.
+                    # Cycle through additional result sets if present (F-3 multi-statement).
                     while cur.nextset():
                         last_rowcount = cur.rowcount
                         last_description = cur.description
@@ -179,6 +187,15 @@ async def execute_sql_step(
                         stdout = "\n".join(repr(r) for r in last_rows[:20])
                     else:
                         rows_affected = last_rowcount if last_rowcount >= 0 else None
+                    # F-2: populate plan_text from EXPLAIN output (raw line strings, not repr'd).
+                    plan_text: str | None = None
+                    if (
+                        _is_explain_query(sql)
+                        and last_description is not None
+                        and last_rows is not None
+                    ):
+                        # EXPLAIN output: each row is typically (plan_line,) — 1-column text.
+                        plan_text = "\n".join(str(r[0]) for r in last_rows)
                     return StepResult(
                         status=StepStatus.PASS,
                         step_id=step_id,
@@ -191,6 +208,7 @@ async def execute_sql_step(
                         scalar=scalar,
                         row_count=row_count,
                         rows_affected=rows_affected,
+                        plan_text=plan_text,
                     )
         except Exception as exc:
             try:
