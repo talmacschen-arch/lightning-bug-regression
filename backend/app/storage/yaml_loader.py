@@ -5,9 +5,12 @@ slice of the §4.1 schema (4-tuple narrative fields, step-level expect,
 sessions, external_deps, destructive, status).
 
 Caller (orchestrator / API) is responsible for fetching the
-`case_categories` whitelist from the DB and passing it in as
-``categories_whitelist`` — the loader itself does NOT touch the DB. This
-keeps the loader unit-testable and independent of M1-3 (sqlite_store).
+`case_categories` metadata from the DB (design.md §4.5 — the canonical
+source of truth for category → id_prefix + status_whitelist) and passing
+it in as ``categories`` — the loader itself does NOT touch the DB. This
+keeps the loader unit-testable and independent of M1-3 (sqlite_store),
+and avoids the §14 R4b "分类/枚举不写死多处" trap: there is exactly one
+table that enumerates categories, statuses, and prefixes.
 
 All schema violations are raised as :class:`CaseValidationError` with a
 ``<file_path>:<line_or_key>: <reason>`` message so callers (and the
@@ -18,6 +21,7 @@ field to the user.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -49,22 +53,6 @@ _CaseYamlLoader.add_implicit_resolver(
     list("tTfF"),
 )
 
-# Category → required id-prefix. If a category is in the whitelist but not
-# in this dict, the loader does not enforce a prefix (forward-compat for
-# new categories added to `case_categories` before the loader ships).
-# Both dash and underscore forms are accepted (DB seeds use underscore;
-# legacy YAML files used dash).
-_CATEGORY_PREFIX = {
-    "bug-regression": "lg-bug-",
-    "bug_regression": "lg-bug-",
-    "feature-validation": "lg-feat-",
-    "feature_validation": "lg-feat-",
-    "perf-regression": "lg-perf-",
-    "perf_regression": "lg-perf-",
-    "ops-runbook": "lg-ops-",
-    "ops_runbook": "lg-ops-",
-}
-
 # Required top-level keys (sessions is optional — derived when absent).
 _REQUIRED_TOP_LEVEL = (
     "id",
@@ -77,7 +65,20 @@ _REQUIRED_TOP_LEVEL = (
 )
 
 _VALID_DRIVERS = frozenset({"sql", "shell", "log_grep", "restart_db"})
-_VALID_STATUSES = frozenset({"open", "closed", "stub"})
+
+
+@dataclass(frozen=True)
+class CategoryMeta:
+    """Per-category validation metadata, sourced from §4.5 ``case_categories``.
+
+    ``status_whitelist`` is a ``frozenset[str]`` so the dataclass stays
+    hashable AND callers can splat any iterable (typically a JSON array
+    string parsed from the DB) into it via ``frozenset(...)``.
+    """
+
+    name: str
+    id_prefix: str
+    status_whitelist: frozenset[str]
 
 
 class CaseValidationError(ValueError):
@@ -114,7 +115,7 @@ class Step:
 @dataclass
 class Case:
     id: str  # must match filename stem and start with category prefix
-    category: str  # must be in categories_whitelist
+    category: str  # must be a key in the categories mapping passed to load_case
     title: str
     description: str  # §4.1 4-tuple: required
     procedure: str  # required
@@ -123,7 +124,7 @@ class Case:
     steps: list[Step]
     external_deps: list[str] = field(default_factory=list)
     destructive: bool = False
-    status: Literal["open", "closed", "stub"] = "open"
+    status: str = "open"  # value-validated against CategoryMeta.status_whitelist
     setup: list[str] = field(default_factory=list)
     teardown: list[str] = field(default_factory=list)
 
@@ -181,26 +182,30 @@ def _parse_expect(raw: Any) -> list[ExpectClause]:
     return []
 
 
-def load_case(path: Path, categories_whitelist: set[str]) -> Case:
+def load_case(path: Path, categories: Mapping[str, CategoryMeta]) -> Case:
     """Load and validate one case YAML.
+
+    ``categories`` maps each legal ``category:`` value to a
+    :class:`CategoryMeta` carrying the required ``id_prefix`` and the
+    ``status_whitelist`` for that category. The mapping is the §4.5
+    ``case_categories`` table projection — passing an empty mapping
+    causes every case to fail with "category not in whitelist".
 
     Raises :class:`CaseValidationError` with a ``file:key`` location on:
 
     * YAML syntax error
     * missing required top-level field (``id`` / ``category`` / ``title`` /
       ``description`` / ``procedure`` / ``expected`` / ``steps``)
-    * ``category`` not in whitelist
-    * ``id`` prefix mismatch for a known category (e.g.
-      ``category='bug-regression'`` or ``category='bug_regression'`` requires
-      id starting with ``lg-bug-``)
+    * ``category`` not a key in ``categories``
+    * ``id`` does not start with ``categories[category].id_prefix``
     * ``id`` not equal to ``path.stem``
     * step missing ``id``/``name`` and ``driver``/``kind`` fields
-    * ``step.driver`` not in ``{sql, shell, log_grep}``
+    * ``step.driver`` not in ``{sql, shell, log_grep, restart_db}``
     * ``step.on`` not in the case's ``sessions`` dict (when sessions is
       explicitly declared)
     * ``step.expect`` entry not a single-key mapping (when list format)
     * ``destructive`` not a bool
-    * ``status`` not in ``{open, closed, stub}``
+    * ``status`` not in ``categories[category].status_whitelist``
     """
     try:
         raw_text = path.read_text(encoding="utf-8")
@@ -234,16 +239,16 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
     category: str = data["category"]
 
     # --- category whitelist ---
-    if category not in categories_whitelist:
+    if category not in categories:
         raise _err(
             path,
             "category",
-            f"category '{category}' not in whitelist {sorted(categories_whitelist)}",
+            f"category '{category}' not in whitelist {sorted(categories)}",
         )
 
-    # --- id-prefix enforcement (only for categories with a known prefix) ---
-    expected_prefix = _CATEGORY_PREFIX.get(category)
-    if expected_prefix is not None and not case_id.startswith(expected_prefix):
+    # --- id-prefix enforcement (sourced from CategoryMeta) ---
+    expected_prefix = categories[category].id_prefix
+    if not case_id.startswith(expected_prefix):
         raise _err(
             path,
             "id",
@@ -400,12 +405,14 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
     if not isinstance(destructive_raw, bool):
         raise _err(path, "destructive", "destructive must be a bool")
 
+    status_whitelist = categories[category].status_whitelist
     status_raw = data.get("status", "open")
-    if status_raw not in _VALID_STATUSES:
+    if status_raw not in status_whitelist:
         raise _err(
             path,
             "status",
-            f"status '{status_raw}' must be one of {sorted(_VALID_STATUSES)}",
+            f"status '{status_raw}' not in whitelist {sorted(status_whitelist)} "
+            f"for category '{category}'",
         )
 
     setup = _parse_setup_teardown(data.get("setup"))
