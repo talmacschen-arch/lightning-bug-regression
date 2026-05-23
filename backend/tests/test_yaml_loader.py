@@ -511,6 +511,52 @@ def test_setup_teardown_absent_defaults_to_empty(tmp_path: Path) -> None:
     assert case.teardown == []
 
 
+def test_setup_dict_entry_rejected(tmp_path: Path) -> None:
+    """setup containing a dict is rejected per §4.1 (list[str] only).
+
+    Pre-M1-cleanup-p1 the loader had a "forward compat" branch that
+    silently extracted the first string value from a dict entry —
+    contradicting §4.1 which mandates list[str].  Now it raises.
+    """
+    src = _minimal_yaml() + "setup:\n  - sql: DROP TABLE t\n"
+    path = _write(tmp_path, src)
+    with pytest.raises(CaseValidationError) as exc_info:
+        load_case(path, DEFAULT_WHITELIST)
+    msg = str(exc_info.value)
+    assert "must be a string" in msg
+
+
+def test_step_name_field_takes_priority_over_id(tmp_path: Path) -> None:
+    """When a step has BOTH ``name:`` and ``id:``, ``name:`` wins.
+
+    ``name`` is the §4.1 canonical field; ``id`` is a back-compat alias.
+    Real cases use ``name:``; the loader must surface that as ``step.id``
+    even if a stray ``id:`` is also present.
+    """
+    src = _minimal_yaml().replace(
+        "  - id: q1\n    on: s1\n    driver: sql",
+        "  - name: canonical-name\n    id: legacy-id\n    on: s1\n    driver: sql",
+    )
+    path = _write(tmp_path, src)
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.steps[0].id == "canonical-name"
+
+
+def test_step_kind_field_takes_priority_over_driver(tmp_path: Path) -> None:
+    """When a step has BOTH ``kind:`` and ``driver:``, ``kind:`` wins.
+
+    ``kind`` is the §4.1 canonical field; ``driver`` is a back-compat
+    alias.  Real cases use ``kind:`` — the loader must route on it.
+    """
+    src = _minimal_yaml().replace(
+        "    driver: sql\n    run: SELECT 1",
+        "    kind: shell\n    driver: sql\n    run: echo hi",
+    )
+    path = _write(tmp_path, src)
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.steps[0].driver == "shell"
+
+
 # ---------------------------------------------------------------------------
 # YAML syntax error
 # ---------------------------------------------------------------------------

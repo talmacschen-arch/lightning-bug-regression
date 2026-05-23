@@ -139,7 +139,6 @@ def _parse_setup_teardown(raw: Any) -> list[str]:
 
     Accepts:
     - list[str] — stored as-is
-    - list[dict] — extract the first string value from each dict (forward compat)
     - None / missing — return []
     """
     if not raw:
@@ -151,35 +150,10 @@ def _parse_setup_teardown(raw: Any) -> list[str]:
         if isinstance(item, str):
             result.append(item)
         elif isinstance(item, dict):
-            # Forward compat: pick the first string value found
-            for v in item.values():
-                if isinstance(v, str):
-                    result.append(v)
-                    break
+            raise CaseValidationError(
+                f"setup/teardown entry must be a string per §4.1, got dict: {item!r}"
+            )
     return result
-
-
-def _parse_expect(raw: Any) -> list[ExpectClause]:
-    """Parse expect field into list[ExpectClause].
-
-    Accepts two formats:
-    - list of single-key dicts: [{"exit_code": 0}, {"scalar_eq": 5}]  (old schema)
-    - plain dict: {"exit_code": 0, "scalar_eq": 5}  (real case format)
-    """
-    if not raw:
-        return []
-    if isinstance(raw, dict):
-        return [ExpectClause(key=k, value=v) for k, v in raw.items()]
-    if isinstance(raw, list):
-        clauses: list[ExpectClause] = []
-        for entry in raw:
-            if not isinstance(entry, dict) or len(entry) != 1:
-                # Caller will raise a proper error; return sentinel
-                return raw  # type: ignore[return-value]
-            ((e_key, e_val),) = entry.items()
-            clauses.append(ExpectClause(key=e_key, value=e_val))
-        return clauses
-    return []
 
 
 def load_case(path: Path, categories: Mapping[str, CategoryMeta]) -> Case:
@@ -294,13 +268,13 @@ def load_case(path: Path, categories: Mapping[str, CategoryMeta]) -> Case:
         if not isinstance(step_raw, dict):
             raise _err(path, where, "step must be a mapping")
 
-        # --- id: accept "id" or "name" alias; auto-generate if both absent ---
-        s_id = step_raw.get("id") or step_raw.get("name") or f"step-{idx}"
+        # --- id: accept "name" (§4.1 canonical) or "id" alias; auto-generate if both absent ---
+        s_id = step_raw.get("name") or step_raw.get("id") or f"step-{idx}"
         if not isinstance(s_id, str) or not s_id:
             s_id = f"step-{idx}"
 
-        # --- driver: accept "driver" or "kind" alias ---
-        s_driver_raw = step_raw.get("driver") or step_raw.get("kind")
+        # --- driver: accept "kind" (§4.1 canonical) or "driver" alias ---
+        s_driver_raw = step_raw.get("kind") or step_raw.get("driver")
         if not s_driver_raw:
             raise _err(path, f"{where}.driver", "step missing required field 'driver' or 'kind'")
         if not isinstance(s_driver_raw, str):
