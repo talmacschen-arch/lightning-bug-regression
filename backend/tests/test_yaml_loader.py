@@ -330,6 +330,20 @@ def test_step_kind_alias_accepted(tmp_path: Path) -> None:
     assert case.steps[0].driver == "sql"
 
 
+def test_step_driver_restart_db_accepted(tmp_path: Path) -> None:
+    """Schema accepts ``kind: restart_db`` (driver runner is deferred to M2;
+    design.md §4.1 / §13.2 require the schema to whitelist the kind name
+    so M3a record-entry skills can file the first restart_db case before
+    the runner exists)."""
+    src = _minimal_yaml().replace(
+        "    driver: sql\n    run: SELECT 1",
+        "    kind: restart_db\n    run: gpstop -ar",
+    )
+    path = _write(tmp_path, src)
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.steps[0].driver == "restart_db"
+
+
 def test_step_sql_alias_accepted(tmp_path: Path) -> None:
     """Steps using 'sql:' instead of 'run:' must load without error."""
     src = _minimal_yaml().replace("    run: SELECT 1", "    sql: SELECT 1")
