@@ -94,11 +94,17 @@ async def test_env_passthrough() -> None:
 
 @pytest.mark.asyncio
 async def test_non_utf8_stdout_does_not_crash() -> None:
-    # printf emits raw 0xff 0xfe — invalid UTF-8. The driver must decode
-    # with errors='replace' so the orchestrator (which only sees the
-    # StepResult, never raw bytes) doesn't blow up on a stray byte.
-    r = await execute_shell_step("s7", r"printf '\xff\xfe'")
+    # Emit raw 0xff 0xfe (invalid UTF-8) via python so the test doesn't
+    # depend on /bin/sh's printf hex-escape behaviour — dash (Ubuntu's
+    # default /bin/sh) doesn't expand \xHH, only bash does. CI runners
+    # use dash; previous `printf '\xff\xfe'` left literal \xff\xfe bytes
+    # on stdout and broke this assertion (M1 PR #8 forensic).
+    # The driver must decode with errors='replace' so the orchestrator
+    # (which only sees the StepResult, never raw bytes) doesn't blow up.
+    cmd = "python3 -c 'import sys; sys.stdout.buffer.write(bytes([255, 254]))'"
+    r = await execute_shell_step("s7", cmd)
     assert r.status is StepStatus.PASS
     assert r.exit_code == 0
-    # U+FFFD REPLACEMENT CHARACTER — what utf-8 'replace' emits.
+    # U+FFFD REPLACEMENT CHARACTER — what utf-8 'replace' emits for
+    # each invalid byte.
     assert "�" in r.stdout

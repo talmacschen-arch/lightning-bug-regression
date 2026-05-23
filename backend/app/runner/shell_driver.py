@@ -13,6 +13,8 @@ all wrapped into StepResult(status=ERROR).
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import time
 from datetime import UTC, datetime
 
@@ -54,18 +56,10 @@ async def execute_shell_step(
         else:
             stdout_b, stderr_b = await proc.communicate()
     except TimeoutError:
-        proc.kill()
-        try:
-            await proc.wait()
-        except Exception:
-            pass
+        await _force_kill_and_reap(proc)
         return _err(step_id, started, t0, f"asyncio.TimeoutError (after {timeout_ms}ms)")
     except Exception as e:
-        try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
+        await _force_kill_and_reap(proc)
         return _err(step_id, started, t0, f"{type(e).__name__}: {e}")
 
     duration_ms = int((time.monotonic() - t0) * 1000)
@@ -82,6 +76,42 @@ async def execute_shell_step(
         stderr=stderr_b.decode("utf-8", errors="replace"),
         exit_code=exit_code,
     )
+
+
+async def _force_kill_and_reap(proc: asyncio.subprocess.Process) -> None:
+    """Kill subprocess + bound the cleanup wait.
+
+    Belt-and-suspenders rationale (observed on Ubuntu CI 2026-05-23, M1
+    shell_driver PR #8 — duration_ms came back as ~5001ms for a `sleep 5`
+    with 100ms timeout, suggesting proc.kill() via the asyncio transport
+    was swallowed silently after wait_for cancelled communicate(), and
+    proc.wait() then patiently waited for the subprocess's natural
+    termination):
+
+      1. proc.kill() — the high-level asyncio method (may be no-op if
+         transport state went sideways during cancellation).
+      2. os.kill(pid, SIGKILL) — direct syscall, bypasses transport state.
+      3. asyncio.wait_for(proc.wait(), timeout=1.0) — even with SIGKILL
+         sent, asyncio transport finalization can hang on cancelled-
+         communicate pipe state; bound it. If we time out here, the
+         subprocess is already SIGKILL'd at the kernel level and will
+         be reaped by init/Python's child reaper eventually — we just
+         stop blocking the caller.
+    """
+    pid = proc.pid
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+    if pid is not None:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=1.0)
+    except (TimeoutError, Exception):
+        pass
 
 
 def _iso_now() -> str:
