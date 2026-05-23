@@ -22,7 +22,9 @@ the repo root). M1-11 uses the default; tests set it explicitly.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -33,10 +35,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.runner import orchestrator
 from app.runner.case_normalizer import normalize_case
+from app.runner.dsn_builder import dsn_map_from_env
+from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
 from app.storage.yaml_loader import CaseValidationError, CategoryMeta, load_case
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["cases"])
 
@@ -83,6 +90,29 @@ class ValidateErrorItem(BaseModel):
 class ValidateResponse(BaseModel):
     ok: bool
     errors: list[ValidateErrorItem]
+
+
+class TryRequest(BaseModel):
+    yaml: str
+
+
+class StepResultOut(BaseModel):
+    step_id: str
+    kind: str
+    status: str  # "pass" | "fail" | "error" | "skipped"
+    duration_ms: int | None = None
+    stderr_preview: str | None = None  # first 500 chars
+    error: str | None = None
+
+
+class TryResponse(BaseModel):
+    ok: bool
+    yaml_sha256: str  # for M3a-3.5 cache lookup later
+    step_results: list[StepResultOut]
+    # validation_errors populated only when validate stage failed; in that
+    # case step_results is [] (we never reached run_case). Shape mirrors
+    # ValidateErrorItem (where/reason) for UI symmetry.
+    validation_errors: list[dict[str, str]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -324,19 +354,19 @@ def get_case(case_id: str) -> CaseDetail:
     raise HTTPException(status_code=404, detail=f"case {case_id!r} not found")
 
 
-@router.post("/cases/validate", response_model=ValidateResponse)
-def validate_case(req: ValidateRequest) -> ValidateResponse:
-    """Validate a raw YAML case payload without persisting anything.
+def _validate_yaml_text(
+    text: str,
+) -> tuple[bool, list[ValidateErrorItem], dict[str, Any] | None]:
+    """Shared validation core for ``/cases/validate`` and ``/cases/try``.
 
-    Delegates to the same modules the GET /cases path uses (§14 R26):
+    Returns ``(ok, errors, parsed_dict_or_None)``:
 
-    * :func:`app.storage.yaml_loader.load_case` for §4.1 schema checks
-    * :func:`app.runner.case_normalizer.normalize_case` for step-kind /
-      template-field checks the schema layer doesn't catch.
-
-    Inline copies of either module's logic would be a dual-code-path
-    violation (§14 R26 — the bug this endpoint exists to prevent in the
-    Web 录入 path); both modules are imported and visibly called below.
+    * ``ok`` is True iff schema + normalize both passed.
+    * ``errors`` is the list shown to the user.
+    * ``parsed_dict_or_None`` is the ``yaml.safe_load`` result — returned
+      so the Try endpoint can hand it to ``normalize_case`` + the
+      orchestrator without re-parsing. ``None`` when YAML syntax / top-level
+      mapping check failed.
 
     Algorithm (design.md §13.7 M3a-1):
 
@@ -351,28 +381,25 @@ def validate_case(req: ValidateRequest) -> ValidateResponse:
        on the parsed dict to catch step-kind / required-field violations
        the schema permits (e.g. log_grep without ``pattern:``); these
        surface with ``where="normalize"``.
+
+    §14 R26: visibly delegates to :func:`yaml_loader.load_case` +
+    :func:`case_normalizer.normalize_case` — inline copies of either
+    module's logic would be a dual-code-path violation.
     """
     errors: list[ValidateErrorItem] = []
 
     # 1. YAML syntax.
     try:
-        parsed = yaml.safe_load(req.yaml)
+        parsed = yaml.safe_load(text)
     except yaml.YAMLError as e:
-        return ValidateResponse(
-            ok=False,
-            errors=[ValidateErrorItem(where="yaml_syntax", reason=str(e))],
-        )
+        return False, [ValidateErrorItem(where="yaml_syntax", reason=str(e))], None
 
     # 2. Top-level must be a mapping.
     if not isinstance(parsed, dict):
-        return ValidateResponse(
-            ok=False,
-            errors=[
-                ValidateErrorItem(
-                    where="top-level",
-                    reason="YAML document must be a mapping",
-                )
-            ],
+        return (
+            False,
+            [ValidateErrorItem(where="top-level", reason="YAML document must be a mapping")],
+            None,
         )
 
     # 3. Reuse the category whitelist the GET path uses.
@@ -393,7 +420,7 @@ def validate_case(req: ValidateRequest) -> ValidateResponse:
             # Filename stem matters for the loader's `id == path.stem` check.
             # Use the parsed `id` value when present so a well-formed case
             # doesn't trip that rule purely on a random tempfile name.
-            tmp.write(req.yaml)
+            tmp.write(text)
             tmp_path = Path(tmp.name)
 
         # If the parsed dict carries an `id`, rename the tmpfile so its
@@ -444,7 +471,121 @@ def validate_case(req: ValidateRequest) -> ValidateResponse:
         except (KeyError, ValueError, TypeError) as e:
             errors.append(ValidateErrorItem(where="normalize", reason=str(e)))
 
-    return ValidateResponse(ok=(len(errors) == 0), errors=errors)
+    return (len(errors) == 0), errors, parsed
+
+
+@router.post("/cases/validate", response_model=ValidateResponse)
+def validate_case(req: ValidateRequest) -> ValidateResponse:
+    """Validate a raw YAML case payload without persisting anything.
+
+    Delegates to the same modules the GET /cases path uses (§14 R26):
+
+    * :func:`app.storage.yaml_loader.load_case` for §4.1 schema checks
+    * :func:`app.runner.case_normalizer.normalize_case` for step-kind /
+      template-field checks the schema layer doesn't catch.
+
+    Inline copies of either module's logic would be a dual-code-path
+    violation (§14 R26 — the bug this endpoint exists to prevent in the
+    Web 录入 path); both modules are imported and visibly called below.
+
+    The validation logic lives in :func:`_validate_yaml_text` which is
+    also reused by ``/cases/try`` — two endpoints, one validator.
+    """
+    ok, errors, _parsed = _validate_yaml_text(req.yaml)
+    return ValidateResponse(ok=ok, errors=errors)
+
+
+@router.post("/cases/try", response_model=TryResponse)
+async def try_case(req: TryRequest) -> TryResponse:
+    """Trial-run a YAML case in-memory without writing to DB / cases/.
+
+    Pipeline (design.md §13.7 M3a-2 + §14 R26):
+
+    1. Hash the raw YAML (sha256) so M3a-3.5 can later cache "this
+       payload was Try-PASSED at T" and gate ``/cases/submit`` on it.
+    2. Validate via :func:`_validate_yaml_text` (the same helper
+       ``/cases/validate`` uses — single validator, two callers). On
+       failure: short-circuit, return ok=false + validation_errors,
+       step_results=[].
+    3. Reuse the same runner stack POST /runs uses (§14 R26):
+       :func:`normalize_case` → :func:`dsn_map_from_env` →
+       :class:`SqlSessionPool` → :func:`orchestrator.run_case`.
+       Inline-recreating any of these would be a dual-code-path violation.
+    4. Artifacts go to a tempdir that's wiped on return — Try never
+       persists.
+    5. Map :class:`CaseExecutionResult` → :class:`TryResponse`, truncating
+       stderr to 500 chars per step (UI-friendly preview).
+
+    NOTE: This endpoint deliberately calls ``orchestrator.run_case`` (NOT
+    ``run_suite``). ``run_suite`` persists to ``case_results`` via
+    ``insert_case_result_fn`` — we don't want Try output polluting the
+    production DB. ``run_case`` is the same function ``run_suite`` calls
+    internally, so we're exercising the identical execution code path
+    minus the DB write.
+    """
+    yaml_sha256 = hashlib.sha256(req.yaml.encode("utf-8")).hexdigest()
+
+    # --- stage 1: validate (reuse the same helper /cases/validate uses) ---
+    ok, validation_errors, parsed = _validate_yaml_text(req.yaml)
+    if not ok or parsed is None:
+        return TryResponse(
+            ok=False,
+            yaml_sha256=yaml_sha256,
+            step_results=[],
+            validation_errors=[{"where": e.where, "reason": e.reason} for e in validation_errors],
+        )
+
+    # --- stage 2: normalize + build pool + run_case (same path as POST /runs) ---
+    # normalize_case is the exact transformation runs.py applies before
+    # invoking the orchestrator. Inlining would violate §14 R26.
+    normalized = normalize_case(parsed)
+    dsn_map = dsn_map_from_env([normalized])
+    pool = SqlSessionPool(dsn_map)
+
+    case_result: orchestrator.CaseExecutionResult
+    try:
+        with tempfile.TemporaryDirectory() as artdir:
+            # run_case is the same orchestrator entrypoint run_suite calls
+            # per case — same dispatch, same R9 fold-don't-bubble semantics.
+            # run_id=0 is a sentinel: artifacts land under
+            # <artdir>/0/<case_id>/ which gets wiped on TemporaryDirectory exit.
+            case_result = await orchestrator.run_case(
+                normalized,
+                run_id=0,
+                artifacts_root=Path(artdir),
+                jinja_context={},
+                dut_hosts=set(),
+                sql_pool=pool,
+            )
+    finally:
+        # Close pooled psycopg connections so the per-Try pool doesn't
+        # leak; same teardown POST /runs does in its finally block.
+        try:
+            await pool.close_all()
+        except Exception:  # noqa: BLE001
+            logger.exception("/cases/try: pool.close_all failed")
+
+    # --- stage 3: flatten StepResult → StepResultOut (500-char stderr preview) ---
+    step_results_out: list[StepResultOut] = []
+    for sr in case_result.step_results:
+        step_results_out.append(
+            StepResultOut(
+                step_id=sr.step_id,
+                kind=sr.driver,
+                status=sr.status.value,
+                duration_ms=sr.duration_ms,
+                stderr_preview=(sr.stderr[:500] if sr.stderr else None),
+                error=sr.error,
+            )
+        )
+
+    overall_ok = bool(step_results_out) and all(s.status == "pass" for s in step_results_out)
+    return TryResponse(
+        ok=overall_ok,
+        yaml_sha256=yaml_sha256,
+        step_results=step_results_out,
+        validation_errors=[],
+    )
 
 
 __all__ = ["router"]
