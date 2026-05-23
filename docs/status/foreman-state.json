@@ -1,59 +1,59 @@
 {
-  "session_id": "m1-followup-2026-05-24T0250Z",
-  "started_at": "2026-05-24T00:30:00+08:00",
-  "last_heartbeat": "2026-05-24T02:35:00+08:00",
-  "sprint_label": "M1-followup",
-  "round": 7,
+  "session_id": "m1-cleanup-2026-05-24T0244Z",
+  "started_at": "2026-05-24T02:44:00+08:00",
+  "last_heartbeat": "2026-05-24T03:08:00+08:00",
+  "sprint_label": "M1-cleanup",
+  "round": 5,
   "round_budget": 10,
   "wall_budget_hours": 2,
   "status": "done",
-  "note": "M1-followup session 由 foreman (sonnet override 一次例外，用户 2026-05-24 授权) 推 F-1/F-2/F-3 主体；最后 F-3 PR #18 因 F-2 merged 导致 sql_driver/test 冲突，由人手 resolve + 推 psql -c convention 收尾。整个 M1 + M1-followup chain 闭环，5/5 dogfood PASS。",
+  "note": "foreman session 推 P0-B (PR #20) + P0-A doc (PR #21) + P0-A code refactor 提交但未 dispatch PR open（输出最后一行：'PR #21 confirmed merged (gate=SUCCESS). Continuing to wait on backend-fixer.' 没返 final JSON 就退出）。人手收尾：(a) 找到 orphaned refactor 分支并开 PR #22；(b) PR #22 ci-gate fail on ruff format，人手补 commit 7ceda51；(c) PR #22 squash-merge 为 f2b664b；(d) rerun dogfood 5/5 PASS 验证。整个 M1-cleanup 闭环。",
   "items_done": [
     {
-      "name": "F-1",
-      "evidence": "PR #19 squash-merged as 1fa3b07 at 2026-05-23T17:51:40Z — yaml_loader 与 §4.1 对齐",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/19",
-      "merged_at": "2026-05-23T17:51:40Z",
-      "merge_commit": "1fa3b07"
+      "name": "P0-B",
+      "evidence": "PR #20 squash-merged as 557ad3a — _VALID_DRIVERS 加 restart_db",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/20",
+      "merged_at": "2026-05-23T18:49:04Z",
+      "merge_commit": "557ad3a"
     },
     {
-      "name": "F-2",
-      "evidence": "PR #17 squash-merged as c5a9d11 at 2026-05-23T17:57:39Z — sql_driver populate plan_text from EXPLAIN",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/17",
-      "merged_at": "2026-05-23T17:57:39Z",
-      "merge_commit": "c5a9d11"
+      "name": "P0-A-doc",
+      "evidence": "PR #21 squash-merged as 815473c — design.md §4.1 stop enumerating status/category (point to §4.5)",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/21",
+      "merged_at": "2026-05-23T18:53:42Z",
+      "merge_commit": "815473c"
     },
     {
-      "name": "F-3",
-      "evidence": "PR #18 squash-merged as b49b766 at 2026-05-23T18:20:01Z — sql_driver _NON_TX_DDL_RE + autocommit；首选写法变为 `su - gpadmin -c \"psql -c '<DDL>'\"` (design.md §4.1 convention) 由收尾 commit 落地",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/18",
-      "merged_at": "2026-05-23T18:20:01Z",
-      "merge_commit": "b49b766"
+      "name": "P0-A-code",
+      "evidence": "PR #22 squash-merged as f2b664b — yaml_loader 收 CategoryMeta，删 _VALID_STATUSES + _CATEGORY_PREFIX；cases.py _build_category_meta() projects DB → CategoryMeta；5 新测试。foreman 没 dispatch open-PR + 没主动 fix ruff format，由人手补 commit 7ceda51 → ci-gate green → auto-merge.",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/22",
+      "merged_at": "2026-05-23T19:07:44Z",
+      "merge_commit": "f2b664b"
     },
     {
-      "name": "F-3-followup-psql-convention",
-      "evidence": "收尾 commit 218c8fe — dogfood normalizer 加 `psql ` 子串路由 → shell driver；lg-bug-0005 setup/teardown 改 su gpadmin wrap；design.md §4.1 加 convention 备注",
+      "name": "M1-cleanup-dogfood-rerun",
+      "evidence": "docs/m1-cleanup-dogfood-2026-05-23-1908.md — 5/5 PASS 不退；同 M1-followup 报告，refactor 没破坏路径",
       "pr_url": null,
-      "merged_at": "2026-05-24T02:30:00+08:00",
-      "merge_commit": "218c8fe"
-    },
-    {
-      "name": "M1-followup-dogfood-rerun",
-      "evidence": "docs/m1-dogfood-2026-05-23-1828.md (5/5 PASS)；lg-bug-0001 (F-2 起效) / 0002 / 0003 / 0004 / 0005 (F-3 + psql convention 综合奏效)；teardown DROP DATABASE 因 sql_driver step 持 mydb 连接 fail，但 R9 fold + best-effort 保留 case status pass，符合 §15 设计",
-      "pr_url": null,
-      "merged_at": "2026-05-24T02:28:32+08:00",
+      "merged_at": "2026-05-24T03:08:24+08:00",
       "merge_commit": null
     }
   ],
   "item_in_progress": null,
   "items_remaining": [],
   "needs_human": [],
-  "last_failures": [],
+  "last_failures": [
+    {
+      "item": "P0-A",
+      "specialist": "backend-fixer (orphaned)",
+      "symptom_hash": "backend-fixer:committed-but-no-pr-open",
+      "count": 1,
+      "detail": "backend-fixer commit 了 refactor/yaml-loader-category-meta @ 2d95576 但 foreman session 没 dispatch 后续 'open PR + arm auto-merge' 步骤就 exit_code=0 退出。foreman 输出最后一行 'Continuing to wait on backend-fixer.' 表明它在等某个 dispatch 结果时假退出。重复同 M1-followup foreman 没返 final JSON 的 pattern——下次 dispatch foreman 时必须强调 final JSON 是 hard requirement。本次人手收尾路径：gh pr create 探测到 PR 已存（#22 实际 foreman 早开了），arm auto-merge，补 ruff format commit (7ceda51) 让 ci-gate 重跑过，PR squash-merge."
+    }
+  ],
   "previous_session": {
-    "id": "m1-2026-05-24T0030Z",
-    "sprint": "M1",
+    "id": "m1-followup-2026-05-24T0250Z",
+    "sprint": "M1-followup",
     "status": "done",
-    "items_done": 14,
-    "note": "M1 main (含 M1a 9 个 + M1-9 + M1-10 + M1-11) 全 done，留 3 个 design_decision needs_human → 本 sprint M1-followup 清掉"
+    "items_done": 5
   }
 }

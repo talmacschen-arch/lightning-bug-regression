@@ -26,7 +26,7 @@ reviewer cross-reference §14 R4b：本 sprint 任何 PR 命中 R4b 反模式即
 
 **修法**：
 
-- [ ] **P0-A 修 yaml_loader 接收 §4.5 case_categories 元数据**
+- [x] **P0-A 修 yaml_loader 接收 §4.5 case_categories 元数据** — PR #22 (f2b664b refactor) + PR #21 (815473c design.md §4.1 pointer) 两步组合；`_VALID_STATUSES` 与 `_CATEGORY_PREFIX` 已删；新 `CategoryMeta` dataclass + `cases.py` API caller 同步改 + 5 个新测试（status=fixed 接受 / status=stable 接受 / status=closed 拒 / lg-ext- prefix enforced / prefix data-driven）；§14 R4b 反模式已修
   - 新增 `CategoryMeta` dataclass（或 TypedDict）含 `name / id_prefix / status_whitelist: set[str]`
   - `load_case()` 签名改为 `categories: Mapping[str, CategoryMeta]`（替换 `categories_whitelist: set[str]`）
   - 删 `_VALID_STATUSES` 模块常量、删 `_CATEGORY_PREFIX` 字典——这两份 source-of-truth 同时存在就是 R4b 反模式
@@ -45,20 +45,20 @@ reviewer cross-reference §14 R4b：本 sprint 任何 PR 命中 R4b 反模式即
 
 **修法**：
 
-- [ ] **P0-B `_VALID_DRIVERS` 加 restart_db**
+- [x] **P0-B `_VALID_DRIVERS` 加 restart_db** — PR #20 (557ad3a) — `_VALID_DRIVERS` = frozenset({"sql", "shell", "log_grep", "restart_db"})；Step.driver Literal type 同步扩；1 个新测试覆盖 schema-level 接受
   - 改 `_VALID_DRIVERS = frozenset({"sql", "shell", "log_grep", "restart_db"})`
   - Step.driver Literal 类型加 "restart_db"
   - 加一个测试：`load_case` 在 step kind=restart_db 时**接受**且 driver=restart_db 落对（不实现真驱动，只 schema-level 接受）
   - orchestrator 仍不知道怎么真跑 restart_db step——遇到时按已有的 unknown-driver 报错路径走（应该有；如无，本 task 不补，加 needs_human 留给 M2）
   - 单 PR；与 P0-A 同一文件 yaml_loader.py，foreman 应**顺序 dispatch** 不并发（merge 冲突）；P0-B 简单先做
 
-## 完成定义
+## 完成定义 ✅ done 2026-05-24
 
-- P0-A + P0-B 各一个 PR merged via ci-gate（required check `gate` 必绿）
-- 重跑 dogfood `python -m scripts.run_m1_dogfood` → 5/5 PASS 不退（验证 refactor 没破坏现有 case 路径）
-- 全 backend 单测 + ruff 全过
-- foreman-state.json + M1-cleanup.md flip 全 [x]
-- reviewer 在每个 PR 上 cross-check §14 R4b ≠ REQUEST_CHANGES
+- P0-A + P0-B 都 merged via ci-gate；外加 P0-A 的 design.md 部分独立 PR #21
+- 重跑 dogfood `docs/m1-cleanup-dogfood-2026-05-23-1908.md` → **5/5 PASS** 不退 ✓
+- 全 backend 单测 264 passed + 1 skipped + ruff 全过 ✓
+- §14 R4b 反模式已删除（grep 全 backend 看不到硬编码 category 字典 / status enum）
+- foreman 在 PR #22 ci-gate 红时退出未返 final JSON；ruff format fix 由人手补 commit `7ceda51` (P0-A follow-up)
 
 ## 失控防护
 
