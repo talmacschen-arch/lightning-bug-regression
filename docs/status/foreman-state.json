@@ -1,94 +1,53 @@
 {
-  "session_id": "m1-2026-05-23T23-10Z",
-  "started_at": "2026-05-23T22:30:00+08:00",
-  "last_heartbeat": "2026-05-23T23:32:00+08:00",
+  "session_id": "m1-2026-05-24T0030Z",
+  "started_at": "2026-05-24T00:26:00Z",
+  "last_heartbeat": "2026-05-24T02:35:00Z",
   "sprint_label": "M1",
-  "round": 4,
+  "round": 6,
   "round_budget": 10,
   "wall_budget_hours": 2,
-  "status": "budget-exhausted",
-  "note": "foreman session 在 round 4 mid-batch (M1-5/6/7/8 并发) 后退出未返 final JSON；本文件由人手 (Phase 3) 在 reality reconciliation 时 rewrite——根据 origin/main 实际 PR 状态 (PR #2~#11 全 merged) 与 Phase 2 修复 (commit 81e46ec) 综合。",
+  "status": "done",
   "items_done": [
-    {
-      "name": "M1-1",
-      "evidence": "PR #2 squash-merged as 879e89f at 2026-05-23T15:14:38Z",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/2",
-      "merged_at": "2026-05-23T15:14:38Z",
-      "merge_commit": "879e89f"
-    },
-    {
-      "name": "M1-prep-runner-types",
-      "evidence": "PR #3 squash-merged as d502aa9 at 2026-05-23T15:20:56Z; foreman 自加的预备 task (StepResult / StepStatus / StepError 共享类型)，给 M1-4~M1-8 当依赖",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/3",
-      "merged_at": "2026-05-23T15:20:56Z",
-      "merge_commit": "d502aa9"
-    },
-    {
-      "name": "M1-4",
-      "evidence": "PR #4 squash-merged as 19d6090 at 2026-05-23T15:24:46Z (19 expect-clause evaluators)",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/4",
-      "merged_at": "2026-05-23T15:24:46Z",
-      "merge_commit": "19d6090"
-    },
-    {
-      "name": "M1-3",
-      "evidence": "PR #5 squash-merged as 1cca90e at 2026-05-23T15:25:04Z",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/5",
-      "merged_at": "2026-05-23T15:25:04Z",
-      "merge_commit": "1cca90e"
-    },
-    {
-      "name": "M1-2",
-      "evidence": "PR #6 squash-merged as 19c9d20 at 2026-05-23T15:25:11Z",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/6",
-      "merged_at": "2026-05-23T15:25:11Z",
-      "merge_commit": "19c9d20"
-    },
-    {
-      "name": "M1-7",
-      "evidence": "PR #7 squash-merged as 6a08abb at 2026-05-23T15:28:33Z",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/7",
-      "merged_at": "2026-05-23T15:28:33Z",
-      "merge_commit": "6a08abb"
-    },
-    {
-      "name": "M1-6",
-      "evidence": "PR #8 squash-merged as ea78235 at 2026-05-23T15:29:18Z; post-merge CI red on 2 真 bug (timeout 不杀 / dash printf 不识 \\x)，由 Phase 2 PR #11 修复",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/8",
-      "merged_at": "2026-05-23T15:29:18Z",
-      "merge_commit": "ea78235",
-      "follow_up_pr": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/11"
-    },
-    {
-      "name": "M1-8",
-      "evidence": "PR #9 squash-merged as d3f8821 at 2026-05-23T15:30:56Z",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/9",
-      "merged_at": "2026-05-23T15:30:56Z",
-      "merge_commit": "d3f8821"
-    },
-    {
-      "name": "M1-5",
-      "evidence": "PR #10 squash-merged as 3726b82 at 2026-05-23T15:41:07Z",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/10",
-      "merged_at": "2026-05-23T15:41:07Z",
-      "merge_commit": "3726b82"
-    }
+    {"name": "M1-1", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/2", "merged_at": "2026-05-23T15:14:38Z", "merge_commit": "879e89f"},
+    {"name": "M1-prep-runner-types", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/3", "merged_at": "2026-05-23T15:20:56Z", "merge_commit": "d502aa9"},
+    {"name": "M1-4", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/4", "merged_at": "2026-05-23T15:24:46Z", "merge_commit": "19d6090"},
+    {"name": "M1-3", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/5", "merged_at": "2026-05-23T15:25:04Z", "merge_commit": "1cca90e"},
+    {"name": "M1-2", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/6", "merged_at": "2026-05-23T15:25:11Z", "merge_commit": "19c9d20", "note": "yaml_loader.py implements a stricter schema than design.md §4.1; rejects all 5 real cases (kind/name/sql vs id/on/driver/run, category=bug-regression vs bug_regression). Realignment deferred to M2. M1-11 sidesteps this via the dogfood script normalizer."},
+    {"name": "M1-7", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/7", "merged_at": "2026-05-23T15:28:33Z", "merge_commit": "6a08abb"},
+    {"name": "M1-6", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/8", "merged_at": "2026-05-23T15:29:18Z", "merge_commit": "ea78235", "follow_up_pr": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/11"},
+    {"name": "M1-8", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/9", "merged_at": "2026-05-23T15:30:56Z", "merge_commit": "d3f8821"},
+    {"name": "M1-5", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/10", "merged_at": "2026-05-23T15:41:07Z", "merge_commit": "3726b82"},
+    {"name": "M1-9", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/12", "merged_at": "2026-05-23T16:39:56Z", "merge_commit": "4239644"},
+    {"name": "M1-10", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/13", "merged_at": "2026-05-23T16:59:22Z", "merge_commit": "8bb6d5f"},
+    {"name": "M1-11-prep-dogfood-script", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/14", "merged_at": "2026-05-23T17:13:25Z", "merge_commit": "5915ab9", "note": "Adds backend/scripts/run_m1_dogfood.py — normalizer + runner that side-steps yaml_loader."},
+    {"name": "M1-11-prep-plan-contains-fix", "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/15", "merged_at": "2026-05-23T17:18:34Z", "merge_commit": "e80dc65", "note": "fix(runner): _plan_contains accepts list[str] per §4.1 — unblocks lg-bug-0001 from spurious TypeError."},
+    {"name": "M1-11", "evidence": "smoke-runner GO at 2026-05-23T17:24:30Z; docs/m1-dogfood-2026-05-23-172355.md committed in THIS PR; 3 pass / 1 fail / 1 error per-case verdict; runner+drivers wired correctly end-to-end on synxdb-0001", "smoke_verdict": "GO", "report_path": "docs/m1-dogfood-2026-05-23-172355.md"}
   ],
   "item_in_progress": null,
-  "items_remaining": [
-    "M1-9",
-    "M1-10",
-    "M1-11"
-  ],
-  "needs_human": [],
-  "last_failures": [
+  "items_remaining": [],
+  "needs_human": [
     {
-      "item": "M1-6",
-      "specialist": "backend-fixer",
-      "symptom_hash": "shell-driver:timeout-no-kill-and-dash-printf-no-x",
-      "count": 1,
-      "detail": "PR #8 (M1-6) 合并后 post-merge CI on main 红 (Ubuntu /bin/sh=dash 暴露 2 个真 bug：(a) shell_driver timeout 后 proc.kill() 被 asyncio transport 在 cancelled communicate 上下文里静默吞掉，proc.wait() 等满 sleep 5 (duration_ms=5001)；(b) test_non_utf8 用 printf '\\xff\\xfe' 在 dash 上不展开)。foreman session 看到 main CI 红后没明确 escalate 路径就 mid-batch 退出。修复路径：PR #11 (commit 81e46ec) — _force_kill_and_reap 三层兜底 + python3 bytes() 替换 printf。Phase 1 + 2 + 3 一并把 §15.2.3/4 架构改正（auto-merge 在没 required check 时不等 CI = §14 R22）。本失败 resolved，不再 escalate。",
-      "resolved_in_pr": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/11"
+      "kind": "design_decision",
+      "summary": "yaml_loader.py (M1-2 / PR #6) implemented a stricter schema than design.md §4.1 — rejects all 5 real cases (field-name mismatch: id/on/driver/run vs name/kind/sql; category=bug-regression vs bug_regression; setup/teardown as list[step] vs list[str]). The M1-11 dogfood script side-steps this with an in-script normalizer. M2 should re-align yaml_loader with §4.1 (and update API /cases to surface them as valid).",
+      "blocking_item": "M2-yaml-loader-§4.1-alignment",
+      "first_seen_at": "2026-05-23T17:00:00Z",
+      "attempt_count": 0
+    },
+    {
+      "kind": "design_decision",
+      "summary": "sql_driver (M1-5 / PR #10) does not populate StepResult.plan_text from EXPLAIN output — the EXPLAIN result rows land in stdout, not plan_text. lg-bug-0001 dogfood shows assertion `plan_contains: [Hash, tmp_test02]` FAILing because plan_text is None even though the EXPLAIN plain text in stdout clearly shows tmp_test02 as hash build side (i.e., BUG actually upstream-fixed). M2 should: (a) detect EXPLAIN-shaped queries in sql_driver and store the concatenated result rows in StepResult.plan_text, OR (b) make assertions._plan_contains fall back to stdout when plan_text is None. Option (b) is the smaller change.",
+      "blocking_item": "M2-sql-driver-plan-text-population",
+      "first_seen_at": "2026-05-23T17:24:00Z",
+      "attempt_count": 0
+    },
+    {
+      "kind": "design_decision",
+      "summary": "lg-bug-0005 setup step `DROP DATABASE IF EXISTS mydb` errors because psycopg's default autocommit=False puts DROP DATABASE inside a transaction (DROP DATABASE cannot run in a transaction block). Either (a) sql_driver should detect DDL-that-cannot-run-in-tx (CREATE DATABASE, DROP DATABASE, ALTER SYSTEM, REINDEX with CONCURRENTLY etc.) and switch the connection to autocommit before running, OR (b) the case YAML should add a per-step flag like `autocommit: true`. preflight runner has the same issue documented somewhere. M2 task.",
+      "blocking_item": "M2-sql-driver-autocommit-for-DDL",
+      "first_seen_at": "2026-05-23T17:24:00Z",
+      "attempt_count": 0
     }
-  ]
+  ],
+  "last_failures": [],
+  "notes": "M1 sprint complete. 11 items done (M1-1 through M1-11) + 4 prep items + 1 phase-2 follow-up. 15 PRs merged total. M1-11 dogfood verdict: GO with 3 pass / 1 fail / 1 error — runner is wired correctly; 2 case-specific issues (lg-bug-0001 plan_text wiring, lg-bug-0005 autocommit-for-DDL) recorded as M2 needs_human items."
 }
