@@ -1,12 +1,13 @@
 name: frontend
 
-# Gate (design.md §6.4 / §14.1 R3): tsc --noEmit + eslint + vitest are
-# required; Playwright e2e is a separate gate job.
-# continue-on-error is forbidden anywhere in this file.
+# Gate (design.md §6.4 / §14.1 R3): tsc --noEmit + eslint + vitest +
+# Playwright e2e are required. continue-on-error is forbidden.
 #
-# Path filter avoids false-red on PRs that touch only backend / docs /
-# agents. When frontend/ has no real code yet (M0), this workflow does
-# not run — the first M3a frontend PR will be its first real exercise.
+# Two-job init-guard pattern (same shape as backend.yml): check-init
+# detects frontend/package.json. When absent (M0 placeholder period),
+# the build and e2e jobs are skipped — the run shows as success and
+# auto-merge proceeds. First M3a frontend PR adds package.json and the
+# same workflow starts gating real code.
 
 on:
   pull_request:
@@ -20,8 +21,27 @@ on:
       - '.github/workflows/frontend.yml'
 
 jobs:
+  check-init:
+    name: detect frontend initialization
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ -f frontend/package.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "frontend/package.json present — running full build + e2e jobs"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::frontend/package.json not found — build/e2e jobs will be skipped (M0 placeholder period; first M3a frontend PR will populate this)"
+          fi
+
   build:
     name: tsc + eslint + vitest
+    needs: check-init
+    if: needs.check-init.outputs.ready == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -50,8 +70,9 @@ jobs:
 
   e2e:
     name: playwright e2e
+    needs: [check-init, build]
+    if: needs.check-init.outputs.ready == 'true'
     runs-on: ubuntu-latest
-    needs: build
     defaults:
       run:
         working-directory: frontend

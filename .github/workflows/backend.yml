@@ -3,9 +3,14 @@ name: backend
 # Gate (design.md §6.4 / §14.1 R3): pytest + ruff are required.
 # continue-on-error is forbidden anywhere in this file.
 #
-# Path filter avoids false-red on PRs that touch only frontend / docs /
-# agents. When backend/ has no real code yet (M0), this workflow does
-# not run — the first M1 backend PR will be its first real exercise.
+# Two-job init-guard pattern:
+#   check-init: lightweight detector. If backend/pyproject.toml is absent
+#     (M0 placeholder period before first backend code lands), emits a
+#     GH-Actions notice and sets ready=false.
+#   test: runs only when ready=true. When skipped, the run shows as
+#     success (skipped jobs are not failures), so auto-merge proceeds.
+#     Once backend/pyproject.toml lands in M1, the same workflow tests
+#     it automatically — no workflow change required.
 
 on:
   pull_request:
@@ -19,8 +24,27 @@ on:
       - '.github/workflows/backend.yml'
 
 jobs:
+  check-init:
+    name: detect backend initialization
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ -f backend/pyproject.toml ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "backend/pyproject.toml present — running full test job"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::backend/pyproject.toml not found — test job will be skipped (M0 placeholder period; first M1 backend PR will populate this)"
+          fi
+
   test:
     name: pytest + ruff
+    needs: check-init
+    if: needs.check-init.outputs.ready == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
