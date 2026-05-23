@@ -34,8 +34,13 @@ defaults:
   database: postgres
 
 setup:
-  - DROP DATABASE IF EXISTS mydb
-  - CREATE DATABASE mydb TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'
+  # CREATE/DROP DATABASE 走 psql -c（design.md §4.1 convention, 2026-05-24
+  # 用户决策）—— psycopg 默认 autocommit=False 把 DDL 包进 tx，PG 拒绝；
+  # psql 自己 session 干净，normalizer 检测 `psql ` 子串路由到 shell driver。
+  # 套 `su - gpadmin -c "..."` 因为 shell_driver 在 root 下跑、root PATH
+  # 没 psql；§3.1 集群访问约定本来就是 `su - gpadmin`。
+  - su - gpadmin -c "psql -d postgres -c 'DROP DATABASE IF EXISTS mydb'"
+  - su - gpadmin -c "psql -d postgres -c \"CREATE DATABASE mydb TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'\""
 
 steps:
   - name: "在 mydb 里跑 SELECT upper(multibyte 字符串)"
@@ -47,7 +52,7 @@ steps:
       not_contains: "invalid multibyte character"
 
 teardown:
-  - DROP DATABASE IF EXISTS mydb
+  - su - gpadmin -c "psql -d postgres -c 'DROP DATABASE IF EXISTS mydb'"
 
 created_by: chenqiang
 created_at: "2026-05-23"

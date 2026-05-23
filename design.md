@@ -239,6 +239,19 @@ destructive: false                     # true 表示本 case 会改 shared_prelo
 # runner 按顺序逐条 exec_raw_sql；中间任一条 error => case 标 error，**steps 不会跑**，但 teardown 仍会 best-effort 跑。
 # **必须幂等**（DROP IF EXISTS / CREATE IF NOT EXISTS / DO $$ ... END $$ 守卫），因为：
 #   (a) Try 闸门可能反复跑；(b) 跨 case 共享 schema 时上一 case 没清干净；(c) 失败重跑友好。
+#
+# v1.3 后期约定（2026-05-24 用户决策，M1-followup F-3 实战暴露）：
+# **CREATE/DROP DATABASE + CREATE/DROP EXTENSION** 等 non-tx-safe DDL 用
+#   `psql -d <db> -c "<sql>"` 形式写——runner normalizer 检测 `psql ` 前缀
+#   自动路由到 shell driver（不再让 psycopg sql_driver autocommit-探测）。
+# 理由：psql 自己起独立 session 干净，不需要 sql_driver 通过 regex 反向探
+# 测非-tx-safe DDL 再 conn.autocommit=True；规则越简单越稳。F-3 的
+# `_NON_TX_DDL_RE` 仍保留作 defense-in-depth（用户漏写 psql 前缀时 sql_driver
+# 兜底自切 autocommit），但**首选**写法是 `psql -c`。
+# 示例：
+#   setup:
+#     - psql -d postgres -c "DROP DATABASE IF EXISTS mydb"
+#     - psql -d postgres -c "CREATE EXTENSION IF NOT EXISTS pgvector"
 setup:                                 # 可选；前置；list[str]
   - DROP TABLE IF EXISTS tmp_test01
   - DROP TABLE IF EXISTS tmp_test02
