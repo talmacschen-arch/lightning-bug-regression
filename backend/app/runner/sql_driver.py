@@ -32,7 +32,7 @@ from psycopg import AsyncConnection
 
 from app.runner.types import StepError, StepResult, StepStatus
 
-_EXPLAIN_RE = re.compile(r'(?:^|;)\s*EXPLAIN\b', re.IGNORECASE)
+_EXPLAIN_RE = re.compile(r"(?:^|;)\s*EXPLAIN\b", re.IGNORECASE)
 
 
 def _is_explain_query(sql: str) -> bool:
