@@ -1,0 +1,48 @@
+name: backend
+
+# Gate (design.md §6.4 / §14.1 R3): pytest + ruff are required.
+# continue-on-error is forbidden anywhere in this file.
+#
+# Path filter avoids false-red on PRs that touch only frontend / docs /
+# agents. When backend/ has no real code yet (M0), this workflow does
+# not run — the first M1 backend PR will be its first real exercise.
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+
+jobs:
+  test:
+    name: pytest + ruff
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend (editable + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: pytest
+        run: pytest -q
