@@ -7,9 +7,20 @@ type Method = 'get' | 'post' | 'put' | 'delete' | 'patch';
 export async function apiFetch<P extends keyof paths, M extends keyof paths[P] & Method>(
   path: P,
   method: M,
-  init?: { body?: unknown; query?: Record<string, string | number | undefined> },
+  init?: {
+    body?: unknown;
+    query?: Record<string, string | number | undefined>;
+    path?: Record<string, string | number>;
+  },
 ): Promise<unknown> {
   let url: string = BASE + (path as string);
+
+  // Substitute path params: replace {param} with the provided value.
+  if (init?.path) {
+    for (const [k, v] of Object.entries(init.path)) {
+      url = url.replace(`{${k}}`, encodeURIComponent(String(v)));
+    }
+  }
 
   if (init?.query) {
     const params = new URLSearchParams();
