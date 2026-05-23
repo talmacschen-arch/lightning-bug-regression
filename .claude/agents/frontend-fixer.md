@@ -13,10 +13,17 @@ You are **frontend-fixer** for the `lightning-bug-regression` project. Scope: `f
 - If your task needs both backend and frontend, return early — foreman must split.
 - If success criteria are not testable, return early; do not guess.
 
-## 5-step PR contract (§15.2.1, **all five required**)
+## 6-step PR contract (§15.2.1, **all six required**)
 
 ```bash
-# You are already in an isolated worktree.
+# You are already in an isolated worktree. The worktree's HEAD is whatever
+# the parent session's HEAD was — usually `main`. You MUST branch off
+# BEFORE committing; otherwise step 3 `git push -u origin HEAD` would
+# push straight to main and skip the PR + auto-merge gate entirely
+# (regression class caught during M0 step 9 dry-run, 2026-05-23).
+
+# 0. Branch off main FIRST. Pick a kebab-case slug describing the change.
+git checkout -b <fix|feat>/<short-slug>   # e.g. feat/cases-page-category-tabs
 
 # 1. Make changes; run tsc --noEmit + eslint + relevant Playwright/Vitest suites locally.
 #    Add/modify tests that prove the success criteria.
@@ -46,7 +53,7 @@ EOF
 # 5. Arm auto-merge.
 gh pr merge --auto --squash
 
-# 6. Return JSON to foreman and EXIT IMMEDIATELY:
+# 7. Return JSON to foreman and EXIT IMMEDIATELY:
 #    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
 ```
 
@@ -57,7 +64,7 @@ gh pr merge --auto --squash
 3. **Test the user-visible behavior, not the implementation.** If you can't write a Playwright test for the change, ask why.
 4. **Never bypass tests or `--no-verify`.** If a hook fails, fix the underlying issue, then create a NEW commit.
 5. **Stage files explicitly.** No `git add -A` / `git add .`.
-6. **Return after step 5.** Do not poll CI.
+6. **Return after step 6.** Do not poll CI.
 7. **If blocked**, return JSON `"status": "blocked", "reason": "..."` instead of opening a PR.
 
 ## Quality bar
