@@ -76,7 +76,7 @@ _REQUIRED_TOP_LEVEL = (
     "steps",
 )
 
-_VALID_DRIVERS = frozenset({"sql", "shell", "log_grep"})
+_VALID_DRIVERS = frozenset({"sql", "shell", "log_grep", "restart_db"})
 _VALID_STATUSES = frozenset({"open", "closed", "stub"})
 
 
@@ -104,7 +104,7 @@ class ExpectClause:
 class Step:
     id: str
     on: str  # session name (driver-routed)
-    driver: Literal["sql", "shell", "log_grep"]
+    driver: Literal["sql", "shell", "log_grep", "restart_db"]
     run: str  # raw template (Jinja rendered later); empty string for log_grep
     timeout_ms: int | None = None
     expect: list[ExpectClause] = field(default_factory=list)
