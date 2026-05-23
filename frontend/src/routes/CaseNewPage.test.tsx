@@ -407,3 +407,128 @@ describe('M3a-7: three-gate state machine', () => {
     expect(link.textContent).toContain('#99');
   });
 });
+
+// ---------------------------------------------------------------------------
+// M3a-9: Try spinner + elapsed counter
+// ---------------------------------------------------------------------------
+
+describe('M3a-9: Try spinner and elapsed counter', () => {
+  beforeEach(() => {
+    vi.spyOn(global, 'fetch');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('try-spinner and try-elapsed are visible while handleTry is in flight, hidden after resolve', async () => {
+    // First: validate
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      makeJsonResponse({ ok: true, errors: [] }),
+    );
+
+    // Second: try — manually resolvable promise
+    let resolveTry!: (value: Response) => void;
+    const tryPromise = new Promise<Response>((r) => {
+      resolveTry = r;
+    });
+    vi.mocked(global.fetch).mockImplementationOnce(() => tryPromise);
+
+    renderPage();
+    fireEvent.change(screen.getByTestId('textarea-yaml-editor'), {
+      target: { value: 'id: test-case\n' },
+    });
+
+    // Validate first to enable btn-try
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-validate'));
+    });
+    await waitFor(() =>
+      expect((screen.getByTestId('btn-try') as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    // Click Try — spinner should appear immediately
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-try'));
+    });
+
+    // Spinner and elapsed element must be visible while in flight
+    expect(screen.getByTestId('try-spinner')).toBeInTheDocument();
+    expect(screen.getByTestId('try-elapsed')).toBeInTheDocument();
+
+    // Resolve the try promise
+    await act(async () => {
+      resolveTry(
+        makeJsonResponse({
+          ok: true,
+          yaml_sha256: 'abc',
+          step_results: [],
+          validation_errors: [],
+        }),
+      );
+    });
+
+    // After resolution spinner should be gone
+    await waitFor(() => {
+      expect(screen.queryByTestId('try-spinner')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('try-elapsed')).not.toBeInTheDocument();
+  });
+
+  it('elapsed counter shows "0.0s" pattern initially while try is in flight', async () => {
+    // validate
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      makeJsonResponse({ ok: true, errors: [] }),
+    );
+
+    // try — manually resolvable (never auto-resolves during this test)
+    let resolveTry!: (value: Response) => void;
+    const tryPromise = new Promise<Response>((r) => {
+      resolveTry = r;
+    });
+    vi.mocked(global.fetch).mockImplementationOnce(() => tryPromise);
+
+    renderPage();
+    fireEvent.change(screen.getByTestId('textarea-yaml-editor'), {
+      target: { value: 'id: test-case\n' },
+    });
+
+    // Validate to enable btn-try
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-validate'));
+    });
+    await waitFor(() =>
+      expect((screen.getByTestId('btn-try') as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    // Click Try — spinner appears immediately
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-try'));
+    });
+
+    // Right after click: elapsed starts at 0ms → text matches "0.Xs" pattern
+    const elapsedEl = screen.getByTestId('try-elapsed');
+    expect(elapsedEl.textContent).toMatch(/Trying…\s+\d+\.\ds/);
+
+    // Specifically should start at or very near 0.0s
+    expect(elapsedEl.textContent).toContain('Trying…');
+    expect(elapsedEl.textContent).toMatch(/\d+\.\ds/);
+
+    // Resolve to clean up
+    await act(async () => {
+      resolveTry(
+        makeJsonResponse({
+          ok: true,
+          yaml_sha256: 'abc',
+          step_results: [],
+          validation_errors: [],
+        }),
+      );
+    });
+
+    // After resolution, spinner is gone
+    await waitFor(() => {
+      expect(screen.queryByTestId('try-elapsed')).not.toBeInTheDocument();
+    });
+  });
+});
