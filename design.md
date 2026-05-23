@@ -1242,9 +1242,9 @@ lightning-bug-regression/
 
 ## 12. Roadmap / 里程碑
 
-- **M0 项目骨架**（design.md 定稿 + agent 配置 + skill 占位 + 仓库创建 + CI 框架）
-- **M1 后端 MVP**：load YAML / run / sql_driver + shell_driver + log_grep / SQLite + 4 张表（runs / case_results / case_skip_list / system_settings）/ 基本 API
-- **M2 前端 MVP**：/cases（按 category 分 tab）、/runs/new、/runs/:id，能完整跑通"看 case → 触发 run → 看结果"
+- **M0 项目骨架** ✅（design.md 定稿 + agent 配置 + skill 占位 + 仓库创建 + CI 框架）—— 完成细节见 §13.1
+- **M1 后端 MVP** ✅（load YAML / run / sql_driver + shell_driver + log_grep / SQLite + 5 张表（runs / case_results / case_skip_list / system_settings / case_categories）/ 基本 API / 5 例 dogfood 5/5 PASS）—— 完成细节 + 4 sprint chain 实战回顾见 §13.4
+- **M2 前端 MVP**（/cases（按 category 分 tab）、/runs/new、/runs/:id，能完整跑通"看 case → 触发 run → 看结果"）—— 详细子步骤计划见 §13.5
 - **M3a Web 录入**：/cases/new 双入口编辑器 + Validate/Try/Save 三段闸门 + LLM 描述路径 + `/cases/submit` PR 流程
 - **M3b Skill 录入**：`.claude/skills/add-test-case/SKILL.md` 落地（generator-only，双 category 支持）+ backend grounding 端点（`/admin/step-kinds`、`/cases?q=&category=`）
 - **M4a bug_regression 用例填充**：从飞书文档导入历史 BUG 5 例（你提供原文，优先用 skill 路径 dogfood）
@@ -1430,6 +1430,150 @@ foreman 把每行 `- [ ] <id> <description>` 当一个 sprint item；
 **关键约束**：
 - 5 步里**没有一步是改 schema 校验代码、改前端组件、改 skill 主流程**。如果你发现非改不可，说明 §4.5 的元数据字段缺了什么——这种情况要回 design 加字段（而不是绕过元数据写 `if` 分支）。
 - 不暴露 `case_categories` 的 admin UI（同 §4.5 末尾的理由），加门类必走 PR。
+
+### 13.4 M1 实战回顾（v1.3 内追加，2026-05-24 写入）
+
+M1 实际跑了 **4 个 sprint + 1 cycle spec 硬化**，共 25 PR + 3 direct-to-main commits。最初 plan 11 个 item，实际 backend-fixer 自加 1 个 prep + opus review 后挖出 10 个 cleanup item + 2 条 spec 反模式（R24/R25）+ 1 个 wrapper（option A R25 mitigation）。
+
+#### 13.4.1 sprint 时间线
+
+| sprint | item 数 | PR | session 备注 |
+|---|---|---|---|
+| **M1 main** | 11 + 1 prep | PR #2~#10 (9 PR; M1-1~M1-8 + foreman 自加的 M1-prep-runner-types) + #12 (M1-9) + #13 (M1-10) + #14/#15/#16 (M1-11 chain) | foreman opus，1 session 干完，returned final JSON ✓ |
+| **M1-followup** | 3 (F-1 / F-2 / F-3) | PR #17 / #18 / #19 | M1-11 dogfood 暴露 3 个 design_decision needs_human；foreman **sonnet 一次例外**（用户 2026-05-24 授权，[[feedback-model-override-2026-05-24]]）；R25 第 1 次违反 |
+| **opus review** | 10 findings | — | opus 模型手工 review sonnet 写的代码，分 P0/P1/P2 三级；详 §13.4.3 |
+| **M1-cleanup (P0)** | 3 (R-1 / R-2 / R-3) | PR #20 / #21 / #22 | yaml_loader §4.5 align + §14 R4b 反模式消除；R25 第 2 次违反 |
+| **M1-cleanup-p1 (P1)** | 4 (R-4/R-5/R-6/R-7) | PR #23 / #24 | yaml_loader 严格化 + sql_driver autocommit timeout 对称；R25 第 3 次违反 |
+| **spec 硬化** | 0 (spec only) | direct commit `126bba3` | foreman.md hard rule 8/9 + 6→7 step PR contract + §14 R24/R25 加 |
+| **wrapper (option A)** | 0 (infra) | direct commit `d07e8c0` | `scripts/dispatch-foreman.sh` R25 mitigation 实装 |
+| **M1-P2 cleanup** | 3 (R-8/R-9/R-10) | PR #25 | 风格 / 文档 / 守卫；首次完美走通 7-step contract（local ci-gate triplet 全绿才 commit） |
+| **dogfood smoke** | 4 次 rerun | docs/m1-dogfood-* | 每次 sprint 后跑 5/5 PASS 验证 refactor 不退化 |
+
+#### 13.4.2 文件级 deliverable map
+
+```
+backend/
+  pyproject.toml                                          # M1-1
+  alembic/versions/0001_initial_schema.py                 # M0 step 6 (5 tables)
+  app/
+    config.py                                             # M0 step 6
+    runner/
+      types.py                                            # M1-prep (StepResult/StepStatus/StepError 共享)
+      assertions.py                                       # M1-4 (19 evaluators + dispatcher)
+      sql_driver.py                                       # M1-5 + F-2 plan_text + F-3 autocommit + P1-sql + P2-R8/R10
+      shell_driver.py                                     # M1-6 + Phase 2 fix (PR #11) kill+wait
+      log_grep_driver.py                                  # M1-7
+      jinja_render.py                                     # M1-8 (StrictUndefined + ssh_user decision)
+      orchestrator.py                                     # M1-9 (groups + R9 + stdout fallback for plan_contains F-2)
+    storage/
+      yaml_loader.py                                      # M1-2 + F-1 §4.1 align + P0-A CategoryMeta + P1-yaml + P2-R9
+      sqlite_store.py                                     # M1-3 (CRUD + ActiveRunExists / 409)
+      models.py                                           # (CategoryMeta projection added in P0-A)
+    api/
+      main.py + cases.py + runs.py                        # M1-10 (POST /runs / GET /runs / GET /cases / GET /admin/categories)
+  scripts/
+    run_m1_dogfood.py                                     # M1-11 (PR #14)
+  tests/
+    test_alembic_upgrade.py                               # M0 step 6 (8 assertions)
+    test_types / test_assertions / test_sql_driver / 
+    test_shell_driver / test_log_grep_driver / 
+    test_jinja_render / test_orchestrator /
+    test_yaml_loader / test_sqlite_store / test_api       # M1-* 各对应单测，最终 269+ passed
+
+scripts/
+  dispatch-foreman.sh                                     # R25 wrapper (d07e8c0)
+  cron-report-status.sh                                   # M0 step 7
+  install-cron.sh                                         # M0 step 8
+
+docs/
+  m1-dogfood-2026-05-23-172355.md                         # 第 1 次 dogfood (3 pass / 1 fail / 1 error)
+  m1-dogfood-2026-05-23-1828.md                           # M1-followup 后 dogfood (5/5 PASS)
+  m1-cleanup-dogfood-2026-05-23-1908.md                   # M1-cleanup 后 (5/5 PASS)
+  m1-cleanup-p1-dogfood-2026-05-23-1927.md                # M1-cleanup-p1 后 (5/5 PASS)
+  foreman-runs/                                           # wrapper 产出目录 (M2 起开始有内容)
+```
+
+#### 13.4.3 opus review 10 findings 分级 + 解决映射
+
+| Tier | R# | Issue | Fix PR / commit | 来源 |
+|---|---|---|---|---|
+| 🔴 P0 | R-1 | `_VALID_STATUSES = {open, closed, stub}` 与 §4.5 矛盾 ("closed" 杜撰) | PR #22 (CategoryMeta) | yaml_loader.py |
+| 🔴 P0 | R-2 | `_CATEGORY_PREFIX` 杜撰 4 个 category + 漏 `extension` | PR #22 | yaml_loader.py |
+| 🔴 P0 | R-3 | `_VALID_DRIVERS` 漏 `restart_db` | PR #20 | yaml_loader.py |
+| 🟠 P1 | R-4 | `_parse_expect()` dead code | PR #24 | yaml_loader.py |
+| 🟠 P1 | R-5 | `_parse_setup_teardown` silent-accept list[dict] | PR #24 | yaml_loader.py |
+| 🟠 P1 | R-6 | step alias 优先级反了 (id>name, driver>kind) | PR #24 | yaml_loader.py |
+| 🟠 P1 | R-7 | sql_driver autocommit 分支无 statement_timeout (§14 R5 不对称) | PR #23 | sql_driver.py |
+| 🟡 P2 | R-8 | `_NON_TX_DDL_RE` 不完整 (CONCURRENTLY 索引/TABLESPACE 漏) | PR #25 (docstring 标已知漏覆盖 + 指向 §4.1.2) | sql_driver.py |
+| 🟡 P2 | R-9 | YAML bool tag 字面值出现两次 | PR #25 (抽 `_YAML_BOOL_TAG` 常量) | yaml_loader.py |
+| 🟡 P2 | R-10 | autocommit 路径 rollback 是 no-op | PR #25 (加 `if not conn.autocommit` 守卫) | sql_driver.py |
+
+#### 13.4.4 M1 暴露并固化的 spec / 工程教训
+
+1. **§14 R22 `gh pr merge --auto` 不等 CI**（M1 主 sprint 9 个 PR 全部"先合后跑"暴露）→ Phase 1/2/3 架构修：ci-gate.yml 聚合 workflow + repo 改 public + branch protection 加 `gate` 必过 check（commit `5ac2823` / `c7a68e6`）
+2. **§14 R23 branch-protection `contexts` 字符串格式 footgun**（"ci-gate / gate" vs `gate`）→ PR #11 实战修
+3. **§4.1.2 non-tx-safe DDL convention**（`psql -c '<DDL>'` 走 shell driver，§4.1.2 落地，commit `aa48a18` + `3013ad2`）
+4. **§14 R24 specialist 不跑本地 ci-gate**（PR #18 / PR #22 两次栽在 `ruff format --check`）→ §15.2.1 6→7 step + step 1 显式列本地 ci-gate triplet（commit `126bba3`）
+5. **§14 R25 foreman 不返 final JSON**（3 次连续违反 + spec 硬化 5 min 内仍犯）→ option A: `scripts/dispatch-foreman.sh` wrapper post-hoc reconstruction（commit `d07e8c0`，foreman 不返 JSON 也有 reconciled JSON 落盘）
+6. **§14 R4b 真实震慑案例**: M1-followup sonnet 在 yaml_loader 杜撰 4 个未来 category + 漏 `extension` + 杜撰 status `closed`，opus review P0 抓到。后续 reviewer 在 §14 cross-reference 时凡命中 R4b 直接 REQUEST_CHANGES
+
+#### 13.4.5 5 例 bug-regression 实际 BUG 状态（M1-followup-p1 后 dogfood 终态）
+
+dogfood 5/5 PASS 不等于"5 个 BUG 都修了"——runner 跑过 ≠ BUG 复现失败：
+
+| Case | YAML status | Runner verdict | 推断 BUG 实际状态 |
+|---|---|---|---|
+| lg-bug-0001 hashjoin 右表 | open | PASS | upstream-fixed（候选改 status: fixed；EXPLAIN plan 含 tmp_test02 = 优化器选对小表） |
+| lg-bug-0002 unnest crash | open | PASS | upstream-fixed（temp table 路径未触发 recover mode + log_grep matches=0） |
+| lg-bug-0003 count-no-statistics | open | PASS | upstream-fixed（ANALYZE 后 NOTICE 流不含 "do not have statistics"） |
+| lg-bug-0004 CTAS rowcount=0 | open | PASS | upstream-fixed（ORCA off + clock_timestamp + REPLICATED 不再 0 行） |
+| lg-bug-0005 LC_CTYPE upper | open | PASS | upstream-fixed（LC_CTYPE='C' 数据库里 upper(multibyte) 不报错） |
+
+**M2 开张前不批量改 status: fixed**——5 例都是"工具说 PASS"作证据，但工具自身刚 dogfood 通过，证据链置信度不到"我亲手过一遍每个 step 验证过"那级。等 M5 体验打磨阶段 + 人工对照飞书原文修复版本号再统一提状态。
+
+### 13.5 M2 前端 MVP 计划（按顺序，v1.3 内追加 2026-05-24）
+
+参考 §6（前端设计）+ §6.4（前端强约束 8 条）+ §14 R2/R6/R7/R8/R4b（M3a 前端 R 条目）。M2 目标：把 M1 已就绪的 backend API（§5.2 那张端点表）接出 UI，跑通"看 case → 触发 run → 看结果"端到端体验。
+
+**M2 任务（按依赖图 + 优先级）**：
+
+- **M2-1 frontend 骨架**: `frontend/` 落 `package.json` + `vite.config.ts` + `tsconfig.json` + Vite + React 18 + TS strict + `index.html` + 入口 `src/main.tsx` + 根组件 `src/App.tsx`（仅 hello world 跑通），CI 第一次触发 frontend block（ci-gate path filter `frontend/**`，tsc + eslint + vitest）
+- **M2-2 Tailwind + shadcn/ui 接入**: `tailwind.config.ts` + `postcss.config.js` + `src/index.css` + 接入 shadcn CLI + 装基础组件（Button / Card / Tabs / Dialog / Toast / Skeleton）。v0.2 (b) 锁定的选型
+- **M2-3 OpenAPI 客户端 codegen**: `openapi-typescript` 从 backend 的 `openapi.json` 自动生成 TS 类型；`src/api/client.ts` 用生成的类型 wrap fetch。**§6.4 R2 强约束**：禁止手写 API 类型（5 倍出错率）
+- **M2-4 root layout + ErrorBoundary**: `src/App.tsx` 包一层 `<ErrorBoundary>` 兜底（§6.4 R7 / §14 R7：组件渲染抛错时降级 UI 显"返回首页"，禁止 blank page）；layout 含 header + nav + main area + Toaster
+- **M2-5 `/cases` 页面**: 按 category 分 tab（**§14 R4b**：tab 列表从 `GET /admin/categories` 拉，不写死 `["bug_regression", "extension"]`）；每个 tab 列出该 category 下用例（GET /cases?category=X），含 status 徽章、tags、是否在 skip_list、最近一次运行结果
+- **M2-6 `/cases/:id` 详情页**: 显示 YAML 原文（语法高亮）+ 4-tuple 叙事字段（description / procedure / expected）解析渲染 + 最近 N 次运行结果列表 + 相关 PR / issue 链接
+- **M2-7 `/runs/new` 触发页**: 选 case_ids（多选 + 全选 / category 全选）+ target_version 文本框 → POST /runs；**§6.4 R4 强约束**：表单提交必有 Playwright contract test 断言提交体 shape（不是 button 点击通过）；POST 返 409 时显示"已有 active run"模态
+- **M2-8 `/runs` 列表 + `/runs/:id` 详情**: 列出 runs（pagination 简易，按 started_at desc），点入详情显示 per-case results（status / duration_ms / artifacts_path 链接）；SSE `/runs/:id/stream` **推到 M5**（首版用 polling 每 3s 刷一次 GET /runs/:id 替代）
+- **M2-9 Playwright E2E suite**: 端到端覆盖 "case 列表 → 触发 run → 看结果" 关键路径；**§6.4 R6 / §14 R6 强约束**：所有交互元素用 `data-testid` 选择器，**禁止** `.card + .pool-label` 结构选择器
+- **M2-10 dogfood smoke**: 前后端一起起，跑一遍 M2-1~M2-9 各页面渲染 + 一次完整 run 触发，产 `docs/m2-dogfood-<ts>.md` 报告
+
+**§14 R 预付检查**（写代码时回看）：
+
+- **R2 contract test**: M2-7 表单提交 PR 必有 Playwright `page.route("**/api/runs", ...)` 断言 postDataJSON shape，不是只断 button 渲染
+- **R6 data-testid**: M2-9 E2E 全部用 `data-testid="..."` 选择器，每个交互元素都加 testid 属性
+- **R7 ErrorBoundary**: M2-4 根组件强制 `<ErrorBoundary>`；任何子树抛错必有降级 UI，禁止白屏
+- **R8 test.skip declaration-level**: 任何 Playwright test.skip 写在 declaration（`test.skip("name", fn)`）不是 body
+- **R4b category 不硬编码**: M2-5 tab 列表 / 任何 category-aware 渲染 / 用例详情页状态徽章着色 全部从 `GET /admin/categories` 拉，绝禁 `if category === "bug_regression"` 字面比较
+- **R24 specialist 跑本地 ci-gate 三件套**: frontend-fixer step 1 必跑 `npx tsc --noEmit && npm run lint && npm test -- --run`（+ playwright if 触及）全绿才 commit
+- **R25 foreman wrapper 强制**: dispatch foreman 一律走 `scripts/dispatch-foreman.sh`（详 §14 R25 mitigation）
+
+**M2 sprint dispatch 模式预测**：
+
+参考 M1 实战经验，M2-1（骨架）必须先做（其他都依赖 frontend/package.json 存在 ci-gate frontend block 才触发）。M2-2 ~ M2-4 是横向 infra，可串行做。M2-5 ~ M2-8 是 4 个独立页面，**可并行 4 个 frontend-fixer 各 isolation:"worktree"**（前提 M2-1~M2-4 done）。M2-9 + M2-10 依赖前面全 done。
+
+**预算估算**：10 个 item，参考 M1 单 sprint 6 个 PR (~50 min) 节奏，并行打满 2-3 round 应能吃下 M2-1~M2-8（~30 min）；M2-9 e2e 慢些（~20 min）；M2-10 smoke 真起服务 ~10 min。**单 foreman session 2h budget 应该够**，但留 1 round buffer 给 ci-gate 回归红的可能性。
+
+**完成定义**：
+- 全 10 个 item [x] + ci-gate 全绿 + frontend block 真跑过（第一次：M2-1 引入 package.json 触发）
+- 端到端 dogfood：你（人）在浏览器打开 `http://localhost:5173/cases` → 看到 5 个 bug-regression case → 点 "新建 run" → 选所有 case → 触发 → 看 run 进度 → 看 5/5 PASS。整流程 ≤ 30s 用户感知延迟（runner 真跑会久，但 UI 不卡）
+- reviewer 在每个 PR 上 §14 R 编号 cross-reference（特别 R2/R6/R7/R4b）应当 ≠ REQUEST_CHANGES
+
+**M2 不做的事**（明示）：
+- SSE `/runs/:id/stream` 实时推送 — 推到 M5（M2 用 3s polling 占位）
+- `/cases/new` 编辑器双入口 + Validate/Try/Save 三段闸门 — M3a 才做
+- Admin UI（skip_list / settings） — M3b 后 / M5
+- artifacts 下载 / tag 筛选 / 运行历史 diff / 看板分组统计 — M5
 
 ---
 
