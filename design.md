@@ -243,13 +243,13 @@ destructive: false                     # true 表示本 case 会改 shared_prelo
 # non-tx-safe DDL（CREATE/DROP DATABASE/EXTENSION 等）的写法看 §4.1.2
 # ——首选 `psql -c '<DDL>'`，runner normalizer 自动路由到 shell driver。
 setup:                                 # 可选；前置；list[str]
-  - DROP TABLE IF EXISTS tmp_test01
+  - DROP TABLE IF EXISTS tmp_test01    # 普通 DML/DDL 直接写裸 SQL → sql_driver
   - DROP TABLE IF EXISTS tmp_test02
   - |
     CREATE TABLE tmp_test01 (i int);
     INSERT INTO tmp_test01 SELECT i FROM generate_series(1, 10000000) i;
     ANALYZE tmp_test01
-  - CREATE EXTENSION IF NOT EXISTS pgvector   # 示例：幂等创建 extension
+  - psql -c 'create extension if not exists pgvector'   # non-tx-safe DDL 走 psql -c（§4.1.2）
 
 steps:                                 # 必填，按顺序执行；每个 step 一种 driver
   # 推荐惯例（v0.9，借 preflight external_systems 模式）：
@@ -419,9 +419,7 @@ normalizer 检测策略用 `"psql " in stripped`（**子串**不是 prefix），
 - 切 `autocommit` 影响整个连接状态，需要 finally 复原，复原时机一旦错就污染后续 step
 - psql 自己起独立 session 是 PG 工具链的"原生干净"方式，没有 transaction-state 维护成本
 
-**§14 R 编号**：本约定 forensic 来自 PR #18 (commit `b49b766`) + lg-bug-0005 在 dogfood 上的 ERROR 实测；defense-in-depth 的 sql_driver autocommit 实现是 F-3 的副产物。
-
-#### 4.1.3 关于 stub case 与未来 step kind
+**§14 R 编号**：本约定 forensic 来自 PR #18 (commit `b49b766`) + lg-bug-0005 在 dogfood 上的 ERROR 实测；defense-in-depth 的 sql_driver autocommit 实现是 F-3 的副产物。本身是正向 prescription 不是反模式，所以**不**新加 R 条目；reviewer 在 cases YAML 审查时如发现 non-tx-safe DDL 没走 `psql -c` 应直接 REQUEST_CHANGES 引用本节。
 
 ### 4.2 运行记录 schema（SQLite）
 
