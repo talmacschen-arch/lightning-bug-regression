@@ -22,6 +22,7 @@ import hashlib
 import json
 import textwrap
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -76,6 +77,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             )
         )
         sess.commit()
+
+    # Reset the Try-pass cache between tests — app.state persists across
+    # TestClient invocations within a session, and other test modules
+    # (e.g. test_api_submit) may have left entries.
+    app.state.try_pass_cache.clear()
 
     with TestClient(app) as c:
         yield c
@@ -427,6 +433,105 @@ def test_try_yaml_sha256_differs_for_different_payloads(
     # always required).
     r2 = client.post("/cases/try", json={"yaml": _minimal_valid_yaml() + "\n# trailing\n"}).json()
     assert r1["yaml_sha256"] != r2["yaml_sha256"]
+
+
+# ---------------------------------------------------------------------------
+# Try-pass cache wiring (§13.7 M3a-3.5)
+#
+# On overall pass, /cases/try MUST write yaml_sha256 → now(UTC) into
+# app.state.try_pass_cache. Without this write the cache stays empty and
+# the §6.2 three-gate on /cases/submit rejects every payload — the cache
+# is dead infrastructure. The fixed cases.py wires this in stage 4 of
+# try_case; these tests pin that wiring.
+# ---------------------------------------------------------------------------
+
+
+def test_try_pass_writes_to_app_state_cache(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_pool: type[_FakePool],
+) -> None:
+    """A passing /cases/try must populate app.state.try_pass_cache with
+    yaml_sha256 → datetime.now(UTC). Submit's three-gate reads from
+    exactly this dict, so the wiring closes the loop end-to-end.
+    """
+    raw = _minimal_valid_yaml()
+    cer = _case_result("lg-bug-9999-test-try", StepStatus.PASS, [_passing_step()])
+    _install_run_case_stub(monkeypatch, cer)
+
+    # Cache starts empty (fixture clears it).
+    assert app.state.try_pass_cache == {}
+    before = datetime.now(UTC)
+    resp = client.post("/cases/try", json={"yaml": raw})
+    after = datetime.now(UTC)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+
+    # Cache MUST now contain the YAML's sha256 keyed entry.
+    expected_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    assert expected_hash in app.state.try_pass_cache, (
+        "Try-pass cache was not written on pass — submit's three-gate would reject everything"
+    )
+
+    # And the timestamp must be a tz-aware datetime within the test window
+    # (within the last 5 seconds is the spec — we tighten to "between
+    # before and after" so a slow CI doesn't blur the bound).
+    ts = app.state.try_pass_cache[expected_hash]
+    assert isinstance(ts, datetime)
+    assert ts.tzinfo is not None, "cache must store tz-aware datetimes (UTC)"
+    assert before <= ts <= after, f"cache ts {ts} not within [{before}, {after}]"
+    # Within the last 5 seconds (matches the dispatch's stated tolerance).
+    assert (datetime.now(UTC) - ts) <= timedelta(seconds=5)
+
+
+def test_try_fail_does_not_write_to_cache(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_pool: type[_FakePool],
+) -> None:
+    """A failing /cases/try (step failure) must NOT write to the cache.
+    Otherwise submit's gate would accept payloads that never passed Try.
+    """
+    raw = _minimal_valid_yaml()
+    cer = _case_result("lg-bug-9999-test-try", StepStatus.FAIL, [_failing_step()])
+    _install_run_case_stub(monkeypatch, cer)
+
+    assert app.state.try_pass_cache == {}
+    resp = client.post("/cases/try", json={"yaml": raw})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+    expected_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    assert expected_hash not in app.state.try_pass_cache
+    assert app.state.try_pass_cache == {}
+
+
+def test_try_validate_fail_does_not_write_to_cache(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_pool: type[_FakePool],
+) -> None:
+    """A validate-stage failure (e.g. YAML syntax error) must NOT write
+    to the cache either — the endpoint short-circuits before run_case so
+    overall_ok stays False and the cache stays empty.
+    """
+    bad = "foo: : :"
+
+    # run_case must not be called; install a sentinel that would crash if it is.
+    async def must_not_call(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("run_case should not be invoked when validate fails")
+
+    monkeypatch.setattr(orchestrator, "run_case", must_not_call)
+
+    assert app.state.try_pass_cache == {}
+    resp = client.post("/cases/try", json={"yaml": bad})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+
+    expected_hash = hashlib.sha256(bad.encode("utf-8")).hexdigest()
+    assert expected_hash not in app.state.try_pass_cache
 
 
 # ---------------------------------------------------------------------------
