@@ -46,6 +46,7 @@ from typing import Any
 import yaml
 
 from app.runner.case_normalizer import normalize_case  # re-export for tests
+from app.runner.dsn_builder import build_dsn_map  # re-export for tests
 from app.runner.orchestrator import CaseExecutionResult, run_case
 from app.runner.sql_driver import SqlSessionPool
 from app.runner.types import StepStatus
@@ -86,47 +87,10 @@ def load_cases(cases_dir: Path, only_ids: set[str] | None = None) -> list[dict[s
     return out
 
 
-# ---------------------------------------------------------------------------
-# DSN map construction
-# ---------------------------------------------------------------------------
-
-
-def build_dsn_map(
-    cases: list[dict[str, Any]],
-    *,
-    pghost: str,
-    pgport: int,
-    pguser: str,
-    pgdatabase: str,
-) -> dict[str, str]:
-    """Walk every step + setup + teardown in every case and collect the
-    distinct `on:` session names (which encode the database). Build a
-    DSN map mapping each to `postgresql://<user>@<host>:<port>/<db>`.
-
-    `default` (no override) → DSN for `pgdatabase`.
-    `default:<db>` → DSN for `<db>`.
-    """
-    sessions: set[str] = {"default", f"default:{pgdatabase}"}
-    for case in cases:
-        for bucket in ("setup", "steps", "teardown"):
-            for step in case.get(bucket) or []:
-                on = step.get("on")
-                if on:
-                    sessions.add(str(on))
-
-    dsn_map: dict[str, str] = {}
-    for session in sessions:
-        if session == "default":
-            dbname = pgdatabase
-        elif session.startswith("default:"):
-            dbname = session[len("default:") :]
-        else:
-            # Custom session name — fall back to pgdatabase. (Today only
-            # `default:<db>` is produced by normalize_case.)
-            dbname = pgdatabase
-        dsn_map[session] = f"postgresql://{pguser}@{pghost}:{pgport}/{dbname}"
-    return dsn_map
-
+# `build_dsn_map` moved to app.runner.dsn_builder (M2 dogfood followup,
+# 2026-05-24) so the API path shares the same DSN logic — previously the
+# API path didn't build any DSN map, so orchestrator ran with sql_pool=None
+# and every SQL step errored. Re-exported here for test_dogfood_script.py.
 
 # ---------------------------------------------------------------------------
 # report rendering
