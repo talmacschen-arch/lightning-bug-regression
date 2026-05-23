@@ -36,6 +36,7 @@ from sqlalchemy import select
 
 from app.api.cases import _iter_case_files, _load_categories
 from app.runner import orchestrator
+from app.runner.case_normalizer import normalize_case
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory, Run
 
@@ -132,10 +133,16 @@ def _load_cases_from_disk(
     If `requested_ids` is None, load every *.yaml under every active
     category's dir_path. Otherwise filter by id (stem).
 
-    A YAML that fails to parse is skipped (logged); the orchestrator
-    operates on dicts, so we deliberately do NOT pass loader-validated
-    Case dataclasses — the existing on-disk cases use a richer schema
-    (kind/name/setup/teardown) that the loader does not yet model.
+    A YAML that fails to parse is skipped (logged); same for cases whose
+    normalization fails (e.g. step missing `kind`).
+
+    Calls `case_normalizer.normalize_case` to convert raw §4.1 YAML
+    (setup: list[str], step's kind/driver/name aliases, per-step database
+    override) into the dict shape orchestrator expects. Without this,
+    raw `setup: list[str]` items reach `_execute_one_step(step: dict)`
+    and crash at `_step_id`'s `step.get("id")`. M2 dogfood revealed this
+    on 2026-05-24; previously only the M1 dogfood script normalized
+    (design.md §14 R26 候选 — dual code path divergence).
     """
     requested = set(requested_ids) if requested_ids is not None else None
     out: list[dict[str, Any]] = []
@@ -150,7 +157,12 @@ def _load_cases_from_disk(
         if not isinstance(data, dict):
             logger.warning("skipping case %s: top-level YAML not a mapping", path)
             continue
-        out.append(data)
+        try:
+            normalized = normalize_case(data)
+        except ValueError as e:
+            logger.warning("skipping case %s: normalize failed: %s", path, e)
+            continue
+        out.append(normalized)
     return out
 
 
