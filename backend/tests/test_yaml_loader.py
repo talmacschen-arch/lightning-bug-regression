@@ -550,8 +550,9 @@ def test_load_case_accepts_status_stable_for_extension(tmp_path: Path) -> None:
     previously rejected because the loader had no ``extension`` entry in
     its hardcoded prefix map and ``stable`` was not in _VALID_STATUSES."""
     src = (
-        _minimal_yaml(case_id="lg-ext-pgvector-install")
-        .replace("category: bug-regression", "category: extension")
+        _minimal_yaml(case_id="lg-ext-pgvector-install").replace(
+            "category: bug-regression", "category: extension"
+        )
         + "status: stable\n"
     )
     path = _write(tmp_path, src, stem="lg-ext-pgvector-install")
@@ -575,8 +576,9 @@ def test_load_case_rejects_status_closed(tmp_path: Path) -> None:
 
     # extension rejects "closed" too
     src_ext = (
-        _minimal_yaml(case_id="lg-ext-pgvector-install")
-        .replace("category: bug-regression", "category: extension")
+        _minimal_yaml(case_id="lg-ext-pgvector-install").replace(
+            "category: bug-regression", "category: extension"
+        )
         + "status: closed\n"
     )
     path_ext = _write(tmp_path, src_ext, stem="lg-ext-pgvector-install")
