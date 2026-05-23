@@ -1,14 +1,14 @@
 id: lg-bug-0002-array-unnest-crash
 title: 缺 immutable 的 plpgsql 函数中 array+unnest 触发数据库 crash
 category: bug_regression
-status: open
+status: fixed
 severity: high
 destructive: false
 
 source:
   feishu_anchor: "lightning-2.2-2.3-upgrade-regression"
   reported_at: "2025-12-01"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/642
 tags: [crash, plpgsql, unnest, array]
@@ -126,3 +126,11 @@ notes: |
   本 case 故意不加 immutable，这样在 BUG 复发时立刻能抓到。log_grep 的
   log_path 不显式指定，runner 从 system_settings 读集群默认路径
   （Alembic 0001 落表后；M0 阶段先 schema dogfooding，不执行）。
+
+  ---
+  **Verified upstream-fixed (M2 API dogfood, 2026-05-24)**: POST /runs run #6 on
+  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → case PASS
+  with real per-step duration (not 0ms instant-error of pre-PR #42/#43 era).
+  Double evidence chain: CLI dogfood (M1, scripts/run_m1_dogfood.py) also PASS.
+  fixed_version above = verified-non-reproducing version, NOT the specific fix
+  introduction build / commit (not yet researched against 飞书 LG history).
