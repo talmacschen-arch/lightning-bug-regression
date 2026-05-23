@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.pyc
+.venv/
+venv/
+.python-version
+
+# uv / pip
+.uv/
+uv.lock
+
+# Node / frontend
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+.next/
+*.tsbuildinfo
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local data & artifacts (single-user tool)
+data/
+artifacts/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Secrets (Tier A bootstrap config) — never commit
+.env
+.env.local
+~/.post_upgrade_test/
+
+# OS / cron logs
+docs/status/cron.log
+*.log
+
+# Test outputs that should not pollute repo
+.coverage
+htmlcov/
+coverage.xml
+
+# Claude Code session-local state (NOT project-level agents/skills/scripts which DO belong in repo)
+.claude/settings.json
+.claude/settings.local.json
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock
