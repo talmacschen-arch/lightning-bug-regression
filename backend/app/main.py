@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +52,17 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# §6.2 / §13.7 M3a-3.5: Try-pass cache for the three-gate enforcement.
+# `POST /cases/try` writes `yaml_sha256 → datetime` on overall pass; the
+# `POST /cases/submit` endpoint reads it and rejects submissions whose
+# YAML was not "Try'd and passed within the last hour". Process-local in
+# v1 (single uvicorn worker assumption); a future Redis-backed cache
+# would slot in here. Initialized at app construction time (no lifespan
+# hook needed) so tests can seed it via `app.state.try_pass_cache[...]`
+# directly without depending on startup-event ordering.
+_try_pass_cache: dict[str, datetime] = {}
+app.state.try_pass_cache = _try_pass_cache
 
 
 # CORS — permissive for M1 dev. Tightened by M2 frontend dispatch.

@@ -26,12 +26,14 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -113,6 +115,18 @@ class TryResponse(BaseModel):
     # case step_results is [] (we never reached run_case). Shape mirrors
     # ValidateErrorItem (where/reason) for UI symmetry.
     validation_errors: list[dict[str, str]] = []
+
+
+class SubmitRequest(BaseModel):
+    yaml: str
+    case_id: str  # e.g. "lg-bug-0006-foo"
+    branch_name: str  # e.g. "case/lg-bug-0006-foo"
+
+
+class SubmitResponse(BaseModel):
+    pr_url: str
+    pr_number: int
+    branch: str
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +371,8 @@ def get_case(case_id: str) -> CaseDetail:
 def _validate_yaml_text(
     text: str,
 ) -> tuple[bool, list[ValidateErrorItem], dict[str, Any] | None]:
-    """Shared validation core for ``/cases/validate`` and ``/cases/try``.
+    """Shared validation core for ``/cases/validate``, ``/cases/try``, and
+    ``/cases/submit``.
 
     Returns ``(ok, errors, parsed_dict_or_None)``:
 
@@ -384,7 +399,9 @@ def _validate_yaml_text(
 
     §14 R26: visibly delegates to :func:`yaml_loader.load_case` +
     :func:`case_normalizer.normalize_case` — inline copies of either
-    module's logic would be a dual-code-path violation.
+    module's logic would be a dual-code-path violation. The submit
+    endpoint (§6.2 three-gate) re-runs this exact validator before
+    writing to disk for defense in depth.
     """
     errors: list[ValidateErrorItem] = []
 
@@ -463,8 +480,6 @@ def _validate_yaml_text(
     # 5. Even if schema validation passed, run the normalizer — it catches
     #    things the schema layer permits (e.g. unknown step kinds the
     #    normalizer's VALID_KINDS set rejects, or missing sql/cmd fields).
-    #    We always run it when schema passed; if schema already failed we
-    #    skip normalize so the caller fixes the more fundamental error first.
     if not errors:
         try:
             normalize_case(parsed)
@@ -496,7 +511,7 @@ def validate_case(req: ValidateRequest) -> ValidateResponse:
 
 
 @router.post("/cases/try", response_model=TryResponse)
-async def try_case(req: TryRequest) -> TryResponse:
+async def try_case(req: TryRequest, request: Request) -> TryResponse:
     """Trial-run a YAML case in-memory without writing to DB / cases/.
 
     Pipeline (design.md §13.7 M3a-2 + §14 R26):
@@ -515,6 +530,11 @@ async def try_case(req: TryRequest) -> TryResponse:
        persists.
     5. Map :class:`CaseExecutionResult` → :class:`TryResponse`, truncating
        stderr to 500 chars per step (UI-friendly preview).
+    6. On overall pass, write ``yaml_sha256 → now(UTC)`` into the
+       ``app.state.try_pass_cache`` so a subsequent ``/cases/submit`` with
+       the same exact YAML can satisfy the §6.2 three-gate without
+       re-running. Without this write the cache is dead infrastructure
+       and submit's gate rejects everything.
 
     NOTE: This endpoint deliberately calls ``orchestrator.run_case`` (NOT
     ``run_suite``). ``run_suite`` persists to ``case_results`` via
@@ -580,12 +600,246 @@ async def try_case(req: TryRequest) -> TryResponse:
         )
 
     overall_ok = bool(step_results_out) and all(s.status == "pass" for s in step_results_out)
+
+    # --- stage 4: write to the Try-pass cache on overall pass (§13.7 M3a-3.5) ---
+    # The cache gates /cases/submit; without this write submit would reject
+    # every payload (cache is empty). Key is the sha256 of the raw YAML so
+    # any whitespace-equivalent edit re-keys and forces a fresh Try.
+    if overall_ok:
+        cache: dict[str, datetime] = request.app.state.try_pass_cache
+        cache[yaml_sha256] = datetime.now(UTC)
+
     return TryResponse(
         ok=overall_ok,
         yaml_sha256=yaml_sha256,
         step_results=step_results_out,
         validation_errors=[],
     )
+
+
+# ---------------------------------------------------------------------------
+# Try-pass cache + submit (§6.2 three-gate / §13.7 M3a-3 + M3a-3.5)
+# ---------------------------------------------------------------------------
+
+
+def _try_cache_is_fresh(
+    cache: dict[str, datetime],
+    yaml_sha256: str,
+    max_age: timedelta = timedelta(hours=1),
+) -> bool:
+    """Return True iff ``yaml_sha256`` is in ``cache`` AND its timestamp
+    is within ``max_age`` of *now* (UTC).
+
+    The three-gate (§6.2) requires every submit to be backed by a recent
+    successful Try of the *exact* same YAML — hashing on the raw text
+    prevents whitespace-equivalent payloads from drift-bypassing the gate.
+    Stale entries (> 1h) are treated as cache miss to force a re-Try after
+    long edit pauses (catches the "I tried this an hour ago, then edited
+    something, then forgot to re-Try" footgun).
+    """
+    ts = cache.get(yaml_sha256)
+    if ts is None:
+        return False
+    # Use timezone-aware comparison; cache writers MUST store UTC datetimes.
+    now = datetime.now(UTC)
+    # Defensive: if a caller stored a naive datetime, attach UTC so
+    # subtraction doesn't raise. The submit endpoint stores UTC; this
+    # is a belt-and-suspenders guard for misuses.
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (now - ts) <= max_age
+
+
+def _resolve_repo_root() -> Path:
+    """Resolve the repo root for git/gh subprocess invocations (§14 R27).
+
+    Order of precedence:
+
+    1. ``LBR_REPO_ROOT`` env var (operator override; must be absolute).
+    2. Anchored to ``__file__``: ``cases.py`` lives at
+       ``<repo>/backend/app/api/cases.py`` so 4 ``.parent`` hops reach
+       ``<repo>``.
+
+    Anchoring on ``__file__`` (rather than ``Path.cwd()``) is the §14 R27
+    requirement — uvicorn's startup cwd is undefined and historically
+    burned the M2 dogfood for 30 minutes.
+    """
+    raw = os.getenv("LBR_REPO_ROOT")
+    if raw:
+        return Path(raw).resolve()
+    # cases.py = <repo>/backend/app/api/cases.py
+    #   parent      = .../backend/app/api
+    #   parent.parent = .../backend/app
+    #   parent.parent.parent = .../backend
+    #   parent.parent.parent.parent = <repo>
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+@router.post("/cases/submit", response_model=SubmitResponse)
+def submit_case(req: SubmitRequest, request: Request) -> SubmitResponse:
+    """Submit a validated, recently-Try'd case YAML as a PR (§13.7 M3a-3).
+
+    Algorithm:
+
+    1. Hash the YAML (sha256) and check it against the Try-pass cache
+       (§6.2 three-gate / §13.7 M3a-3.5). Missing/stale → 400.
+    2. Re-validate via :func:`_validate_yaml_text` (defense in depth — the
+       cache hit means *some* prior Try passed, but the YAML may have
+       drifted since then via a different Try; re-validation closes the
+       window where a stale hit is reused).
+    3. Resolve `repo_root` via :func:`_resolve_repo_root` (§14 R27 — env
+       override or `__file__`-anchored default, never cwd-implicit).
+    4. Resolve `cases_root` via :func:`_cases_root`, look up the category's
+       `dir_path` from the DB, and write the YAML to disk.
+    5. DRY-RUN guard: if ``LBR_GITHUB_DRY_RUN=1``, return a fake response
+       without touching git/gh — tests + dev env exercise the full path
+       up to disk write without pushing to a real remote.
+    6. Otherwise run the git+gh subprocess chain with explicit ``cwd=``
+       (§14 R27), parse PR URL from `gh pr create` stdout, arm auto-merge.
+
+    Failure modes are surfaced as HTTPException — never let a
+    ``subprocess.CalledProcessError`` bubble as a 500 without context.
+    """
+    # 1. Three-gate (§6.2): the YAML must have been Try'd and passed within
+    #    the last hour. yaml_sha256 keys the cache.
+    yaml_sha256 = hashlib.sha256(req.yaml.encode("utf-8")).hexdigest()
+    cache: dict[str, datetime] = request.app.state.try_pass_cache
+    if not _try_cache_is_fresh(cache, yaml_sha256):
+        raise HTTPException(
+            status_code=400,
+            detail="must Try and pass within last hour before submit",
+        )
+
+    # 2. Re-validate (defense in depth + cheap; the same module the GET
+    #    + validate endpoints already use, §14 R26).
+    validate_ok, validate_errors, parsed = _validate_yaml_text(req.yaml)
+    if not validate_ok:
+        raise HTTPException(
+            status_code=400,
+            detail={"errors": [e.model_dump() for e in validate_errors]},
+        )
+
+    # 3. ``parsed`` was returned by the validator (validation already proved
+    #    it parses + is a dict + has a known category).
+    if not isinstance(parsed, dict):  # pragma: no cover — guarded by validation
+        raise HTTPException(status_code=400, detail="YAML parse drift after validation")
+    category = parsed.get("category")
+    if not isinstance(category, str) or not category:
+        raise HTTPException(status_code=400, detail="category missing from YAML")
+
+    # Look up the category's dir_path from DB (do NOT hardcode — §14 R4b).
+    categories = _load_categories()
+    cat_row = next((c for c in categories if c.name == category), None)
+    if cat_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown category {category!r} (not in active case_categories)",
+        )
+
+    # 4. Resolve paths.
+    repo_root = _resolve_repo_root()
+    cases_root = _cases_root()
+    target_dir = cases_root / cat_row.dir_path
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_file = target_dir / f"{req.case_id}.yaml"
+    target_file.write_text(req.yaml, encoding="utf-8")
+
+    # 5. DRY-RUN guard (§14 R27 testing safety).
+    if os.getenv("LBR_GITHUB_DRY_RUN") == "1":
+        return SubmitResponse(
+            pr_url="https://example.invalid/pr/dryrun",
+            pr_number=0,
+            branch=req.branch_name,
+        )
+
+    # 6. git + gh subprocess chain. EVERY .run() carries cwd=str(repo_root)
+    #    explicitly — §14 R27 contract.
+    # Compute path relative to repo_root for `git add`.
+    try:
+        file_relative = target_file.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        # CASES_ROOT pointed outside repo_root — refuse rather than
+        # silently committing nothing.
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"CASES_ROOT {cases_root} is not inside repo_root {repo_root}; "
+                "set LBR_REPO_ROOT or CASES_ROOT consistently"
+            ),
+        ) from None
+
+    def _run(step: str, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                argv,
+                cwd=str(repo_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"git/gh failed at {step}: stderr={e.stderr}",
+            ) from e
+
+    _run("git checkout", ["git", "checkout", "-b", req.branch_name])
+    _run("git add", ["git", "add", str(file_relative)])
+    _run(
+        "git commit",
+        [
+            "git",
+            "commit",
+            "-m",
+            f"case({category}): add {req.case_id} via /cases/submit",
+        ],
+    )
+    _run("git push", ["git", "push", "-u", "origin", req.branch_name])
+    gh_proc = _run(
+        "gh pr create",
+        [
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--head",
+            req.branch_name,
+            "--title",
+            f"case: {req.case_id}",
+            "--body",
+            "Auto-submitted via /cases/submit",
+        ],
+    )
+
+    # Parse PR URL from gh's stdout (last non-empty line is the URL).
+    pr_url = ""
+    for line in reversed(gh_proc.stdout.splitlines()):
+        candidate = line.strip()
+        if candidate.startswith("https://"):
+            pr_url = candidate
+            break
+    if not pr_url:
+        raise HTTPException(
+            status_code=500,
+            detail=f"could not parse PR URL from gh stdout: {gh_proc.stdout!r}",
+        )
+
+    # gh PR URLs end with /<pr_number>. Parse the trailing integer.
+    try:
+        pr_number = int(pr_url.rstrip("/").rsplit("/", 1)[-1])
+    except ValueError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"could not parse PR number from URL {pr_url!r}",
+        ) from e
+
+    _run(
+        "gh pr merge",
+        ["gh", "pr", "merge", str(pr_number), "--auto", "--squash"],
+    )
+
+    return SubmitResponse(pr_url=pr_url, pr_number=pr_number, branch=req.branch_name)
 
 
 __all__ = ["router"]
