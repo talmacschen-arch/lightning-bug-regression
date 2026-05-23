@@ -4,6 +4,39 @@
 
 ---
 
+## 目录
+
+> 读 design 的推荐顺序：先 §0 看本轮关键决策 → 想干啥按下面定位。1800+ 行别从头啃；按章节跳。
+
+| § | 标题 | 一句话 |
+|---|------|--------|
+| **0** | 版本历史 | v0.1~v1.3 + v1.3 内追加 (a)~(i2)；每行一个关键决策 |
+| **1** | 背景与目标 | Lightning 升级回归测试 + 周边 extension 集成测试两类用例 |
+| **2** | 范围 | In/Out scope（v0.6 把 Claude Code Skill 移到 In） |
+| **3** | 总体架构 | §3.1 集群访问约定（mdw=synxdb-0001 / gpadmin / cluster_topology） |
+| **4** | 数据模型 | §4.1 YAML schema · §4.2 runs+case_results · §4.3 case_skip_list · §4.4 system_settings · §4.5 case_categories（v0.8 元数据表） |
+| **5** | 后端设计 | §5.1 目录 · §5.2 API 表 · §5.3 runner（sql/shell/log_grep + jinja + ssh user + 异常处理）· §5.4 LLM · §5.5 add-test-case Skill |
+| **6** | 前端设计 | /cases 按 category 分 tab · Validate→Try→Save 三段闸门 · §6.4 R7 ErrorBoundary 强制 |
+| **7** | 用例存储与 PR 流程 | §7.1 仓库 settings 表（含 v1.3 (h)(i) auto-merge gate）· §7.2 PR 流程 |
+| **8** | 多 Agent 协作 | §8.1 8 个 agent 模型表 · §8.3 6 域审查 · §8.5 worktree isolation lint |
+| **9** | 项目结构 | 一级目录（backend/ frontend/ cases/ docs/ scripts/ .claude/{agents,skills,scripts}/） |
+| **10** | 部署与运维 | §10.1 SQLite 选型 · §10.2 三层配置（Tier A 引导 / B 运行时 / C 内容） |
+| **11** | 开放问题 | Q1~Q32（含 Q10 单账号 / Q12 Wiki / Q26 SQLite / Q27 门类扩展 / Q32 cron） |
+| **12** | Roadmap | M0 骨架 / M1 后端 MVP / M2 前端 / M3a-b 录入 / M4a-b 用例填充 / M5 打磨 |
+| **13** | 下一步行动 | §13.0 启动前自检（4 项 A/B/D/E）· §13.1 M0 计划 9 步 · §13.2 不阻塞项 · §13.3 未来扩门类 5 步法 |
+| **14** | 风险预警与反模式 | §14.1 致命 R1~R4b · §14.2 严重 R5~R13/R22/R23 · §14.3 中危 R14~R18 · §14.4 轻量 R19~R21 · §14.5 不抄的 preflight 设计 |
+| **15** | 自动协作运转模型 | §15.1 foreman verify loop（10 round/2h budget）· §15.2 GitHub auto-merge（含 §15.2.4 v1.3 gating 修正）· §15.3 cron 12:00/20:00 wrapper · §15.4 失控防护汇总 |
+
+**快速跳转的高频锚**：
+
+- 给 reviewer / 自查代码 → §14（R1~R23 反模式字典）+ §8.3（6 域审查）
+- 想加新测试用例 → §4.1（YAML schema）+ §5.5（add-test-case skill 流程）
+- foreman / specialist 看怎么干活 → §8.1（agent 表）+ §15.1（foreman loop）+ §15.2（auto-merge 流程）
+- 想加新测试门类（如 `performance_smoke`）→ §13.3（5 步法，**不改业务代码**）
+- 出问题排查 → §15.4（失控防护汇总）+ §14（R 编号对照）
+
+---
+
 ## 0. 版本历史
 
 | 版本 | 日期 | 作者 | 变更摘要 |
