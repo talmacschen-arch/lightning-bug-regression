@@ -22,6 +22,7 @@ R9: NEVER let an exception bubble. Catch everything -> StepResult(status=ERROR, 
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -30,6 +31,19 @@ import psycopg
 from psycopg import AsyncConnection
 
 from app.runner.types import StepError, StepResult, StepStatus
+
+# Regex: SQL that cannot run inside a transaction block (per §14 R9 / F-3).
+# Matches if ANY statement in the SQL starts with one of these DDL keywords.
+_NON_TX_DDL_RE = re.compile(
+    r'(?:^|;\s*)(?:DROP\s+DATABASE|CREATE\s+DATABASE|VACUUM|REINDEX\s+CONCURRENTLY'
+    r'|ALTER\s+SYSTEM|CLUSTER)\b',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _needs_autocommit(sql: str) -> bool:
+    """Return True if sql contains non-transaction-safe DDL (F-3)."""
+    return bool(_NON_TX_DDL_RE.search(sql))
 
 
 class SqlSessionPool:
@@ -107,50 +121,77 @@ async def execute_sql_step(
                     pass
 
         conn.add_notice_handler(_on_notice)
+        needs_ac = _needs_autocommit(sql)
         try:
-            if timeout_ms is not None and timeout_ms > 0:
-                await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
-            async with conn.cursor() as cur:
-                await cur.execute(sql)
-                # Walk to LAST result set when multi-statement.
-                last_rows: list[tuple] | None = None
-                last_rowcount: int = cur.rowcount
-                last_description = cur.description
-                if cur.description is not None:
-                    last_rows = await cur.fetchall()
-                # Cycle through additional result sets if present.
-                while cur.nextset():
-                    last_rowcount = cur.rowcount
+            if needs_ac:
+                # Non-tx-safe DDL: must run outside a transaction.
+                # Roll back any open transaction first (e.g. from SET statement_timeout
+                # on a prior step), then switch to autocommit mode.
+                try:
+                    await conn.rollback()
+                except Exception:
+                    pass
+                conn.autocommit = True
+                async with conn.cursor() as cur:
+                    await cur.execute(sql)
+                    # DDL returns no rows.
+                    ended = _iso_now()
+                    duration_ms = int((time.monotonic() - t0) * 1000)
+                    return StepResult(
+                        status=StepStatus.PASS,
+                        step_id=step_id,
+                        driver="sql",
+                        started_at=started,
+                        ended_at=ended,
+                        duration_ms=duration_ms,
+                        stdout="",
+                        stderr="\n".join(notices),
+                        rows_affected=cur.rowcount if cur.rowcount >= 0 else None,
+                    )
+            else:
+                if timeout_ms is not None and timeout_ms > 0:
+                    await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
+                async with conn.cursor() as cur:
+                    await cur.execute(sql)
+                    # Walk to LAST result set when multi-statement.
+                    last_rows: list[tuple] | None = None
+                    last_rowcount: int = cur.rowcount
                     last_description = cur.description
                     if cur.description is not None:
                         last_rows = await cur.fetchall()
-                ended = _iso_now()
-                duration_ms = int((time.monotonic() - t0) * 1000)
-                scalar = None
-                row_count: int | None = None
-                rows_affected: int | None = None
-                stdout = ""
-                if last_description is not None and last_rows is not None:
-                    row_count = len(last_rows)
-                    if last_rows and last_rows[0]:
-                        scalar = last_rows[0][0]
-                    # render small preview
-                    stdout = "\n".join(repr(r) for r in last_rows[:20])
-                else:
-                    rows_affected = last_rowcount if last_rowcount >= 0 else None
-                return StepResult(
-                    status=StepStatus.PASS,
-                    step_id=step_id,
-                    driver="sql",
-                    started_at=started,
-                    ended_at=ended,
-                    duration_ms=duration_ms,
-                    stdout=stdout,
-                    stderr="\n".join(notices),
-                    scalar=scalar,
-                    row_count=row_count,
-                    rows_affected=rows_affected,
-                )
+                    # Cycle through additional result sets if present.
+                    while cur.nextset():
+                        last_rowcount = cur.rowcount
+                        last_description = cur.description
+                        if cur.description is not None:
+                            last_rows = await cur.fetchall()
+                    ended = _iso_now()
+                    duration_ms = int((time.monotonic() - t0) * 1000)
+                    scalar = None
+                    row_count: int | None = None
+                    rows_affected: int | None = None
+                    stdout = ""
+                    if last_description is not None and last_rows is not None:
+                        row_count = len(last_rows)
+                        if last_rows and last_rows[0]:
+                            scalar = last_rows[0][0]
+                        # render small preview
+                        stdout = "\n".join(repr(r) for r in last_rows[:20])
+                    else:
+                        rows_affected = last_rowcount if last_rowcount >= 0 else None
+                    return StepResult(
+                        status=StepStatus.PASS,
+                        step_id=step_id,
+                        driver="sql",
+                        started_at=started,
+                        ended_at=ended,
+                        duration_ms=duration_ms,
+                        stdout=stdout,
+                        stderr="\n".join(notices),
+                        scalar=scalar,
+                        row_count=row_count,
+                        rows_affected=rows_affected,
+                    )
         except Exception as exc:
             try:
                 await conn.rollback()
@@ -162,6 +203,12 @@ async def execute_sql_step(
                 conn.remove_notice_handler(_on_notice)
             except Exception:
                 pass
+            if needs_ac:
+                # Restore autocommit=False so future steps on this connection are transactional.
+                try:
+                    conn.autocommit = False
+                except Exception:
+                    pass
 
     if timeout_ms is not None and timeout_ms > 0:
         try:

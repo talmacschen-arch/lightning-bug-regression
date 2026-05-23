@@ -90,6 +90,7 @@ class _FakeAsyncConnection:
         self.executed: list[str] = []
         self.closed = False
         self.rollbacks = 0
+        self.autocommit: bool = False
 
     def cursor(self) -> _FakeAsyncCursor:
         return self._cursor
@@ -290,3 +291,53 @@ async def test_close_all_closes_all_conns() -> None:
     assert conn_b.closed is True
     # Internal map cleared.
     assert pool._conns == {}
+
+
+# ---------------------------------------------------------------------------
+# (i) DROP DATABASE triggers autocommit=True, restored to False after
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ddl_runs_with_autocommit() -> None:
+    """DROP DATABASE is detected as non-tx-safe DDL; driver switches autocommit=True."""
+    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
+    conn = _FakeAsyncConnection(cursor)
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        result = await execute_sql_step(
+            pool, "ddl-step", "default", "DROP DATABASE IF EXISTS mydb"
+        )
+    assert result.status is StepStatus.PASS
+    # autocommit was set to True during execution, then restored to False.
+    assert conn.autocommit is False  # restored
+
+
+# ---------------------------------------------------------------------------
+# (j) Regular SELECT does not modify conn.autocommit
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_regular_sql_does_not_touch_autocommit() -> None:
+    """Regular SELECT does not modify conn.autocommit."""
+    cursor = _FakeAsyncCursor(rows_sequence=[("d", [(1,)], 1)])
+    conn = _FakeAsyncConnection(cursor)
+    assert conn.autocommit is False
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        result = await execute_sql_step(pool, "s1", "default", "SELECT 1")
+    assert result.status is StepStatus.PASS
+    assert conn.autocommit is False  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# (k) rollback() is called before switching to autocommit
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ddl_rollback_called_before_autocommit() -> None:
+    """Driver calls rollback() before switching to autocommit (clears any open tx)."""
+    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
+    conn = _FakeAsyncConnection(cursor)
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        await execute_sql_step(
+            pool, "ddl", "default", "CREATE DATABASE testdb"
+        )
+    assert conn.rollbacks >= 1  # rollback was called before autocommit switch
