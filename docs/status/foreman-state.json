@@ -1,33 +1,35 @@
 {
-  "session_id": "m0v-dryrun-2026-05-23T22-30Z",
-  "started_at": "2026-05-23T22:30:00Z",
-  "last_heartbeat": "2026-05-23T22:38:00Z",
-  "sprint_label": "M0-validate",
-  "round": 2,
+  "session_id": "m1-2026-05-23T23-10Z",
+  "started_at": "2026-05-23T23:10:00Z",
+  "last_heartbeat": "2026-05-23T23:18:00Z",
+  "sprint_label": "M1",
+  "round": 1,
   "round_budget": 10,
   "wall_budget_hours": 2,
-  "status": "done",
+  "status": "running",
   "items_done": [
     {
-      "name": "M0v-1",
-      "evidence": "PR #1 (talmacschen-arch/lightning-bug-regression) MERGED via squash; merge commit 14136dae94779c9a5c97df76fdba6216d0cd2865 == origin/main HEAD; README.md line 12 verified as '> 状态：**M0 项目骨架阶段**。详见 [`design.md`](./design.md)（v1.3，1800+ 行）。'",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/1",
-      "merged_at": "2026-05-23T14:35:43Z",
-      "merge_commit": "14136dae94779c9a5c97df76fdba6216d0cd2865",
-      "head_ref": "docs/readme-design-linecount-1800"
+      "name": "M1-1",
+      "evidence": "PR #2 MERGED at 2026-05-23T15:14:48Z (merge commit 879e89f4ae161c866c3e0e117012ed16cf1f84c6 == origin/main HEAD). backend.yml push-to-main run 26336277903 conclusion=success — pytest+ruff green with new psycopg/fastapi/pydantic/jinja2/pyyaml/packaging runtime deps + httpx/pytest-asyncio dev deps.",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/2",
+      "merged_at": "2026-05-23T15:14:48Z",
+      "merge_commit": "879e89f4ae161c866c3e0e117012ed16cf1f84c6",
+      "head_ref": "feat/m1-1-runtime-deps"
     }
   ],
   "item_in_progress": null,
-  "items_remaining": [],
+  "items_remaining": [
+    "M1-2",
+    "M1-3",
+    "M1-4",
+    "M1-5",
+    "M1-6",
+    "M1-7",
+    "M1-8",
+    "M1-9",
+    "M1-10",
+    "M1-11"
+  ],
   "needs_human": [],
-  "last_failures": [
-    {
-      "item": "M0v-1",
-      "specialist": "doc-writer",
-      "symptom_hash": "doc-writer:direct-push-to-main-no-pr",
-      "count": 1,
-      "detail": "Round 1: doc-writer (agent addb89c9991fa31bc) committed the correct README change but pushed directly to origin/main as 4db14d7 — never created a feature branch, never opened a PR. Recovered in round 2 by dispatching a fresh doc-writer (ae3c26ef6a2e10dda) with explicit steps: lease-protected force-push to revert main back to c47ffa5, then create branch docs/readme-design-linecount-1800, recommit, push, open PR #1, arm auto-merge --squash. Auto-merge fired, squash-merge landed as 14136da. Post-sprint TODO: patch .claude/agents/doc-writer.md 5-step contract to include explicit `git checkout -b <feature-branch>` as step 0 — current spec assumes worktree starts on a feature branch but does not enforce it.",
-      "resolved_in_round": 2
-    }
-  ]
+  "last_failures": []
 }
