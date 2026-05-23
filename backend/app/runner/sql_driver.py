@@ -134,11 +134,18 @@ async def execute_sql_step(
             if needs_ac:
                 # Non-tx-safe DDL: must run outside a transaction.
                 # Roll back any open transaction first (e.g. from SET statement_timeout
-                # on a prior step), then switch to autocommit mode.
+                # on a prior step), then issue our own SET inside the still-implicit
+                # transaction, then switch to autocommit mode. Order matters:
+                # SET statement_timeout requires an active transaction context;
+                # once autocommit=True there is no implicit tx, so SET would either
+                # fail or behave inconsistently (§14 R5 — symmetric timeout layering
+                # must apply to autocommit DDL too, not just the tx branch).
                 try:
                     await conn.rollback()
                 except Exception:
                     pass
+                if timeout_ms is not None and timeout_ms > 0:
+                    await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
                 conn.autocommit = True
                 async with conn.cursor() as cur:
                     await cur.execute(sql)
