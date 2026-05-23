@@ -362,9 +362,7 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
             expect_clauses = [ExpectClause(key=k, value=v) for k, v in expect_raw.items()]
         elif isinstance(expect_raw, list):
             if not isinstance(expect_raw, list):
-                raise _err(
-                    path, f"{where}.expect", "expect must be a list of single-key mappings"
-                )
+                raise _err(path, f"{where}.expect", "expect must be a list of single-key mappings")
             expect_clauses: list[ExpectClause] = []
             for e_idx, entry in enumerate(expect_raw):
                 if not isinstance(entry, dict) or len(entry) != 1:
@@ -376,9 +374,7 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
                 ((e_key, e_val),) = entry.items()
                 expect_clauses.append(ExpectClause(key=e_key, value=e_val))
         else:
-            raise _err(
-                path, f"{where}.expect", "expect must be a list or mapping"
-            )
+            raise _err(path, f"{where}.expect", "expect must be a list or mapping")
 
         steps.append(
             Step(
