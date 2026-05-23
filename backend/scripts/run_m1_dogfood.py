@@ -96,14 +96,30 @@ def _normalize_setup_teardown(
     out: list[dict[str, Any]] = []
     for i, item in enumerate(items):
         if isinstance(item, str):
-            out.append(
-                {
-                    "id": f"{prefix}-{i:02d}",
-                    "kind": "sql",
-                    "sql": item,
-                    "on": f"default:{default_db}",
-                }
-            )
+            stripped = item.lstrip()
+            # Convention (design.md §4.1, 2026-05-24 用户决策): setup/teardown 字符串
+            # 含 `psql ` 子串时路由到 shell driver 而非 sql_driver。理由 = 像
+            # CREATE/DROP DATABASE、CREATE/DROP EXTENSION 这种 non-tx-safe DDL，
+            # 让 psql 自己起独立 session 比让 psycopg 试图 autocommit 包它更稳。
+            # 用 `in` 不用 `startswith` 是为了支持 `su - gpadmin -c "psql ..."`
+            # 这种 wrap 形式（§3.1 集群访问约定）。
+            if "psql " in stripped or "psql\t" in stripped:
+                out.append(
+                    {
+                        "id": f"{prefix}-{i:02d}",
+                        "kind": "shell",
+                        "cmd": item,
+                    }
+                )
+            else:
+                out.append(
+                    {
+                        "id": f"{prefix}-{i:02d}",
+                        "kind": "sql",
+                        "sql": item,
+                        "on": f"default:{default_db}",
+                    }
+                )
         elif isinstance(item, dict):
             # Already a dict-shaped step — apply same normalization as main steps
             out.append(_normalize_one_step(item, i, default_db, default_id_prefix=prefix))
