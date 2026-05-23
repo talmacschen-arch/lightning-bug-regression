@@ -41,6 +41,7 @@ PASS_CASES = [
     ("row_count", 42, 42),
     ("rows_affected", 1, 1),
     ("plan_contains", "Hash Join on tmp_test02", "tmp_test02"),
+    ("plan_contains", "Hash Join on tmp_test02", ["Hash", "tmp_test02"]),
     ("plan_contains_any", "Seq Scan", ["Index", "Seq"]),
     ("stdout_contains", "hello world", "world"),
     ("not_contains", "ok status", "ERROR"),
@@ -64,6 +65,7 @@ FAIL_CASES = [
     ("row_count", 41, 42),
     ("rows_affected", 0, 1),
     ("plan_contains", "Seq Scan", "Hash Join"),
+    ("plan_contains", "Seq Scan on foo", ["Hash", "tmp_test02"]),
     ("plan_contains_any", "Nested Loop", ["Index", "Seq"]),
     ("stdout_contains", "hello", "world"),
     ("not_contains", "ERROR found", "ERROR"),
@@ -171,6 +173,55 @@ def test_not_contains_pass_and_fail() -> None:
 def test_plan_contains_any_match_in_concatenated_text() -> None:
     passed, _ = _plan_contains_any("Hash Join nested loop", ["Merge Join", "Hash Join"])
     assert passed is True
+
+
+# -- plan_contains list[str] shape (design.md §4.1 line 285) --
+
+
+def test_plan_contains_list_all_present() -> None:
+    # All substrings present => PASS.
+    passed, detail = _plan_contains("Hash Join on tmp_test02", ["Hash", "tmp_test02"])
+    assert passed is True
+    assert "Hash" in detail and "tmp_test02" in detail
+
+
+def test_plan_contains_list_some_missing() -> None:
+    # Subset present => FAIL, detail names the missing items.
+    passed, detail = _plan_contains("Hash Join on something_else", ["Hash", "tmp_test02"])
+    assert passed is False
+    assert "missing" in detail
+    assert "tmp_test02" in detail
+    # Items that DID match should not appear in missing list.
+    # We check via the literal repr of the missing list.
+    assert "['tmp_test02']" in detail
+
+
+def test_plan_contains_list_none_present() -> None:
+    # No substrings present => FAIL, both listed as missing.
+    passed, detail = _plan_contains("Seq Scan on foo", ["Hash", "tmp_test02"])
+    assert passed is False
+    assert "missing" in detail
+    assert "Hash" in detail
+    assert "tmp_test02" in detail
+
+
+def test_plan_contains_list_empty() -> None:
+    # Edge case: empty list. Decision: PASS vacuously — no constraint declared
+    # means nothing to check (consistent with "all of [] are present" being true).
+    passed, _ = _plan_contains("anything goes", [])
+    assert passed is True
+
+
+def test_plan_contains_str_back_compat_pass() -> None:
+    # Existing str-form still works (back-compat).
+    passed, _ = _plan_contains("Hash Join on tmp_test02", "tmp_test02")
+    assert passed is True
+
+
+def test_plan_contains_str_back_compat_fail() -> None:
+    passed, detail = _plan_contains("Seq Scan", "Hash Join")
+    assert passed is False
+    assert "Hash Join" in detail
 
 
 # -- numeric comparators: non-numeric inputs return False with explanatory detail --
