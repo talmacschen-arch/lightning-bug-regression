@@ -3,10 +3,10 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 import CasesPage from './routes/CasesPage';
 import CaseDetailPage from './routes/CaseDetailPage';
+import CaseNewPage from './routes/CaseNewPage';
 import RunsPage from './routes/RunsPage';
 import RunNewPage from './routes/RunNewPage';
 import RunDetailPage from './routes/RunDetailPage';
-import CaseNewPage from './routes/CaseNewPage';
 import NotFoundPage from './routes/NotFoundPage';
 
 export default function App() {
