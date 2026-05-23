@@ -125,11 +125,30 @@ def _rows_affected(actual: int | None, expected: int) -> tuple[bool, str]:
     return passed, f"expected rows_affected == {expected}, got {actual}"
 
 
-def _plan_contains(actual: str | None, expected: str) -> tuple[bool, str]:
+def _plan_contains(actual: str | None, expected: str | list[str]) -> tuple[bool, str]:
+    """Pass iff every substring in expected appears in actual.
+
+    Per design.md §4.1 line 285:
+        plan_contains: ["Hash", "tmp_test02"]   # SQL 专用：plan 全部包含
+
+    Accepts either a single string (back-compat) or a list[str] (spec form).
+    Empty list passes vacuously: no constraint declared means nothing to check.
+    """
     if actual is None:
         return False, f"expected plan to contain {expected!r}, got None (actual is None)"
-    passed = expected in actual
-    return passed, f"expected plan to contain {expected!r}, got plan_text={actual!r}"
+    if isinstance(expected, str):
+        passed = expected in actual
+        return passed, f"expected plan to contain {expected!r}, got plan_text={actual!r}"
+    # list[str]: ALL must be present
+    missing = [needle for needle in expected if needle not in actual]
+    passed = not missing
+    if passed:
+        return True, f"expected plan to contain all of {expected!r}, got plan_text={actual!r}"
+    return (
+        False,
+        f"expected plan to contain all of {expected!r}, missing: {missing!r}, "
+        f"got plan_text={actual!r}",
+    )
 
 
 def _plan_contains_any(actual: str | None, expected: list[str]) -> tuple[bool, str]:
