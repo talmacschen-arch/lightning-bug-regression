@@ -290,3 +290,36 @@ async def test_close_all_closes_all_conns() -> None:
     assert conn_b.closed is True
     # Internal map cleared.
     assert pool._conns == {}
+
+
+# ---------------------------------------------------------------------------
+# (i) EXPLAIN query populates plan_text with joined plan rows
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_explain_query_populates_plan_text() -> None:
+    plan_row = "Seq Scan on t  (cost=0.00..1.01 rows=1 width=4)"
+    cursor = _FakeAsyncCursor(rows_sequence=[("description-marker", [(plan_row,)], 1)])
+    conn = _FakeAsyncConnection(cursor)
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        result = await execute_sql_step(pool, "s_explain", "default", "EXPLAIN SELECT 1")
+    assert result.status is StepStatus.PASS
+    assert result.plan_text is not None
+    assert result.plan_text != ""
+    # plan_text must contain the actual plan line, not repr'd tuples
+    assert plan_row in result.plan_text
+    assert result.plan_text == plan_row
+
+
+# ---------------------------------------------------------------------------
+# (ii) Non-EXPLAIN query has plan_text=None
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_non_explain_query_has_no_plan_text() -> None:
+    cursor = _FakeAsyncCursor(rows_sequence=[("description-marker", [(1,)], 1)])
+    conn = _FakeAsyncConnection(cursor)
+    pool = SqlSessionPool({"default": "postgresql://stub/db"})
+    with _patch_connect(conn):
+        result = await execute_sql_step(pool, "s_select", "default", "SELECT 1")
+    assert result.status is StepStatus.PASS
+    assert result.plan_text is None
