@@ -52,13 +52,20 @@ _CaseYamlLoader.add_implicit_resolver(
 # Category → required id-prefix. If a category is in the whitelist but not
 # in this dict, the loader does not enforce a prefix (forward-compat for
 # new categories added to `case_categories` before the loader ships).
+# Both dash and underscore forms are accepted (DB seeds use underscore;
+# legacy YAML files used dash).
 _CATEGORY_PREFIX = {
     "bug-regression": "lg-bug-",
+    "bug_regression": "lg-bug-",
     "feature-validation": "lg-feat-",
+    "feature_validation": "lg-feat-",
     "perf-regression": "lg-perf-",
+    "perf_regression": "lg-perf-",
     "ops-runbook": "lg-ops-",
+    "ops_runbook": "lg-ops-",
 }
 
+# Required top-level keys (sessions is optional — derived when absent).
 _REQUIRED_TOP_LEVEL = (
     "id",
     "category",
@@ -66,7 +73,6 @@ _REQUIRED_TOP_LEVEL = (
     "description",
     "procedure",
     "expected",
-    "sessions",
     "steps",
 )
 
@@ -99,7 +105,7 @@ class Step:
     id: str
     on: str  # session name (driver-routed)
     driver: Literal["sql", "shell", "log_grep"]
-    run: str  # raw template (Jinja rendered later)
+    run: str  # raw template (Jinja rendered later); empty string for log_grep
     timeout_ms: int | None = None
     expect: list[ExpectClause] = field(default_factory=list)
     continue_on_fail: bool = False
@@ -118,11 +124,61 @@ class Case:
     external_deps: list[str] = field(default_factory=list)
     destructive: bool = False
     status: Literal["open", "closed", "stub"] = "open"
+    setup: list[str] = field(default_factory=list)
+    teardown: list[str] = field(default_factory=list)
 
 
 def _err(path: Path, where: str, reason: str) -> CaseValidationError:
     """Build a CaseValidationError with the standard message format."""
     return CaseValidationError(f"{path}:{where}: {reason}")
+
+
+def _parse_setup_teardown(raw: Any) -> list[str]:
+    """Convert setup/teardown field to list[str].
+
+    Accepts:
+    - list[str] — stored as-is
+    - list[dict] — extract the first string value from each dict (forward compat)
+    - None / missing — return []
+    """
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        return []
+    result: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict):
+            # Forward compat: pick the first string value found
+            for v in item.values():
+                if isinstance(v, str):
+                    result.append(v)
+                    break
+    return result
+
+
+def _parse_expect(raw: Any) -> list[ExpectClause]:
+    """Parse expect field into list[ExpectClause].
+
+    Accepts two formats:
+    - list of single-key dicts: [{"exit_code": 0}, {"scalar_eq": 5}]  (old schema)
+    - plain dict: {"exit_code": 0, "scalar_eq": 5}  (real case format)
+    """
+    if not raw:
+        return []
+    if isinstance(raw, dict):
+        return [ExpectClause(key=k, value=v) for k, v in raw.items()]
+    if isinstance(raw, list):
+        clauses: list[ExpectClause] = []
+        for entry in raw:
+            if not isinstance(entry, dict) or len(entry) != 1:
+                # Caller will raise a proper error; return sentinel
+                return raw  # type: ignore[return-value]
+            ((e_key, e_val),) = entry.items()
+            clauses.append(ExpectClause(key=e_key, value=e_val))
+        return clauses
+    return []
 
 
 def load_case(path: Path, categories_whitelist: set[str]) -> Case:
@@ -132,16 +188,17 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
 
     * YAML syntax error
     * missing required top-level field (``id`` / ``category`` / ``title`` /
-      ``description`` / ``procedure`` / ``expected`` / ``sessions`` /
-      ``steps``)
+      ``description`` / ``procedure`` / ``expected`` / ``steps``)
     * ``category`` not in whitelist
     * ``id`` prefix mismatch for a known category (e.g.
-      ``category='bug-regression'`` requires id starting with ``lg-bug-``)
+      ``category='bug-regression'`` or ``category='bug_regression'`` requires
+      id starting with ``lg-bug-``)
     * ``id`` not equal to ``path.stem``
-    * step missing ``id`` / ``on`` / ``driver`` / ``run``
+    * step missing ``id``/``name`` and ``driver``/``kind`` fields
     * ``step.driver`` not in ``{sql, shell, log_grep}``
-    * ``step.on`` not in the case's ``sessions`` dict
-    * ``step.expect`` entry not a single-key mapping
+    * ``step.on`` not in the case's ``sessions`` dict (when sessions is
+      explicitly declared)
+    * ``step.expect`` entry not a single-key mapping (when list format)
     * ``destructive`` not a bool
     * ``status`` not in ``{open, closed, stub}``
     """
@@ -202,19 +259,24 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
             f"id '{case_id}' must equal filename stem '{path.stem}'",
         )
 
-    # --- sessions: dict[str, dict] ---
-    sessions_raw = data["sessions"]
-    if not isinstance(sessions_raw, dict) or not sessions_raw:
-        raise _err(path, "sessions", "sessions must be a non-empty mapping")
-    for s_name, s_cfg in sessions_raw.items():
-        if not isinstance(s_name, str) or not s_name:
-            raise _err(
-                path, "sessions", f"session name must be a non-empty string (got {s_name!r})"
-            )
-        if not isinstance(s_cfg, dict):
-            raise _err(path, f"sessions.{s_name}", "session config must be a mapping")
-
-    sessions: dict[str, dict] = dict(sessions_raw)
+    # --- sessions: optional dict[str, dict] ---
+    # When absent, derive a default session so steps can route to "default".
+    sessions_raw = data.get("sessions")
+    sessions_derived = False
+    if sessions_raw is None:
+        sessions = {"default": {"driver": "sql"}}
+        sessions_derived = True
+    else:
+        if not isinstance(sessions_raw, dict) or not sessions_raw:
+            raise _err(path, "sessions", "sessions must be a non-empty mapping")
+        for s_name, s_cfg in sessions_raw.items():
+            if not isinstance(s_name, str) or not s_name:
+                raise _err(
+                    path, "sessions", f"session name must be a non-empty string (got {s_name!r})"
+                )
+            if not isinstance(s_cfg, dict):
+                raise _err(path, f"sessions.{s_name}", "session config must be a mapping")
+        sessions = dict(sessions_raw)
 
     # --- steps: list[Step] ---
     steps_raw = data["steps"]
@@ -226,20 +288,23 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
         where = f"steps[{idx}]"
         if not isinstance(step_raw, dict):
             raise _err(path, where, "step must be a mapping")
-        for fld in ("id", "on", "driver", "run"):
-            if fld not in step_raw:
-                raise _err(path, f"{where}.{fld}", f"step missing required field '{fld}'")
-            if not isinstance(step_raw[fld], str) or not step_raw[fld]:
-                raise _err(
-                    path,
-                    f"{where}.{fld}",
-                    f"step field '{fld}' must be a non-empty string",
-                )
 
-        s_id = step_raw["id"]
-        s_on = step_raw["on"]
-        s_driver = step_raw["driver"]
-        s_run = step_raw["run"]
+        # --- id: accept "id" or "name" alias; auto-generate if both absent ---
+        s_id = step_raw.get("id") or step_raw.get("name") or f"step-{idx}"
+        if not isinstance(s_id, str) or not s_id:
+            s_id = f"step-{idx}"
+
+        # --- driver: accept "driver" or "kind" alias ---
+        s_driver_raw = step_raw.get("driver") or step_raw.get("kind")
+        if not s_driver_raw:
+            raise _err(path, f"{where}.driver", "step missing required field 'driver' or 'kind'")
+        if not isinstance(s_driver_raw, str):
+            raise _err(
+                path,
+                f"{where}.driver",
+                "step field 'driver'/'kind' must be a non-empty string",
+            )
+        s_driver = s_driver_raw
 
         if s_driver not in _VALID_DRIVERS:
             raise _err(
@@ -248,11 +313,39 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
                 f"driver '{s_driver}' must be one of {sorted(_VALID_DRIVERS)}",
             )
 
-        if s_on not in sessions:
+        # --- on: default to "default" when absent ---
+        s_on = step_raw.get("on", "default")
+        if not isinstance(s_on, str) or not s_on:
+            s_on = "default"
+
+        # Validate s_on against sessions only when sessions was explicitly
+        # declared (not auto-derived). When auto-derived, "default" is always
+        # valid and any explicit "on" value is accepted (runner resolves it).
+        if not sessions_derived and s_on not in sessions:
             raise _err(
                 path,
                 f"{where}.on",
                 f"on '{s_on}' not declared in case sessions {sorted(sessions)}",
+            )
+
+        # --- run: accept "run", "sql", "cmd", or "pattern" aliases ---
+        s_run_raw = (
+            step_raw.get("run")
+            or step_raw.get("sql")
+            or step_raw.get("cmd")
+            or step_raw.get("pattern")
+            or ""
+        )
+        if not isinstance(s_run_raw, str):
+            s_run_raw = str(s_run_raw)
+        s_run = s_run_raw
+
+        # For non-log_grep drivers, run must be non-empty
+        if s_driver != "log_grep" and not s_run:
+            raise _err(
+                path,
+                f"{where}.run",
+                "step missing required field 'run' / 'sql' / 'cmd'",
             )
 
         timeout_ms = step_raw.get("timeout_ms")
@@ -263,20 +356,25 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
         if not isinstance(continue_on_fail, bool):
             raise _err(path, f"{where}.continue_on_fail", "continue_on_fail must be a bool")
 
-        # expect: list of single-key mappings -> list[ExpectClause]
+        # expect: list of single-key mappings OR dict -> list[ExpectClause]
         expect_raw = step_raw.get("expect", [])
-        if not isinstance(expect_raw, list):
-            raise _err(path, f"{where}.expect", "expect must be a list of single-key mappings")
-        expect_clauses: list[ExpectClause] = []
-        for e_idx, entry in enumerate(expect_raw):
-            if not isinstance(entry, dict) or len(entry) != 1:
-                raise _err(
-                    path,
-                    f"{where}.expect[{e_idx}]",
-                    "expect entry must be a single-key mapping (e.g. '- exit_code: 0')",
-                )
-            ((e_key, e_val),) = entry.items()
-            expect_clauses.append(ExpectClause(key=e_key, value=e_val))
+        if isinstance(expect_raw, dict):
+            expect_clauses = [ExpectClause(key=k, value=v) for k, v in expect_raw.items()]
+        elif isinstance(expect_raw, list):
+            if not isinstance(expect_raw, list):
+                raise _err(path, f"{where}.expect", "expect must be a list of single-key mappings")
+            expect_clauses: list[ExpectClause] = []
+            for e_idx, entry in enumerate(expect_raw):
+                if not isinstance(entry, dict) or len(entry) != 1:
+                    raise _err(
+                        path,
+                        f"{where}.expect[{e_idx}]",
+                        "expect entry must be a single-key mapping (e.g. '- exit_code: 0')",
+                    )
+                ((e_key, e_val),) = entry.items()
+                expect_clauses.append(ExpectClause(key=e_key, value=e_val))
+        else:
+            raise _err(path, f"{where}.expect", "expect must be a list or mapping")
 
         steps.append(
             Step(
@@ -310,6 +408,9 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
             f"status '{status_raw}' must be one of {sorted(_VALID_STATUSES)}",
         )
 
+    setup = _parse_setup_teardown(data.get("setup"))
+    teardown = _parse_setup_teardown(data.get("teardown"))
+
     return Case(
         id=case_id,
         category=category,
@@ -322,4 +423,6 @@ def load_case(path: Path, categories_whitelist: set[str]) -> Case:
         external_deps=external_deps,
         destructive=destructive_raw,
         status=status_raw,  # type: ignore[arg-type]
+        setup=setup,
+        teardown=teardown,
     )
