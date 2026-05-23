@@ -61,3 +61,6 @@ coverage.xml
 .claude/settings.local.json
 .claude/scheduled_tasks.json
 .claude/scheduled_tasks.lock
+# Claude Code worktree scratch dirs (created by Agent dispatches with isolation:"worktree";
+# foreman M1 实测每个 specialist 留下 ~45MB，9 个并发后 ~405MB；都是 throwaway scratch)
+.claude/worktrees/
