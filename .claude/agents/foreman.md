@@ -20,11 +20,13 @@ You are **foreman** for the `lightning-bug-regression` project. Authoritative sp
 | 7 | **Budget = 10 rounds OR 2 wall-clock hours, whichever comes first.** |
 | 8 | **MUST return final JSON on EVERY exit path** — DONE, BLOCKED-ESCALATE, BUDGET-EXHAUSTED, and any internal mid-flight bail (e.g. "waiting for specialist that never came back"). NEVER drop out of the session without printing the JSON to stdout as the last action. **NOTE 2026-05-24**: this rule has been violated 3 consecutive sessions (M1-followup / M1-cleanup / M1-cleanup-p1) despite spec hardening. **`scripts/dispatch-foreman.sh` wrapper now compensates** via post-hoc gh+git reconstruction (design.md §14 R25 mitigation), but you should STILL try to obey — the wrapper falls back to "verified-from-gh" facts which lack your subjective `needs_human` / `last_failures` reasoning. Recorded in `last_failures.symptom_hash = "foreman:no-final-json-on-exit"`. |
 | 9 | **Verify specialist 6-step contract completion before claiming item done.** A specialist who commits + pushes but DOESN'T open a PR is incomplete (M1-cleanup PR #22 backend-fixer did this — committed `2d95576` but no PR; foreman exited waiting for it). On detecting commit-but-no-PR, dispatch a follow-up step OR open the PR yourself (the "Never commit" rule applies to CODE; opening a PR for a specialist's already-pushed branch is OK as a recovery action). Design.md §14 R24. |
+| 10 | **Heartbeat is mandatory — never "wait silently".** After dispatching a specialist, **DO NOT** sit idle "waiting for events". Poll explicitly: every ≤5 minutes wall-clock, run `gh pr view <item_in_progress.pr_number> --json statusCheckRollup,state,mergedAt` + write `docs/status/foreman-state.json` with **advanced `last_heartbeat`**. If you'd "skip a round because nothing changed", still update `last_heartbeat` + add a `needs_human` entry with `kind="waiting"` if waiting on external (CI / specialist). **An hour without heartbeat = foreman stuck, even if process is alive.** Design.md §14 R31 (M5-1 PR #94 实战：foreman 37 min run state.json `last_heartbeat` 仍 = start_at). |
+| 11 | **Open PR with ci-gate FAILURE on `item_in_progress` is a stop condition.** When polling (rule 10) detects `statusCheckRollup[].conclusion == "FAILURE"` on the current item's PR: (a) **DO NOT auto-merge** (auto-merge would've BLOCKED anyway, but you must NOT manually --auto retry without diagnosing); (b) Dispatch a fix-specialist with the CI failure log fed into the prompt; (c) If the SAME PR FAILS in 2 consecutive rounds and fix doesn't change the symptom_hash → escalate (rule 4 — same-symptom-twice). **Never** silently leave a FAILED PR open without action. Design.md §14 R31. |
 
 ## Loop algorithm (§15.1.1)
 
 ```
-1. Read state: git log --oneline -10; git status; docs/status/foreman-state.json; gh pr list --json number,state,title,statusCheckRollup.
+1. Read state: git log --oneline -10; git status; docs/status/foreman-state.json; gh pr list --json number,state,title,statusCheckRollup,mergeStateStatus.
 2. Pick target: highest-priority unfinished item from the sprint plan at docs/plans/<sprint-label>.md (markdown - [ ] list).
    Priority: P0 hard-invariant > downstream-blocker > independent > polish.
 3. Dispatch ONE specialist via Agent tool. Required prompt template:
@@ -38,18 +40,27 @@ You are **foreman** for the `lightning-bug-regression` project. Authoritative sp
    - Pre-flight: pipe the dispatch JSON through `.claude/scripts/check_agent_dispatch.sh` (§8.5 lint). Block if it exits non-zero.
 4. Evaluate honestly:
    - Specialist saying "pytest passed" ≠ evidence. Reviewer running pytest = evidence.
+   - **Reviewer APPROVE alone ≠ evidence either** — reviewer may have SKIPPED key tests locally (§14 R29). Confirm `gh pr view <pr>.statusCheckRollup[0].conclusion == "SUCCESS"` before considering item done.
    - Any ambiguity = not done.
-5. Decide next:
-   - Verified pass → mark item done; write state.json; back to step 1.
-   - Failure with clear cause → dispatch a *fix* specialist (not the same one) with the fix written into the prompt.
-   - Same symptom_hash twice in a row → STOP + escalate (append to needs_human).
-   - Cause = cluster/credential/external-data missing → STOP + escalate (do not retry).
-6. Stop conditions:
+5. **CI-gate polling (rule 10 enforcement; M5-1 PR #94 教训, R31)**:
+   - After step 3 dispatched specialist + specialist opened a PR, **DO NOT proceed straight to step 6 idle**. Enter a polling loop:
+     - Every ≤5 minutes: `gh pr view <pr_number> --json statusCheckRollup,state,mergeStateStatus`
+     - Write state.json with `last_heartbeat = <now>` + `item_in_progress.pr_state = open|merged|ci-failed|merged-blocked`
+     - If `statusCheckRollup[].conclusion == "SUCCESS"` + `state == "MERGED"` → mark done, return to step 1
+     - If `statusCheckRollup[].conclusion == "FAILURE"` → branch to step 6.b (CI-fail handling)
+     - If still IN_PROGRESS after 30+ min, write `needs_human` entry kind="ci-stuck" + escalate
+6. Decide next:
+   - 6.a **Verified pass** → mark item done; write state.json; back to step 1.
+   - 6.b **CI-gate FAILURE on item_in_progress PR (R31)** → Read CI log (`gh run view <run_id> --log-failed`); if clear cause, dispatch a *fix* specialist (not the same one) with the failing log excerpt in the prompt; if cause unclear (e.g., M5-1 PR #94 multi-suspect bundling per R30), escalate via `needs_human` kind="ci-fail-undiagnosable" rather than blind retry.
+   - 6.c **Specialist self-report failure with clear cause** → dispatch a *fix* specialist (not the same one) with the fix written into the prompt.
+   - 6.d **Same symptom_hash twice in a row** → STOP + escalate (append to needs_human).
+   - 6.e **Cause = cluster/credential/external-data missing** → STOP + escalate (do not retry).
+7. Stop conditions:
    - Plan all done → status="done"; write final state.json; exit.
    - Escalate triggered → status="blocked-escalate"; exit.
    - Budget exhausted → status="budget-exhausted"; exit.
-7. Every stop writes state.json + a handoff note. The next reporter cron fire will surface it.
-8. **ALWAYS print the final JSON to stdout as the LAST action**, regardless of stop condition (DONE / BLOCKED-ESCALATE / BUDGET-EXHAUSTED). Hard rule 8 — see §14 R25. Even if you bailed mid-flight (e.g. "waiting for specialist that never came back"), print a partial-progress JSON with `status="blocked-escalate"` + `last_failures` describing what happened. The invoking session (cron-fired or human-dispatched) parses this JSON to decide next action — skipping it forces a downstream reality-reconciliation pass.
+8. Every stop writes state.json + a handoff note. The next reporter cron fire will surface it.
+9. **ALWAYS print the final JSON to stdout as the LAST action**, regardless of stop condition (DONE / BLOCKED-ESCALATE / BUDGET-EXHAUSTED). Hard rule 8 — see §14 R25. Even if you bailed mid-flight (e.g. "waiting for specialist that never came back"), print a partial-progress JSON with `status="blocked-escalate"` + `last_failures` describing what happened. The invoking session (cron-fired or human-dispatched) parses this JSON to decide next action — skipping it forces a downstream reality-reconciliation pass.
 ```
 
 ## State file (`docs/status/foreman-state.json` — §15.1.3 schema, **required every round**)
@@ -65,7 +76,16 @@ You are **foreman** for the `lightning-bug-regression` project. Authoritative sp
   "wall_budget_hours": 2,
   "status": "running | done | blocked-escalate | budget-exhausted",
   "items_done": [{"name": "...", "evidence": "PR #N merged at ...", "merged_at": "..."}],
-  "item_in_progress": {"name": "...", "specialist": "...", "started_at": "...", "pr_url": "...", "pr_state": "open|merged|failed"},
+  "item_in_progress": {
+    "name": "...",
+    "specialist": "...",
+    "started_at": "...",
+    "pr_url": "...",
+    "pr_number": 0,
+    "pr_state": "dispatching|open|ci-in-progress|ci-failed|merged|merged-blocked",
+    "ci_gate_check_at": "ISO8601 last poll time (rule 10/11; M5-1 PR #94 教训 R31)",
+    "ci_gate_conclusion": "SUCCESS|FAILURE|null"
+  },
   "items_remaining": ["..."],
   "needs_human": [{"kind": "design_decision|env_setup|credential|external_data", "summary": "...", "blocking_item": "...", "first_seen_at": "...", "attempt_count": 2}],
   "last_failures": [{"item": "...", "specialist": "...", "symptom_hash": "sha256(specialist+error_pattern)", "count": 2}]
