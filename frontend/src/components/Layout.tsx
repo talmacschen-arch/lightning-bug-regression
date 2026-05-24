@@ -63,6 +63,9 @@ function pathToBreadcrumb(pathname: string): string {
   if (pathname.startsWith('/runs/diff')) return 'Runs / Diff';
   if (pathname.startsWith('/runs/')) return 'Runs / Detail';
   if (pathname === '/runs') return 'Runs';
+  if (pathname === '/admin') return 'Admin';
+  if (pathname.startsWith('/admin/skip-list')) return 'Admin / Skip list';
+  if (pathname.startsWith('/admin/settings')) return 'Admin / Settings';
   return pathname;
 }
 
@@ -78,7 +81,7 @@ export function Layout() {
           <NavItem to="/dashboard" label="Dashboard" testId="sidebar-nav-dashboard" />
           <NavItem to="/cases" label="Cases" testId="sidebar-nav-cases" />
           <NavItem to="/runs" label="Runs" testId="sidebar-nav-runs" />
-          <NavItem to="/admin" label="Admin" testId="sidebar-nav-admin" disabled />
+          <NavItem to="/admin" label="Admin" testId="sidebar-nav-admin" />
         </nav>
         <div
           data-testid="sidebar-active-run-pip"

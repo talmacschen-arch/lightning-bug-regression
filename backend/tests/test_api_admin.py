@@ -151,3 +151,162 @@ def test_categories_with_malformed_whitelist_returns_empty_list(
     assert resp.status_code == 200
     broken = next(c for c in resp.json() if c["name"] == "broken_cat")
     assert broken["status_whitelist"] == []
+
+
+# ---------------------------------------------------------------------------
+# M6-4 skip-list CRUD
+# ---------------------------------------------------------------------------
+
+
+def test_skip_list_empty_returns_empty_array(client: TestClient) -> None:
+    resp = client.get("/admin/skip-list")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_create_skip_list_entry_round_trip(client: TestClient) -> None:
+    resp = client.post(
+        "/admin/skip-list",
+        json={
+            "case_id": "lg-bug-9999-flaky",
+            "reason": "intermittent on 4.5.0 — needs ≥10 rounds (R28)",
+            "applies_to_version": "SynxDB-4.5.0-build130",
+            "upstream_issue": "https://example/issue/42",
+            "until_date": "2026-12-31",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["case_id"] == "lg-bug-9999-flaky"
+    assert body["reason"].startswith("intermittent on 4.5.0")
+    assert body["applies_to_version"] == "SynxDB-4.5.0-build130"
+    assert body["until_date"] == "2026-12-31"
+    assert isinstance(body["id"], int)
+
+    # GET should return the row
+    listing = client.get("/admin/skip-list").json()
+    assert len(listing) == 1
+    assert listing[0]["id"] == body["id"]
+
+
+def test_create_skip_list_entry_rejects_blank_required_fields(
+    client: TestClient,
+) -> None:
+    resp = client.post(
+        "/admin/skip-list",
+        json={"case_id": "  ", "reason": "x"},
+    )
+    assert resp.status_code == 400
+    resp = client.post(
+        "/admin/skip-list",
+        json={"case_id": "y", "reason": ""},
+    )
+    assert resp.status_code == 400
+
+
+def test_delete_skip_list_entry(client: TestClient) -> None:
+    resp = client.post(
+        "/admin/skip-list",
+        json={"case_id": "lg-bug-X", "reason": "test"},
+    )
+    eid = resp.json()["id"]
+    del_resp = client.delete(f"/admin/skip-list/{eid}")
+    assert del_resp.status_code == 204
+    # GET shows it's gone
+    assert client.get("/admin/skip-list").json() == []
+
+
+def test_delete_skip_list_404_for_unknown_id(client: TestClient) -> None:
+    resp = client.delete("/admin/skip-list/999999")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# M6-4 settings list/update
+# ---------------------------------------------------------------------------
+
+
+def test_settings_list_empty_returns_empty_array(client: TestClient) -> None:
+    resp = client.get("/admin/settings")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_update_setting_round_trip(client: TestClient) -> None:
+    resp = client.put(
+        "/admin/settings/jinja_context",
+        json={"value": {"cluster": "synxdb-0001", "extras": {"foo": "bar"}}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"] == "jinja_context"
+    assert body["value"]["cluster"] == "synxdb-0001"
+    assert body["value_type"] == "json"
+
+    # Listing should now contain it
+    listing = client.get("/admin/settings").json()
+    keys = [s["key"] for s in listing]
+    assert "jinja_context" in keys
+
+
+def test_update_setting_rejects_key_not_in_allowlist(client: TestClient) -> None:
+    resp = client.put("/admin/settings/random-key", json={"value": {}})
+    assert resp.status_code == 400
+    assert "allowlist" in resp.json()["detail"]
+
+
+def test_update_setting_rejects_non_dict_value(client: TestClient) -> None:
+    resp = client.put("/admin/settings/dev_db_url", json={"value": "string-value"})
+    assert resp.status_code == 400
+    resp = client.put("/admin/settings/dev_db_url", json={"value": ["a", "b"]})
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# M6-4 X-Admin-Password auth guard
+# ---------------------------------------------------------------------------
+
+
+def test_no_auth_required_when_admin_password_env_unset(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dev-mode: env unset → mutating endpoints work without header."""
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    resp = client.post(
+        "/admin/skip-list",
+        json={"case_id": "lg-bug-dev", "reason": "no auth in dev"},
+    )
+    assert resp.status_code == 201
+
+
+def test_mutation_blocked_without_password_when_env_set(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
+    resp = client.post(
+        "/admin/skip-list",
+        json={"case_id": "lg-bug-blocked", "reason": "no header"},
+    )
+    assert resp.status_code == 401
+
+
+def test_mutation_allowed_with_correct_password(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
+    resp = client.post(
+        "/admin/skip-list",
+        headers={"X-Admin-Password": "secret-pw-2026"},
+        json={"case_id": "lg-bug-ok", "reason": "with header"},
+    )
+    assert resp.status_code == 201
+
+
+def test_get_endpoints_remain_open_with_admin_password(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GETs should still work without password (read-only access OK)."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
+    assert client.get("/admin/skip-list").status_code == 200
+    assert client.get("/admin/settings").status_code == 200
+    assert client.get("/admin/categories").status_code == 200
