@@ -60,6 +60,7 @@ function pathToBreadcrumb(pathname: string): string {
   if (pathname.startsWith('/cases/')) return 'Cases / Detail';
   if (pathname === '/cases') return 'Cases';
   if (pathname.startsWith('/runs/new')) return 'Runs / New';
+  if (pathname.startsWith('/runs/diff')) return 'Runs / Diff';
   if (pathname.startsWith('/runs/')) return 'Runs / Detail';
   if (pathname === '/runs') return 'Runs';
   return pathname;
