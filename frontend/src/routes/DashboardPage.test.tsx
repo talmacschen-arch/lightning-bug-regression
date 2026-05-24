@@ -274,6 +274,32 @@ describe('DashboardPage (M5-2)', () => {
         expect(screen.getByTestId('dashboard-recent-activity-empty')).toBeInTheDocument();
       });
     });
+
+    it('shows "Compare last 2 runs" CTA when ≥2 runs exist', async () => {
+      // FAKE_RUNS has 3 runs (id 42 newest, 41, 40 oldest)
+      setupMocks();
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-compare-previous')).toBeInTheDocument();
+      });
+      const link = screen.getByTestId('dashboard-compare-previous');
+      expect(link.tagName).toBe('A');
+      // a=older (runs[1]=41), b=newer (runs[0]=42)
+      expect(link.getAttribute('href')).toBe('/runs/diff?a=41&b=42');
+    });
+
+    it('hides Compare CTA when fewer than 2 runs', async () => {
+      setupMocks({
+        runs: [
+          { id: 42, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 1, passed: 1, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+        ],
+      });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-recent-activity')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('dashboard-compare-previous')).toBeNull();
+    });
   });
 
   describe('Quick actions — data-driven from categories', () => {

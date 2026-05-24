@@ -109,6 +109,11 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       renderAt('/runs/42');
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Runs / Detail');
     });
+
+    it('breadcrumb shows Runs / Diff at /runs/diff', () => {
+      renderAt('/runs/diff?a=1&b=2');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Runs / Diff');
+    });
   });
 
   describe('navigation contract', () => {

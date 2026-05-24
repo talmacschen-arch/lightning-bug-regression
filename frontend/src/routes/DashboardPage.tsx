@@ -181,9 +181,25 @@ function RecentActivity({ runs }: RecentActivityProps) {
       </div>
     );
   }
+  // M6-3: when ≥2 runs exist, show "Compare with previous run" deep link
+  // to /runs/diff?a=<older>&b=<latest>. runs[] is newest-first from API.
+  const compareCta =
+    runs.length >= 2 ? (
+      <Link
+        to={`/runs/diff?a=${runs[1].id}&b=${runs[0].id}`}
+        data-testid="dashboard-compare-previous"
+        className="dashboard-section-link"
+      >
+        Compare last 2 runs →
+      </Link>
+    ) : null;
+
   return (
     <div data-testid="dashboard-recent-activity" className="dashboard-section">
-      <div className="dashboard-section-title">Recent activity</div>
+      <div className="dashboard-section-title flex items-baseline justify-between">
+        <span>Recent activity</span>
+        {compareCta}
+      </div>
       <ul className="dashboard-activity-list">
         {runs.slice(0, 10).map((r) => (
           <li

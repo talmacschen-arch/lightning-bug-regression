@@ -8,6 +8,7 @@ import CaseNewPage from './routes/CaseNewPage';
 import RunsPage from './routes/RunsPage';
 import RunNewPage from './routes/RunNewPage';
 import RunDetailPage from './routes/RunDetailPage';
+import RunsDiffPage from './routes/RunsDiffPage';
 import NotFoundPage from './routes/NotFoundPage';
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/cases/:id" element={<CaseDetailPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/new" element={<RunNewPage />} />
+          <Route path="/runs/diff" element={<RunsDiffPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
