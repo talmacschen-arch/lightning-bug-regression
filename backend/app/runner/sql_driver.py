@@ -4,6 +4,19 @@ Per-session connection pool: maps session name (from step.on / YAML
 sessions.<name>) to a persistent psycopg AsyncConnection so a suite's
 SET / BEGIN / temp-table state survives across steps with the same on:.
 
+**Scope (per design.md §4.1.2)**: this driver is for tx-safe SQL ONLY.
+Non-tx-safe DDL (VACUUM / ANALYZE 顶层 / CREATE DATABASE / DROP DATABASE /
+REINDEX CONCURRENTLY / CREATE INDEX CONCURRENTLY / CREATE/DROP TABLESPACE /
+ALTER SYSTEM / CLUSTER) MUST be written in YAML as `kind: shell` +
+`cmd: su - gpadmin -c "psql -c '<DDL>'"` per the §4.1.2 convention. This
+driver does NOT attempt to detect or auto-route non-tx-safe DDL — earlier
+versions had a `_needs_autocommit` regex + autocommit branch but it kept
+tripping over psycopg AsyncConnection semantics (`autocommit` is a
+read-only property + can't switch while INTRANS); maintaining it was an
+arms race. Non-tx-safe DDL sent through `kind: sql` will fail with PG's
+own error ("VACUUM cannot run inside a transaction block") which is the
+desired fail-fast: the YAML author then rewrites per §4.1.2.
+
 Timeout: dual-layer per §14 R5:
   layer 1: psycopg `SET statement_timeout = <ms>` per connection
   layer 2: asyncio.wait_for(coro, timeout=ms/1000 + 1.0)
@@ -31,41 +44,6 @@ import psycopg
 from psycopg import AsyncConnection
 
 from app.runner.types import StepError, StepResult, StepStatus
-
-# Regex: SQL that cannot run inside a transaction block (per §14 R5/R9 / F-3).
-# Matches if ANY statement in the SQL starts with one of these DDL keywords.
-#
-# **Known uncovered patterns** (defense-in-depth gap, accepted per §4.1.2):
-#   - CREATE / DROP INDEX CONCURRENTLY  (PG: explicitly non-tx)
-#   - CREATE / DROP TABLESPACE          (some distros require non-tx)
-#   - other vendor-specific DDL we haven't catalogued
-#
-# We do NOT try to exhaustively enumerate every non-tx-safe DDL — that
-# arms race is brittle (every new PG version may add one). The **first-line
-# defense** is the design.md §4.1.2 convention: YAML authors write
-# `psql -c '<DDL>'` for ANY non-tx-safe DDL, which the dogfood normalizer
-# routes to shell_driver and never enters this sql_driver code path.
-# This regex is the **second-line tripwire** — only catches what we know
-# about. Missing patterns slip through and surface as a clear PG error
-# ("CREATE INDEX CONCURRENTLY cannot run inside a transaction block")
-# in stderr, at which point the YAML author should rewrite the case per
-# §4.1.2 rather than us patching this regex.
-_NON_TX_DDL_RE = re.compile(
-    r"(?:^|;\s*)(?:DROP\s+DATABASE|CREATE\s+DATABASE|VACUUM|REINDEX\s+CONCURRENTLY"
-    r"|ALTER\s+SYSTEM|CLUSTER)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-def _needs_autocommit(sql: str) -> bool:
-    """Return True if sql contains non-transaction-safe DDL (F-3 defense-in-depth).
-
-    Primary convention is design.md §4.1.2 (`psql -c '<DDL>'` in YAML);
-    this only catches cases that slipped past it. Known uncovered patterns
-    listed in `_NON_TX_DDL_RE` docstring above.
-    """
-    return bool(_NON_TX_DDL_RE.search(sql))
-
 
 # Regex: detect whether an SQL string starts with EXPLAIN (per F-2 plan_text populate).
 _EXPLAIN_RE = re.compile(r"(?:^|;)\s*EXPLAIN\b", re.IGNORECASE)
@@ -150,121 +128,75 @@ async def execute_sql_step(
                     pass
 
         conn.add_notice_handler(_on_notice)
-        needs_ac = _needs_autocommit(sql)
         try:
-            if needs_ac:
-                # Non-tx-safe DDL: must run outside a transaction.
-                # Roll back any open transaction first (e.g. from SET statement_timeout
-                # on a prior step), then issue our own SET inside the still-implicit
-                # transaction, then switch to autocommit mode. Order matters:
-                # SET statement_timeout requires an active transaction context;
-                # once autocommit=True there is no implicit tx, so SET would either
-                # fail or behave inconsistently (§14 R5 — symmetric timeout layering
-                # must apply to autocommit DDL too, not just the tx branch).
-                try:
-                    await conn.rollback()
-                except Exception:
-                    pass
-                if timeout_ms is not None and timeout_ms > 0:
-                    await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
-                # psycopg AsyncConnection.autocommit is read-only as property —
-                # must use await set_autocommit() (sync conn allows assignment;
-                # AsyncConnection does not). M4a-2 dogfood (case lg-bug-0008
-                # VACUUM FULL) tripped this with AttributeError.
-                await conn.set_autocommit(True)
-                async with conn.cursor() as cur:
-                    await cur.execute(sql)
-                    # DDL returns no rows.
-                    ended = _iso_now()
-                    duration_ms = int((time.monotonic() - t0) * 1000)
-                    return StepResult(
-                        status=StepStatus.PASS,
-                        step_id=step_id,
-                        driver="sql",
-                        started_at=started,
-                        ended_at=ended,
-                        duration_ms=duration_ms,
-                        stdout="",
-                        stderr="\n".join(notices),
-                        rows_affected=cur.rowcount if cur.rowcount >= 0 else None,
-                    )
-            else:
-                if timeout_ms is not None and timeout_ms > 0:
-                    await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
-                async with conn.cursor() as cur:
-                    await cur.execute(sql)
-                    # Walk to LAST result set when multi-statement.
-                    last_rows: list[tuple] | None = None
-                    last_rowcount: int = cur.rowcount
+            if timeout_ms is not None and timeout_ms > 0:
+                await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
+            async with conn.cursor() as cur:
+                await cur.execute(sql)
+                # Walk to LAST result set when multi-statement.
+                last_rows: list[tuple] | None = None
+                last_rowcount: int = cur.rowcount
+                last_description = cur.description
+                if cur.description is not None:
+                    last_rows = await cur.fetchall()
+                # Cycle through additional result sets if present (F-3 multi-statement).
+                while cur.nextset():
+                    last_rowcount = cur.rowcount
                     last_description = cur.description
                     if cur.description is not None:
                         last_rows = await cur.fetchall()
-                    # Cycle through additional result sets if present (F-3 multi-statement).
-                    while cur.nextset():
-                        last_rowcount = cur.rowcount
-                        last_description = cur.description
-                        if cur.description is not None:
-                            last_rows = await cur.fetchall()
-                    ended = _iso_now()
-                    duration_ms = int((time.monotonic() - t0) * 1000)
-                    scalar = None
-                    row_count: int | None = None
-                    rows_affected: int | None = None
-                    stdout = ""
-                    if last_description is not None and last_rows is not None:
-                        row_count = len(last_rows)
-                        if last_rows and last_rows[0]:
-                            scalar = last_rows[0][0]
-                        # render small preview
-                        stdout = "\n".join(repr(r) for r in last_rows[:20])
-                    else:
-                        rows_affected = last_rowcount if last_rowcount >= 0 else None
-                    # F-2: populate plan_text from EXPLAIN output (raw line strings, not repr'd).
-                    plan_text: str | None = None
-                    if (
-                        _is_explain_query(sql)
-                        and last_description is not None
-                        and last_rows is not None
-                    ):
-                        # EXPLAIN output: each row is typically (plan_line,) — 1-column text.
-                        plan_text = "\n".join(str(r[0]) for r in last_rows)
-                    return StepResult(
-                        status=StepStatus.PASS,
-                        step_id=step_id,
-                        driver="sql",
-                        started_at=started,
-                        ended_at=ended,
-                        duration_ms=duration_ms,
-                        stdout=stdout,
-                        stderr="\n".join(notices),
-                        scalar=scalar,
-                        row_count=row_count,
-                        rows_affected=rows_affected,
-                        plan_text=plan_text,
-                    )
+                ended = _iso_now()
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                scalar = None
+                row_count: int | None = None
+                rows_affected: int | None = None
+                stdout = ""
+                if last_description is not None and last_rows is not None:
+                    row_count = len(last_rows)
+                    if last_rows and last_rows[0]:
+                        scalar = last_rows[0][0]
+                    # render small preview
+                    stdout = "\n".join(repr(r) for r in last_rows[:20])
+                else:
+                    rows_affected = last_rowcount if last_rowcount >= 0 else None
+                # F-2: populate plan_text from EXPLAIN output (raw line strings, not repr'd).
+                plan_text: str | None = None
+                if (
+                    _is_explain_query(sql)
+                    and last_description is not None
+                    and last_rows is not None
+                ):
+                    # EXPLAIN output: each row is typically (plan_line,) — 1-column text.
+                    plan_text = "\n".join(str(r[0]) for r in last_rows)
+                return StepResult(
+                    status=StepStatus.PASS,
+                    step_id=step_id,
+                    driver="sql",
+                    started_at=started,
+                    ended_at=ended,
+                    duration_ms=duration_ms,
+                    stdout=stdout,
+                    stderr="\n".join(notices),
+                    scalar=scalar,
+                    row_count=row_count,
+                    rows_affected=rows_affected,
+                    plan_text=plan_text,
+                )
         except Exception as exc:
-            # In autocommit mode (F-3 DDL path) there's no open tx to roll back —
-            # `rollback()` is harmless but misleading. Guard so the call only fires
-            # when it's semantically meaningful.
-            if not getattr(conn, "autocommit", False):
-                try:
-                    await conn.rollback()
-                except Exception:
-                    pass
+            # Roll back any open tx so the connection is usable for the next
+            # step. Per §4.1.2 we no longer try to handle non-tx-safe DDL
+            # here — those go through psql -c / shell driver, so this driver
+            # is always inside a normal tx that rollback restores cleanly.
+            try:
+                await conn.rollback()
+            except Exception:
+                pass
             return _err(step_id, started, t0, f"{type(exc).__name__}: {exc}", notices)
         finally:
             try:
                 conn.remove_notice_handler(_on_notice)
             except Exception:
                 pass
-            if needs_ac:
-                # Restore autocommit=False so future steps on this connection are
-                # transactional. AsyncConnection requires await set_autocommit()
-                # (see comment at line ~170 — same bug, symmetric fix).
-                try:
-                    await conn.set_autocommit(False)
-                except Exception:
-                    pass
 
     if timeout_ms is not None and timeout_ms > 0:
         try:

@@ -84,13 +84,9 @@ class _FakeAsyncCursor:
 class _FakeAsyncConnection:
     """Minimal AsyncConnection stub with notice-handler hooks.
 
-    Matches psycopg AsyncConnection's API contract for autocommit: the
-    `autocommit` attribute is readable (so production code can do
-    `getattr(conn, "autocommit", False)` for the rollback guard) but
-    must be mutated via the async `set_autocommit()` method — direct
-    assignment would fail on a real AsyncConnection (M4a-2 dogfood
-    case lg-bug-0008 tripped this when sql_driver.py used `conn.
-    autocommit = True` which is read-only on async connections).
+    Post-§4.1.2 refactor: this driver no longer handles non-tx-safe DDL
+    via autocommit (those go through psql -c / shell driver). So this
+    fake doesn't need autocommit / set_autocommit machinery either.
     """
 
     def __init__(self, cursor: _FakeAsyncCursor) -> None:
@@ -99,7 +95,6 @@ class _FakeAsyncConnection:
         self.executed: list[str] = []
         self.closed = False
         self.rollbacks = 0
-        self.autocommit: bool = False
 
     def cursor(self) -> _FakeAsyncCursor:
         return self._cursor
@@ -112,12 +107,6 @@ class _FakeAsyncConnection:
 
     async def close(self) -> None:
         self.closed = True
-
-    async def set_autocommit(self, value: bool) -> None:
-        """psycopg AsyncConnection requires this async setter; the
-        attribute is read-only as a property on real connections.
-        Tests can still read `.autocommit` via getattr for assertions."""
-        self.autocommit = value
 
     def add_notice_handler(self, cb: Any) -> None:
         self._handlers.append(cb)
@@ -309,49 +298,13 @@ async def test_close_all_closes_all_conns() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (i) DROP DATABASE triggers autocommit=True, restored to False after (F-3)
+# (i) Non-tx-safe DDL handling REMOVED per §4.1.2 (M4a-2 dogfood refactor)
+#     VACUUM / CREATE DATABASE / REINDEX CONCURRENTLY / etc. now go through
+#     `kind: shell + cmd: psql -c '...'` in YAML, NOT through sql_driver.
+#     The old tests for autocommit branch / rollback-before-autocommit /
+#     SET-before-autocommit / restore-autocommit-False have been deleted —
+#     that code path is gone. Tests (j) / (k) / (n) / (o) removed with it.
 # ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_ddl_runs_with_autocommit() -> None:
-    """DROP DATABASE is detected as non-tx-safe DDL; driver switches autocommit=True."""
-    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
-    conn = _FakeAsyncConnection(cursor)
-    pool = SqlSessionPool({"default": "postgresql://stub/db"})
-    with _patch_connect(conn):
-        result = await execute_sql_step(pool, "ddl-step", "default", "DROP DATABASE IF EXISTS mydb")
-    assert result.status is StepStatus.PASS
-    # autocommit was set to True during execution, then restored to False.
-    assert conn.autocommit is False  # restored
-
-
-# ---------------------------------------------------------------------------
-# (j) Regular SELECT does not modify conn.autocommit (F-3)
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_regular_sql_does_not_touch_autocommit() -> None:
-    """Regular SELECT does not modify conn.autocommit."""
-    cursor = _FakeAsyncCursor(rows_sequence=[("d", [(1,)], 1)])
-    conn = _FakeAsyncConnection(cursor)
-    assert conn.autocommit is False
-    pool = SqlSessionPool({"default": "postgresql://stub/db"})
-    with _patch_connect(conn):
-        result = await execute_sql_step(pool, "s1", "default", "SELECT 1")
-    assert result.status is StepStatus.PASS
-    assert conn.autocommit is False  # unchanged
-
-
-# ---------------------------------------------------------------------------
-# (k) rollback() is called before switching to autocommit (F-3)
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_ddl_rollback_called_before_autocommit() -> None:
-    """Driver calls rollback() before switching to autocommit (clears any open tx)."""
-    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
-    conn = _FakeAsyncConnection(cursor)
-    pool = SqlSessionPool({"default": "postgresql://stub/db"})
-    with _patch_connect(conn):
-        await execute_sql_step(pool, "ddl", "default", "CREATE DATABASE testdb")
-    assert conn.rollbacks >= 1  # rollback was called before autocommit switch
 
 
 # ---------------------------------------------------------------------------
@@ -387,83 +340,5 @@ async def test_non_explain_query_has_no_plan_text() -> None:
     assert result.plan_text is None
 
 
-# ---------------------------------------------------------------------------
-# (n) Autocommit DDL branch issues SET statement_timeout BEFORE switching
-#     to autocommit (§14 R5 — symmetric timeout layering).
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_autocommit_ddl_sets_statement_timeout_before_autocommit() -> None:
-    """DDL path must SET statement_timeout while still inside the implicit tx,
-    i.e. BEFORE conn.autocommit = True. Once autocommit is True there is no
-    implicit transaction context for SET to live in.
-
-    This test pins the ordering: we record which SQL strings hit conn.execute
-    (driver-level, used for SET) vs cursor.execute (DDL itself) and verify the
-    SET happens first in conn.executed AND that autocommit was flipped True
-    *after* the SET (we observe via the rollback->SET->autocommit ordering).
-    """
-    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
-
-    # Track autocommit transition timestamps relative to executed-list growth.
-    # We override __setattr__ via a subclass so we can capture WHEN the
-    # autocommit flag flipped relative to the conn.executed list snapshot.
-    class _OrderingConn(_FakeAsyncConnection):
-        def __init__(self, cur: _FakeAsyncCursor) -> None:
-            super().__init__(cur)
-            self.executed_len_when_autocommit_set: int | None = None
-
-        def __setattr__(self, name: str, value: object) -> None:
-            if name == "autocommit" and value is True:
-                # Capture the size of executed at the moment autocommit flips True.
-                # Use object.__setattr__ to avoid recursion / the not-yet-initialized
-                # attribute case during base __init__.
-                executed = self.__dict__.get("executed")
-                if executed is not None:
-                    object.__setattr__(self, "executed_len_when_autocommit_set", len(executed))
-            object.__setattr__(self, name, value)
-
-    conn = _OrderingConn(cursor)
-    pool = SqlSessionPool({"default": "postgresql://stub/db"})
-    with _patch_connect(conn):
-        result = await execute_sql_step(
-            pool,
-            "ddl-timeout",
-            "default",
-            "DROP DATABASE IF EXISTS mydb",
-            timeout_ms=5000,
-        )
-    assert result.status is StepStatus.PASS
-    # SET statement_timeout was issued.
-    set_indices = [i for i, q in enumerate(conn.executed) if "statement_timeout = 5000" in q]
-    assert set_indices, f"expected SET statement_timeout in conn.executed, got {conn.executed!r}"
-    # The SET must appear BEFORE autocommit was switched to True. The captured
-    # length equals the number of conn.execute() calls completed prior to the
-    # flip — the SET's index must be < that length.
-    assert conn.executed_len_when_autocommit_set is not None, "autocommit was never set to True"
-    assert set_indices[0] < conn.executed_len_when_autocommit_set, (
-        f"SET (idx={set_indices[0]}) must precede autocommit flip "
-        f"(executed_len at flip={conn.executed_len_when_autocommit_set})"
-    )
-    # And rollback happened before SET (clears any pre-existing tx state).
-    assert conn.rollbacks >= 1
-
-
-# ---------------------------------------------------------------------------
-# (o) Autocommit DDL branch with timeout_ms=None issues NO SET — preserve
-#     existing behavior when caller declines a timeout (§14 R5: opt-in).
-# ---------------------------------------------------------------------------
-@pytest.mark.asyncio
-async def test_autocommit_ddl_without_timeout_issues_no_set() -> None:
-    """When timeout_ms is None or 0, the DDL path must not issue any SET on
-    the connection (matches the tx branch's opt-in behavior)."""
-    cursor = _FakeAsyncCursor(rows_sequence=[(None, None, 0)])
-    conn = _FakeAsyncConnection(cursor)
-    pool = SqlSessionPool({"default": "postgresql://stub/db"})
-    with _patch_connect(conn):
-        result = await execute_sql_step(
-            pool, "ddl-no-timeout", "default", "DROP DATABASE IF EXISTS mydb"
-        )
-    assert result.status is StepStatus.PASS
-    assert not any("statement_timeout" in q for q in conn.executed), (
-        f"expected no SET statement_timeout when timeout_ms=None, got {conn.executed!r}"
-    )
+# Tests (n) and (o) (autocommit DDL SET-ordering / timeout opt-in) removed
+# with the autocommit branch per §4.1.2 refactor — see comment block at (i).
