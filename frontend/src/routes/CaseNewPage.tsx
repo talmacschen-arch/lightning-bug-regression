@@ -146,7 +146,7 @@ export default function CaseNewPage() {
     setPanelMsg(null);
     setPrResult(null);
     try {
-      const resp = await postJson<ValidateResponse>('/api/cases/validate', {
+      const resp = await postJson<ValidateResponse>('/cases/validate', {
         yaml: yamlText,
       });
       setValidateOk(resp.ok);
@@ -172,7 +172,7 @@ export default function CaseNewPage() {
     setPanelMsg(null);
     setPrResult(null);
     try {
-      const resp = await postJson<TryResponse>('/api/cases/try', {
+      const resp = await postJson<TryResponse>('/cases/try', {
         yaml: yamlText,
       });
       setTryOk(resp.ok);
@@ -200,7 +200,7 @@ export default function CaseNewPage() {
         return;
       }
       const branchName = `case/${caseId}`;
-      const resp = await postJson<SubmitResponse>('/api/cases/submit', {
+      const resp = await postJson<SubmitResponse>('/cases/submit', {
         yaml: yamlText,
         case_id: caseId,
         branch_name: branchName,
