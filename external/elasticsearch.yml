@@ -1,0 +1,15 @@
+# external/elasticsearch.yml — runtime config for cases that reference
+# `external_deps: [elasticsearch]` (M6-5).
+#
+# Case YAMLs render this via Jinja:
+#   {{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}
+#   {{ external.elasticsearch.extras.scheme }}
+#
+# Override per env via env var `EXTERNAL_DEPS_DIR=/path/to/external/` or
+# by editing this file. Not checked into prod — sample values committed
+# for the M4c-1 dogfood (lg-xs-zombodb-partition-text-search).
+host: 192.168.195.203
+port: 9200
+extras:
+  scheme: http
+  version: 7.10.2

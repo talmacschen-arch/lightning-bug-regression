@@ -163,6 +163,36 @@ class TestNormalizeCaseTopLevel:
         out = normalize_case(raw)
         assert out["destructive"] is True
 
+    def test_preserves_external_deps_for_m6_5_loader(self):
+        """M6-5: orchestrator-shaped dict must carry through external_deps
+        so external_deps_loader.collect_external_deps() can pick it up."""
+        raw = {
+            "id": "lg-xs-test",
+            "external_deps": ["elasticsearch", "hive"],
+            "steps": [{"id": "s1", "kind": "shell", "cmd": "echo ok"}],
+        }
+        out = normalize_case(raw)
+        assert out["external_deps"] == ["elasticsearch", "hive"]
+
+    def test_external_deps_missing_defaults_to_empty_list(self):
+        raw = {
+            "id": "x",
+            "steps": [{"id": "s1", "kind": "shell", "cmd": "echo ok"}],
+        }
+        out = normalize_case(raw)
+        assert out["external_deps"] == []
+
+    def test_external_deps_non_list_treated_as_empty(self):
+        """Schema validation upstream (yaml_loader) rejects non-list, but
+        case_normalizer is defensive — output stays a list."""
+        raw = {
+            "id": "x",
+            "external_deps": "not-a-list",
+            "steps": [{"id": "s1", "kind": "shell", "cmd": "echo ok"}],
+        }
+        out = normalize_case(raw)
+        assert out["external_deps"] == []
+
     def test_real_lg_bug_0001_shape_does_not_crash(self):
         # Mini reproduction of the actual lg-bug-0001 YAML — proves
         # `setup: list[str]` no longer breaks the orchestrator path.
