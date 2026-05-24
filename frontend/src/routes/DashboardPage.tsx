@@ -1,0 +1,369 @@
+/**
+ * M5-2 Dashboard `/` landing page.
+ *
+ * Replaces "/" → "/cases" redirect with a real overview page covering:
+ *   1. KPI: cases-by-category counts (one tile per active category, data
+ *      driven from GET /admin/categories — §14 R4b no hardcoded names)
+ *   2. KPI: BUG status pie (proportions of open/fixed/wontfix/stub)
+ *   3. KPI: Extension stability (proportions of stable/experimental/etc)
+ *   4. KPI: Recent runs (count + pass/fail tally of last 10 runs)
+ *   5. Recent activity list (last 10 runs, click → /runs/:id)
+ *   6. Quick actions row (preset "Run all <category> <status>" buttons →
+ *      /runs/new?category=X&status=Y; M5-5 will read these query params)
+ *
+ * Deliberately minimal (same path as M5-1):
+ *   - No chart library (counts shown as numbers + percent bar)
+ *   - Vitest unit tests only, no playwright
+ *   - All aggregation is client-side over the existing endpoints
+ *   - apiFetch via the shared client (R27: no inline URLs)
+ */
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { apiFetch } from '@/api/client';
+import type { components } from '@/api/types';
+
+type CategoryOut = components['schemas']['CategoryOut'];
+type CaseSummary = components['schemas']['CaseSummary'];
+type RunSummary = components['schemas']['RunSummary'];
+
+interface DashboardData {
+  categories: CategoryOut[];
+  casesByCategory: Record<string, CaseSummary[]>;
+  recentRuns: RunSummary[];
+}
+
+function formatRelative(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const diffM = Math.floor(diffMs / 60_000);
+  if (diffM < 1) return 'just now';
+  if (diffM < 60) return `${diffM}m ago`;
+  const diffH = Math.floor(diffM / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  return `${Math.floor(diffH / 24)}d ago`;
+}
+
+function statusToBadgeClass(status: string): string {
+  // Simple semantic mapping (not tied to specific category names; covers
+  // common keywords across all 3 categories per design.md §16)
+  if (status === 'pass' || status === 'fixed' || status === 'stable') {
+    return 'badge-success';
+  }
+  if (status === 'fail' || status === 'open') {
+    return 'badge-danger';
+  }
+  if (status === 'running') return 'badge-warning';
+  return 'badge-muted';
+}
+
+// ---- KPI tiles --------------------------------------------------------------
+
+interface CategoryCountTileProps {
+  category: CategoryOut;
+  cases: CaseSummary[];
+}
+
+function CategoryCountTile({ category, cases }: CategoryCountTileProps) {
+  return (
+    <div
+      data-testid={`dashboard-kpi-category-${category.name}`}
+      className="kpi-tile"
+    >
+      <div className="kpi-tile-label">{category.display_name}</div>
+      <div className="kpi-tile-value">{cases.length}</div>
+      <Link to={`/cases?category=${category.name}`} className="kpi-tile-link">
+        View →
+      </Link>
+    </div>
+  );
+}
+
+interface StatusBreakdownTileProps {
+  testid: string;
+  title: string;
+  cases: CaseSummary[];
+  statusWhitelist: string[];
+}
+
+function StatusBreakdownTile({
+  testid,
+  title,
+  cases,
+  statusWhitelist,
+}: StatusBreakdownTileProps) {
+  const counts: Record<string, number> = {};
+  for (const s of statusWhitelist) counts[s] = 0;
+  for (const c of cases) {
+    if (c.status in counts) counts[c.status] += 1;
+  }
+  const total = cases.length || 1;
+  return (
+    <div data-testid={testid} className="kpi-tile kpi-tile-wide">
+      <div className="kpi-tile-label">{title}</div>
+      <div className="kpi-tile-rows">
+        {statusWhitelist.map((status) => {
+          const n = counts[status];
+          const pct = Math.round((n / total) * 100);
+          return (
+            <div
+              key={status}
+              data-testid={`${testid}-row-${status}`}
+              className="kpi-row"
+            >
+              <span className={`badge ${statusToBadgeClass(status)}`}>
+                {status}
+              </span>
+              <span className="kpi-row-count">{n}</span>
+              <span className="kpi-row-bar">
+                <span
+                  className="kpi-row-bar-fill"
+                  style={{ width: `${pct}%` }}
+                />
+              </span>
+              <span className="kpi-row-pct">{pct}%</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface RecentRunsTileProps {
+  runs: RunSummary[];
+}
+
+function RecentRunsTile({ runs }: RecentRunsTileProps) {
+  const pass = runs.filter((r) => r.status === 'pass').length;
+  const fail = runs.filter((r) => r.status === 'fail').length;
+  const running = runs.filter((r) => r.status === 'running').length;
+  return (
+    <div data-testid="dashboard-kpi-recent-runs" className="kpi-tile">
+      <div className="kpi-tile-label">Recent runs (last {runs.length})</div>
+      <div className="kpi-tile-value">{runs.length}</div>
+      <div className="kpi-tile-sub">
+        <span className="badge badge-success">{pass} pass</span>{' '}
+        <span className="badge badge-danger">{fail} fail</span>{' '}
+        <span className="badge badge-warning">{running} running</span>
+      </div>
+      <Link to="/runs" className="kpi-tile-link">
+        View →
+      </Link>
+    </div>
+  );
+}
+
+// ---- Recent activity list ---------------------------------------------------
+
+interface RecentActivityProps {
+  runs: RunSummary[];
+}
+
+function RecentActivity({ runs }: RecentActivityProps) {
+  if (runs.length === 0) {
+    return (
+      <div
+        data-testid="dashboard-recent-activity-empty"
+        className="dashboard-recent-empty"
+      >
+        No runs yet. Start one from{' '}
+        <Link to="/runs/new">/runs/new</Link>.
+      </div>
+    );
+  }
+  return (
+    <div data-testid="dashboard-recent-activity" className="dashboard-section">
+      <div className="dashboard-section-title">Recent activity</div>
+      <ul className="dashboard-activity-list">
+        {runs.slice(0, 10).map((r) => (
+          <li
+            key={r.id}
+            data-testid={`dashboard-recent-run-${r.id}`}
+            className="dashboard-activity-item"
+          >
+            <Link to={`/runs/${r.id}`}>
+              <span className={`badge ${statusToBadgeClass(r.status)}`}>
+                {r.status}
+              </span>
+              <span className="run-id">Run #{r.id}</span>
+              <span className="run-summary">
+                {r.passed ?? 0} pass / {r.failed ?? 0} fail / {r.total ?? 0} total
+              </span>
+              <span className="run-time">{formatRelative(r.started_at)}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ---- Quick actions ---------------------------------------------------------
+
+interface QuickActionsProps {
+  categories: CategoryOut[];
+}
+
+function QuickActions({ categories }: QuickActionsProps) {
+  const navigate = useNavigate();
+  const presets = categories
+    .map((cat) => ({
+      cat,
+      // Use the category's default_status as the "interesting" preset target
+      // (open BUGs, stable extensions, awaiting_env external_systems).
+      status: cat.default_status,
+    }))
+    // Hide categories without a sensible default (defensive)
+    .filter((p) => p.status);
+
+  return (
+    <div data-testid="dashboard-quick-actions" className="dashboard-section">
+      <div className="dashboard-section-title">Quick actions</div>
+      <div className="dashboard-quick-actions-row">
+        {presets.map(({ cat, status }) => (
+          <button
+            key={cat.name}
+            data-testid={`dashboard-quick-action-${cat.name}-${status}`}
+            className="dashboard-quick-action"
+            onClick={() =>
+              navigate(`/runs/new?category=${cat.name}&status=${status}`)
+            }
+          >
+            Run all {cat.display_name} (status: {status})
+          </button>
+        ))}
+        <Link
+          to="/cases/new"
+          data-testid="dashboard-quick-action-new-case"
+          className="dashboard-quick-action"
+        >
+          + New case
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ---- Page ------------------------------------------------------------------
+
+function bugCategory(cats: CategoryOut[]): CategoryOut | undefined {
+  // Find the bug category by id_prefix ('lg-bug-') — avoids hardcoding name
+  // string per §14 R4b. (any category whose prefix targets bugs)
+  return cats.find((c) => c.id_prefix.startsWith('lg-bug'));
+}
+
+function extensionCategory(cats: CategoryOut[]): CategoryOut | undefined {
+  return cats.find(
+    (c) => c.id_prefix.startsWith('lg-ext-') && !c.id_prefix.startsWith('lg-xs'),
+  );
+}
+
+export default function DashboardPage() {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const cats = (await apiFetch(
+          '/admin/categories',
+          'get',
+        )) as CategoryOut[];
+        if (cancelled) return;
+        const catsSorted = cats
+          .slice()
+          .sort((a, b) => a.display_order - b.display_order);
+
+        // Fetch cases per category in parallel.
+        const casesByCategory: Record<string, CaseSummary[]> = {};
+        await Promise.all(
+          catsSorted.map(async (cat) => {
+            const cases = (await apiFetch('/cases', 'get', {
+              query: { category: cat.name },
+            })) as CaseSummary[];
+            casesByCategory[cat.name] = cases;
+          }),
+        );
+        if (cancelled) return;
+
+        const runs = (await apiFetch('/runs', 'get')) as RunSummary[];
+        if (cancelled) return;
+
+        setData({
+          categories: catsSorted,
+          casesByCategory,
+          recentRuns: runs,
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <div data-testid="page-dashboard-error" className="dashboard-error">
+        Failed to load dashboard: {error}
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div data-testid="page-dashboard-loading" className="dashboard-loading">
+        Loading dashboard…
+      </div>
+    );
+  }
+
+  const bugCat = bugCategory(data.categories);
+  const extCat = extensionCategory(data.categories);
+
+  return (
+    <div data-testid="page-dashboard" className="dashboard">
+      <h1 className="dashboard-title">Dashboard</h1>
+
+      {/* KPI tiles row 1: per-category counts + recent runs */}
+      <div
+        data-testid="dashboard-kpi-row"
+        className="dashboard-kpi-row"
+      >
+        {data.categories.map((cat) => (
+          <CategoryCountTile
+            key={cat.name}
+            category={cat}
+            cases={data.casesByCategory[cat.name] ?? []}
+          />
+        ))}
+        <RecentRunsTile runs={data.recentRuns} />
+      </div>
+
+      {/* KPI tiles row 2: status breakdowns for bug & extension */}
+      <div className="dashboard-kpi-row">
+        {bugCat && (
+          <StatusBreakdownTile
+            testid="dashboard-kpi-bug-status"
+            title={`${bugCat.display_name} — status breakdown`}
+            cases={data.casesByCategory[bugCat.name] ?? []}
+            statusWhitelist={bugCat.status_whitelist}
+          />
+        )}
+        {extCat && (
+          <StatusBreakdownTile
+            testid="dashboard-kpi-extension-stability"
+            title={`${extCat.display_name} — status breakdown`}
+            cases={data.casesByCategory[extCat.name] ?? []}
+            statusWhitelist={extCat.status_whitelist}
+          />
+        )}
+      </div>
+
+      <RecentActivity runs={data.recentRuns} />
+      <QuickActions categories={data.categories} />
+    </div>
+  );
+}

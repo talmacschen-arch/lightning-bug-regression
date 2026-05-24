@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
+import DashboardPage from './routes/DashboardPage';
 import CasesPage from './routes/CasesPage';
 import CaseDetailPage from './routes/CaseDetailPage';
 import CaseNewPage from './routes/CaseNewPage';
@@ -14,7 +15,8 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<Navigate to="/cases" replace />} />
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/cases" element={<CasesPage />} />
           <Route path="/cases/new" element={<CaseNewPage />} />
           <Route path="/cases/:id" element={<CaseDetailPage />} />
