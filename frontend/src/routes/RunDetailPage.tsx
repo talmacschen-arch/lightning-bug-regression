@@ -30,24 +30,151 @@ function isRunTerminal(status: string): boolean {
   return TERMINAL_RUN_STATUSES.has(status.toLowerCase());
 }
 
-function CaseResultRow({ result }: { result: CaseResultOut }) {
+// --- M6-2 artifacts -------------------------------------------------------
+
+const API_BASE =
+  ((import.meta as { env?: { VITE_API_BASE_URL?: string } }).env
+    ?.VITE_API_BASE_URL) ??
+  'http://127.0.0.1:8000';
+
+interface ArtifactInfo {
+  filename: string;
+  size_bytes: number;
+  kind: string;
+  step_idx: number | null;
+  step_id: string | null;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<ArtifactInfo[] | null>(null);
+  const [loadingArtifacts, setLoadingArtifacts] = useState(false);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
+
+  async function loadOnce() {
+    if (items !== null || loadingArtifacts) return;
+    setLoadingArtifacts(true);
+    setArtifactsError(null);
+    try {
+      const resp = await fetch(
+        `${API_BASE}/runs/${runId}/cases/${encodeURIComponent(caseId)}/artifacts`,
+      );
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      const data = (await resp.json()) as ArtifactInfo[];
+      setItems(data);
+    } catch (e) {
+      setArtifactsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingArtifacts(false);
+    }
+  }
+
+  function handleToggle() {
+    const next = !open;
+    setOpen(next);
+    if (next) void loadOnce();
+  }
+
   return (
-    <div data-testid={`run-case-row-${result.case_id}`} className="flex items-center gap-4 py-2 border-b last:border-0">
-      <Link
-        to={`/cases/${result.case_id}`}
-        data-testid={`run-case-link-${result.case_id}`}
-        className="font-mono text-sm text-blue-700 hover:underline"
+    <div className="ml-6 mt-1 mb-2">
+      <button
+        type="button"
+        data-testid={`artifacts-toggle-${caseId}`}
+        onClick={handleToggle}
+        className="text-xs text-gray-600 hover:underline"
       >
-        {result.case_id}
-      </Link>
-      <span
-        data-testid={`run-case-status-${result.case_id}`}
-        className="text-xs font-medium px-2 py-0.5 rounded"
-      >
-        {(result.status ?? '').toUpperCase()}
-      </span>
-      {result.duration_ms !== undefined && result.duration_ms !== null && (
-        <span className="text-xs text-gray-500">{result.duration_ms}ms</span>
+        {open ? '▾' : '▸'} Artifacts
+      </button>
+      {open && (
+        <div
+          data-testid={`artifacts-panel-${caseId}`}
+          className="mt-1 pl-4 border-l border-gray-200"
+        >
+          {loadingArtifacts && (
+            <div data-testid={`artifacts-loading-${caseId}`} className="text-xs text-gray-500">
+              Loading artifacts…
+            </div>
+          )}
+          {artifactsError !== null && (
+            <div
+              data-testid={`artifacts-error-${caseId}`}
+              className="text-xs text-red-600"
+            >
+              Failed to load: {artifactsError}
+            </div>
+          )}
+          {items !== null && items.length === 0 && (
+            <div
+              data-testid={`artifacts-empty-${caseId}`}
+              className="text-xs text-gray-500"
+            >
+              No artifact files (steps produced empty stdout/stderr).
+            </div>
+          )}
+          {items !== null && items.length > 0 && (
+            <ul data-testid={`artifacts-list-${caseId}`} className="space-y-0.5">
+              {items.map((a) => (
+                <li
+                  key={a.filename}
+                  data-testid={`artifact-item-${caseId}-${a.filename}`}
+                  className="flex items-center gap-2 text-xs"
+                >
+                  <span className="font-mono">{a.filename}</span>
+                  <span className="text-gray-500">{formatBytes(a.size_bytes)}</span>
+                  {a.kind !== 'other' && (
+                    <span className="px-1 py-px rounded bg-gray-100 text-gray-600 text-[10px]">
+                      {a.kind}
+                    </span>
+                  )}
+                  <a
+                    href={`${API_BASE}/runs/${runId}/cases/${encodeURIComponent(caseId)}/artifacts/${encodeURIComponent(a.filename)}`}
+                    download={a.filename}
+                    data-testid={`artifact-download-${caseId}-${a.filename}`}
+                    className="text-blue-700 hover:underline"
+                  >
+                    Download
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CaseResultRow({ runId, result }: { runId: number; result: CaseResultOut }) {
+  return (
+    <div data-testid={`run-case-row-${result.case_id}`} className="py-2 border-b last:border-0">
+      <div className="flex items-center gap-4">
+        <Link
+          to={`/cases/${result.case_id}`}
+          data-testid={`run-case-link-${result.case_id}`}
+          className="font-mono text-sm text-blue-700 hover:underline"
+        >
+          {result.case_id}
+        </Link>
+        <span
+          data-testid={`run-case-status-${result.case_id}`}
+          className="text-xs font-medium px-2 py-0.5 rounded"
+        >
+          {(result.status ?? '').toUpperCase()}
+        </span>
+        {result.duration_ms !== undefined && result.duration_ms !== null && (
+          <span className="text-xs text-gray-500">{result.duration_ms}ms</span>
+        )}
+      </div>
+      {result.artifacts_path && (
+        <CaseArtifacts runId={runId} caseId={result.case_id} />
       )}
     </div>
   );
@@ -219,7 +346,7 @@ export default function RunDetailPage() {
       )}
       <div className="mt-4">
         {run.case_results.map((result) => (
-          <CaseResultRow key={result.case_id} result={result} />
+          <CaseResultRow key={result.case_id} runId={run.id} result={result} />
         ))}
       </div>
     </div>

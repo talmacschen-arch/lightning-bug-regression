@@ -14,6 +14,10 @@ Concurrency contract:
 
   SSE streaming of run events lives at GET /runs/{id}/stream (M6-1).
 
+  Per-step artifact listing + download lives at GET /runs/{id}/cases/
+  {case_id}/artifacts and .../artifacts/{filename} (M6-2). Files written
+  by orchestrator under <artifacts_root>/<run_id>/<case_id>/.
+
 Out-of-scope here (deferred to later milestones):
   * cancel / abort — needs orchestrator support, deferred
 """
@@ -24,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +36,7 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -90,6 +95,21 @@ class CaseResultOut(BaseModel):
 
 class RunDetail(RunSummary):
     case_results: list[CaseResultOut] = []
+
+
+class ArtifactInfo(BaseModel):
+    """One artifact file under a case's artifacts_path (M6-2).
+
+    `step_idx` / `step_id` populated when filename matches the runner's
+    `step-NN-stepid.{stdout,stderr}.txt` pattern; else None (file
+    written by something else, kept for transparency).
+    """
+
+    filename: str
+    size_bytes: int
+    kind: str  # 'stdout' | 'stderr' | 'log' | 'other'
+    step_idx: int | None = None
+    step_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +487,130 @@ async def stream_run(run_id: int) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# M6-2 artifacts download
+# ---------------------------------------------------------------------------
+
+_STEP_FILENAME_RE = re.compile(r"^step-(\d+)-(.+?)\.(stdout|stderr|log)\.txt$")
+
+
+def _case_artifacts_dir_or_404(run_id: int, case_id: str) -> Path:
+    """Resolve the artifacts directory for one (run, case).
+
+    Returns the absolute path, or raises HTTPException 404 if:
+      * run row does not exist
+      * case_results row for this (run, case) does not exist
+      * artifacts_path field is empty or points to a missing/non-dir path
+    """
+    with sqlite_store.get_session() as sess:
+        run = sqlite_store.get_run(sess, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+        cr_rows = sqlite_store.list_case_results(sess, run_id)
+        match = next((c for c in cr_rows if c.case_id == case_id), None)
+        if match is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"case {case_id!r} not found in run {run_id}",
+            )
+        ap = match.artifacts_path
+        if not ap:
+            raise HTTPException(
+                status_code=404,
+                detail=f"case {case_id!r} in run {run_id} has no artifacts dir",
+            )
+    d = Path(ap)
+    if not d.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"artifacts dir gone: {ap}",
+        )
+    return d.resolve()
+
+
+def _classify_artifact(name: str) -> tuple[str, int | None, str | None]:
+    """Return (kind, step_idx, step_id) parsed from a filename.
+
+    Recognized: `step-NN-<step_id>.{stdout|stderr|log}.txt`. Anything
+    else is reported as ('other', None, None) — still listed so the
+    user sees what's in the dir.
+    """
+    m = _STEP_FILENAME_RE.match(name)
+    if m is None:
+        return ("other", None, None)
+    return (m.group(3), int(m.group(1)), m.group(2))
+
+
+@router.get(
+    "/{run_id}/cases/{case_id}/artifacts",
+    response_model=list[ArtifactInfo],
+)
+def list_case_artifacts(run_id: int, case_id: str) -> list[ArtifactInfo]:
+    """List artifact files for one case in a run.
+
+    Empty list = case ran but produced no artifact files (e.g., all
+    steps had empty stdout/stderr). 404 = run/case unknown OR artifacts
+    dir gone.
+    """
+    d = _case_artifacts_dir_or_404(run_id, case_id)
+    out: list[ArtifactInfo] = []
+    for child in sorted(d.iterdir()):
+        if not child.is_file():
+            continue
+        try:
+            size = child.stat().st_size
+        except OSError:
+            continue
+        kind, step_idx, step_id = _classify_artifact(child.name)
+        out.append(
+            ArtifactInfo(
+                filename=child.name,
+                size_bytes=size,
+                kind=kind,
+                step_idx=step_idx,
+                step_id=step_id,
+            )
+        )
+    return out
+
+
+@router.get("/{run_id}/cases/{case_id}/artifacts/{filename}")
+def download_case_artifact(
+    run_id: int,
+    case_id: str,
+    filename: str,
+) -> FileResponse:
+    """Download one artifact file as text/plain attachment.
+
+    Path-traversal protection: reject filenames containing path
+    separators or `..`; further, verify the resolved path is inside
+    the case's artifacts dir (defense-in-depth against symlinks).
+    """
+    if "/" in filename or "\\" in filename or filename in ("", ".", ".."):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if ".." in Path(filename).parts:
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    d = _case_artifacts_dir_or_404(run_id, case_id)
+    target = (d / filename).resolve()
+    try:
+        target.relative_to(d)
+    except ValueError:
+        # symlink or other escape
+        raise HTTPException(status_code=400, detail="invalid filename") from None
+    if not target.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"artifact {filename!r} not found",
+        )
+    return FileResponse(
+        path=target,
+        media_type="text/plain; charset=utf-8",
+        filename=filename,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

@@ -436,3 +436,124 @@ def test_stream_sets_anti_buffer_headers(client: TestClient) -> None:
     sse = client.get(f"/runs/{run_id}/stream")
     assert sse.headers["cache-control"] == "no-cache"
     assert sse.headers["x-accel-buffering"] == "no"
+
+
+# ---------------------------------------------------------------------------
+# M6-2 artifacts list + download
+# ---------------------------------------------------------------------------
+
+
+def _seed_run_with_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int, str, Path]:
+    """Create a run + case_result + artifacts dir on disk.
+
+    Returns (run_id, case_id, artifacts_dir).
+    """
+    started = datetime.utcnow()
+    case_id = "lg-bug-fake-art-0001"
+    artifacts_dir = tmp_path / "1" / case_id
+    artifacts_dir.mkdir(parents=True)
+    # Realistic per-step layout written by orchestrator
+    (artifacts_dir / "step-00-setup-create-table.stdout.txt").write_text("CREATE TABLE\n")
+    (artifacts_dir / "step-00-setup-create-table.stderr.txt").write_text("")
+    (artifacts_dir / "step-01-select-rows.stdout.txt").write_text(" id\n----\n  1\n  2\n")
+    # other-format file (not matching pattern)
+    (artifacts_dir / "summary.json").write_text('{"ok": true}')
+
+    with sqlite_store.get_session() as sess:
+        run = sqlite_store.create_run(sess, started_at=started)
+        run_id = run.id
+        sqlite_store.finish_run(
+            sess,
+            run_id,
+            status="done",
+            finished_at=datetime.utcnow(),
+            total=1,
+            passed=1,
+            failed=0,
+            skipped=0,
+        )
+        sqlite_store.insert_case_result(
+            sess,
+            run_id=run_id,
+            case_id=case_id,
+            status="pass",
+            duration_ms=100,
+            artifacts_path=str(artifacts_dir),
+        )
+    return run_id, case_id, artifacts_dir
+
+
+def test_list_artifacts_returns_classified_files(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id, case_id, _ = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts")
+    assert resp.status_code == 200
+    items = resp.json()
+    by_name = {it["filename"]: it for it in items}
+    assert "step-00-setup-create-table.stdout.txt" in by_name
+    assert by_name["step-00-setup-create-table.stdout.txt"]["kind"] == "stdout"
+    assert by_name["step-00-setup-create-table.stdout.txt"]["step_idx"] == 0
+    assert by_name["step-00-setup-create-table.stdout.txt"]["step_id"] == "setup-create-table"
+    assert by_name["step-01-select-rows.stdout.txt"]["step_idx"] == 1
+    # other-format files still appear, classified as 'other'
+    assert by_name["summary.json"]["kind"] == "other"
+    assert by_name["summary.json"]["step_idx"] is None
+
+
+def test_list_artifacts_404_for_unknown_run(client: TestClient) -> None:
+    resp = client.get("/runs/999999/cases/x/artifacts")
+    assert resp.status_code == 404
+
+
+def test_list_artifacts_404_for_unknown_case(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id, _case_id, _ = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    resp = client.get(f"/runs/{run_id}/cases/nope/artifacts")
+    assert resp.status_code == 404
+
+
+def test_download_artifact_returns_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id, case_id, _ = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/step-01-select-rows.stdout.txt")
+    assert resp.status_code == 200
+    assert resp.text == " id\n----\n  1\n  2\n"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert "step-01-select-rows.stdout.txt" in resp.headers["content-disposition"]
+
+
+def test_download_artifact_rejects_path_traversal(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id, case_id, artifacts_dir = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    # Make a sensitive file outside the artifacts dir
+    outside = artifacts_dir.parent.parent / "secret.txt"
+    outside.write_text("PWNED")
+
+    # 1. literal `..` in URL path is normalized by URL parser, but
+    #    we still pass through validate logic.
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/..%2Fsecret.txt")
+    # Either 400 (validation) or 404 (file not present in this dir).
+    assert resp.status_code in (400, 404)
+
+    # 2. /-containing filenames blocked at validate layer
+    # Use httpx raw request to bypass URL normalization (pass embedded ..).
+    # Easier: monkey-patched name with separator → backend must reject.
+    # FastAPI path param doesn't accept `/` so the route won't match;
+    # but `\\` should be rejected by our validator.
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/..%5Csecret.txt")
+    assert resp.status_code in (400, 404)
+
+
+def test_download_artifact_404_for_missing_file(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id, case_id, _ = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/no-such.txt")
+    assert resp.status_code == 404
