@@ -1,0 +1,39 @@
+id: lg-bug-0006-m3a-dogfood-smoke2
+title: M3a dogfood smoke — SELECT 1
+category: bug_regression
+status: stub 
+severity: low
+destructive: false
+source:
+  feishu_anchor: "m3a-dogfood"
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [smoke, m3a-dogfood]
+description: |
+  M3a-10 dogfood：通过 /cases/new 编辑器粘贴本 stub yaml，走 Validate → Try → Save，验证 §6.2 三段闸门 + /cases/submit 真开 PR。
+procedure: |
+  1. 粘贴本 YAML 到 /cases/new Tab B
+  2. Validate → Try → Save
+  3. 看 PR auto-merge fire
+expected: |
+  - validate ok
+  - try step pass (SELECT 1 → 1)
+  - submit 返回 PR URL
+applies_to: {}
+preconditions: {}
+external_deps: []
+defaults:
+  database: postgres
+setup: []
+steps:
+  - kind: sql
+    sql: "SELECT 1 AS x"
+    expect:
+      scalar: 1
+teardown: []
+created_by: dogfood
+created_at: "2026-05-24"
+notes: |
+  M3a-10 dogfood smoke case
