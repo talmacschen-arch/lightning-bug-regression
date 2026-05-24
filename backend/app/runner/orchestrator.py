@@ -733,6 +733,15 @@ async def run_suite(
             _persist_case(
                 session_factory, insert_case_result_fn, run_id, cer, _coerce_status_for_db(cer)
             )
+            from app.runner import event_broker  # local — see comment in main loop
+
+            event_broker.publish_case_done(
+                run_id=run_id,
+                case_id=cer.case_id,
+                status=_coerce_status_for_db(cer),
+                duration_ms=cer.duration_ms,
+                error=None,
+            )
             case_results.append(cer)
             skipped += 1
             continue
@@ -760,6 +769,19 @@ async def run_suite(
             session_factory, insert_case_result_fn, run_id, cer, _coerce_status_for_db(cer)
         )
         case_results.append(cer)
+
+        # M6-1: publish SSE event for case completion (best-effort, no-op
+        # if no SSE subscriber). Decoupled via event_broker module so
+        # orchestrator doesn't depend on FastAPI.
+        from app.runner import event_broker  # local import — avoid cycle in unit tests
+
+        event_broker.publish_case_done(
+            run_id=run_id,
+            case_id=cer.case_id,
+            status=_coerce_status_for_db(cer),
+            duration_ms=cer.duration_ms,
+            error=cer.error,
+        )
 
         if cer.status is StepStatus.PASS:
             passed += 1

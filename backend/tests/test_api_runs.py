@@ -377,3 +377,62 @@ def test_load_cases_from_disk_skips_unreadable_files(
     assert loaded[0]["id"] == "y"
 
     engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# M6-1 SSE stream — GET /runs/{run_id}/stream
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse(body: str) -> list[dict[str, Any]]:
+    """Parse SSE body into list of JSON-decoded events. Ignores comments."""
+    events: list[dict[str, Any]] = []
+    for chunk in body.split("\n\n"):
+        chunk = chunk.strip()
+        if not chunk or chunk.startswith(":"):
+            continue
+        for line in chunk.splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: ") :]))
+    return events
+
+
+def test_stream_404_for_unknown_run(client: TestClient) -> None:
+    """Streaming an unknown run emits a synthetic `error` event then closes."""
+    resp = client.get("/runs/999999/stream")
+    assert resp.status_code == 200  # SSE always 200 even on logical error
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(resp.text)
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    assert "not found" in events[0]["message"]
+
+
+def test_stream_emits_snapshot_plus_synthetic_terminal_for_finished_run(
+    client: TestClient,
+) -> None:
+    """Subscriber arriving after run already done sees snapshot + synthetic
+    run_done so it knows to stop and refetch final state."""
+    resp = client.post("/runs", json={"triggered_by": "alice@example.com"})
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+    _wait_for_run_terminal(client, run_id)
+
+    sse = client.get(f"/runs/{run_id}/stream")
+    assert sse.status_code == 200
+    events = _parse_sse(sse.text)
+    types = [e["type"] for e in events]
+    assert types[0] == "snapshot"
+    assert events[0]["status"] == "done"
+    assert events[0]["total"] == 1
+    assert types[-1] == "run_done"
+    assert events[-1].get("synthetic") is True
+
+
+def test_stream_sets_anti_buffer_headers(client: TestClient) -> None:
+    resp = client.post("/runs", json={"triggered_by": "x"})
+    run_id = resp.json()["run_id"]
+    _wait_for_run_terminal(client, run_id)
+    sse = client.get(f"/runs/{run_id}/stream")
+    assert sse.headers["cache-control"] == "no-cache"
+    assert sse.headers["x-accel-buffering"] == "no"

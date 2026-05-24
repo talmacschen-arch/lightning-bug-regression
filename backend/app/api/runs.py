@@ -12,30 +12,31 @@ Concurrency contract:
   `orchestrator.run_suite` and then `finish_run` to flip status to
   'done' (or 'aborted' on unexpected failure).
 
-  SSE streaming of run events lives in M5; this router only exposes
-  CRUD-shaped endpoints.
+  SSE streaming of run events lives at GET /runs/{id}/stream (M6-1).
 
 Out-of-scope here (deferred to later milestones):
-  * /runs/{id}/stream (SSE) — M5
   * cancel / abort — needs orchestrator support, deferred
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.cases import _iter_case_files, _load_categories
-from app.runner import orchestrator
+from app.runner import event_broker, orchestrator
 from app.runner.case_normalizer import normalize_case
 from app.runner.dsn_builder import dsn_map_from_env
 from app.runner.sql_driver import SqlSessionPool
@@ -206,7 +207,16 @@ async def _execute_run(
                 failed=summary.failed,
                 skipped=summary.skipped,
             )
-    except Exception:  # noqa: BLE001 — background task must not re-raise
+        event_broker.publish_run_done(
+            run_id,
+            {
+                "total": summary.total,
+                "passed": summary.passed,
+                "failed": summary.failed,
+                "skipped": summary.skipped,
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — background task must not re-raise
         logger.exception("run %d aborted by unexpected exception", run_id)
         try:
             with sqlite_store.get_session() as sess:
@@ -218,6 +228,7 @@ async def _execute_run(
                 )
         except Exception:  # noqa: BLE001
             logger.exception("failed to mark run %d aborted", run_id)
+        event_broker.publish_run_aborted(run_id, reason=f"{type(e).__name__}: {e}")
     finally:
         # Close pooled connections so they don't leak across runs (each
         # run gets a fresh pool — different cases may target different DBs).
@@ -348,6 +359,115 @@ def get_run(run_id: int) -> RunDetail:
                 for cr in cr_rows
             ],
         )
+
+
+# ---------------------------------------------------------------------------
+# M6-1 SSE stream — GET /runs/{run_id}/stream
+# ---------------------------------------------------------------------------
+
+
+def _sse_format(event: dict[str, Any]) -> str:
+    """Encode a JSON-serializable dict as one SSE event.
+
+    SSE spec: `data: <line>\\n\\n` (blank line terminates an event).
+    We use a single-line data field (JSON has no embedded newlines after
+    json.dumps with default separators).
+    """
+    return f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+
+
+async def _stream_run_events(run_id: int) -> AsyncIterator[str]:
+    """Async generator yielding SSE-formatted lines for one run.
+
+    Lifecycle:
+      1. Emit `snapshot` event with current Run + CaseResults state
+         (so a late subscriber sees baseline even if it missed earlier
+         case_done events).
+      2. Subscribe to broker; relay each event.
+      3. Stop on terminal event (run_done / run_aborted) or if the run
+         is ALREADY in a terminal lifecycle state at subscribe time.
+
+    Heartbeat: every 20s emit `: keepalive\\n\\n` (SSE comment) to keep
+    proxies/loadbalancers from closing the idle connection.
+    """
+    # Initial snapshot from DB
+    with sqlite_store.get_session() as sess:
+        run = sqlite_store.get_run(sess, run_id)
+        if run is None:
+            yield _sse_format({"type": "error", "message": f"run {run_id} not found"})
+            return
+        cr_rows = sqlite_store.list_case_results(sess, run_id)
+        snapshot = {
+            "type": "snapshot",
+            "run_id": run.id,
+            "status": run.status,
+            "total": run.total,
+            "passed": run.passed,
+            "failed": run.failed,
+            "skipped": run.skipped,
+            "case_results": [
+                {
+                    "case_id": cr.case_id,
+                    "status": cr.status,
+                    "duration_ms": cr.duration_ms,
+                }
+                for cr in cr_rows
+            ],
+        }
+        is_already_terminal = run.status in ("done", "aborted")
+
+    yield _sse_format(snapshot)
+
+    # If the run already finished before the client subscribed, close
+    # immediately with a synthetic terminal event so the client knows
+    # to stop and refetch final state.
+    if is_already_terminal:
+        synthetic = {
+            "type": "run_done" if snapshot["status"] == "done" else "run_aborted",
+            "run_id": run_id,
+            "summary": {
+                "total": snapshot["total"],
+                "passed": snapshot["passed"],
+                "failed": snapshot["failed"],
+                "skipped": snapshot["skipped"],
+            },
+            "synthetic": True,
+        }
+        yield _sse_format(synthetic)
+        return
+
+    async with event_broker.subscribe(run_id) as q:
+        while True:
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=20.0)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            yield _sse_format(event)
+            if event_broker.is_terminal(event):
+                return
+
+
+@router.get("/{run_id}/stream")
+async def stream_run(run_id: int) -> StreamingResponse:
+    """SSE stream of run events.
+
+    Browser usage:
+        const es = new EventSource(`/runs/${id}/stream`);
+        es.onmessage = (e) => { ... JSON.parse(e.data) ... };
+        es.onerror = () => es.close();
+
+    Headers `Cache-Control: no-cache` + `X-Accel-Buffering: no` ensure
+    proxies don't buffer the stream.
+    """
+    return StreamingResponse(
+        _stream_run_events(run_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 __all__ = ["router"]
