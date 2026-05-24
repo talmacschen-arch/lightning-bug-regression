@@ -124,7 +124,7 @@ describe('AdminCasesPage', () => {
 
   it('shows educational confirm dialog text', async () => {
     apiFetchMock.mockResolvedValue(FAKE_CASES);
-    const confirmSpy = vi.fn((_msg: string) => true);
+    const confirmSpy = vi.fn<[string], boolean>(() => true);
     vi.stubGlobal('confirm', confirmSpy);
     mockFetch.mockResolvedValue(mockJson({}, true, 204));
 
