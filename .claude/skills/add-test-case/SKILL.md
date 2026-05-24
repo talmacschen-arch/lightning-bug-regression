@@ -196,7 +196,10 @@ skill 在打印 BEGIN/END 之前必须自查：
 10. **v0.9：远端 cli step profile.d 显式 source**：所有带 `host: '{{ external.* }}'` 的 cli step，cmd 开头**必须**有 `[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true` 这种模式；缺则插入（按 svc 名推测 `<x>` 是 hadoop / hive / oracle / mysql / kafka 等）。
 11. **v0.9：服务端配置文件用追加 + grep guard**：cli step 里 `cat > $DD/gphdfs.conf` 这种**覆盖写**模式 → 强制改成 `cat >> + grep -q '^<key>:' guard` 模式（preflight Run 112 教训）。
 12. **v1.8：non-tx-safe DDL 必须走 psql -c**（design.md §4.1.2，M4a-2 BUG 9.11 实战暴露）：steps / setup / teardown 里出现 `VACUUM` / `VACUUM FULL` / 顶层裸跑的 `ANALYZE` / `CREATE DATABASE` / `DROP DATABASE` / `REINDEX CONCURRENTLY` / `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` / `CREATE TABLESPACE` / `DROP TABLESPACE` / `ALTER SYSTEM` / `CLUSTER` 任一关键词时，**绝禁** `kind: sql` 走 psycopg，**必须**改写为 `kind: shell` + `cmd: su - gpadmin -c "psql -c '<DDL>'"`（如果 setup 是 list[str] 字符串，写成 `su - gpadmin -c "psql -c '<DDL>'"` 字符串项，case_normalizer 自动识别 `psql ` 前缀转 shell driver）。理由：sql_driver post-M4a-2 已移除 autocommit 分支；non-tx-safe DDL 走 psycopg 必报 PG 错或撞 AsyncConnection autocommit 状态机怪圈。
-13. **v1.8：跨 driver 持久化 setup 必须走 psql -c**（M4a-2 BUG 9.11 实战暴露）：当主 `steps:` 含 `kind: shell` step（特别是 `psql -c` 形式），且 setup 创建持久化 schema（CREATE TABLE / INSERT 等需被后续 shell step 看见的数据）时，setup 也必须用 `kind: shell + cmd: psql -c '...'`，**不能**用 `kind: sql`。理由：`kind: sql` 走 psycopg AsyncConnection 长连接，autocommit=False 默认，setup 的 CREATE TABLE 不会 commit，shell step 用独立 psql 进程看不到。`psql -c` 每次开独立连接 + 隐式 commit，跨 step 状态一致。
+13. **v1.8（M4a-2 BUG 9.11 暴露；v1.9 软化）：跨 driver 数据可见性**：当主 `steps:` 含 `kind: shell` step（特别 `psql -c` 形式），且某前序 `kind: sql` step（或 setup）创建了持久化 schema（CREATE TABLE / INSERT 等需被后续 shell step 看见的数据）时——
+    - **v1.9 (PR #80) 之后**：sql_driver 在每个 `kind: sql` step 末尾自动 `await conn.commit()`，所以前序 `kind: sql` 的 CREATE TABLE / INSERT 对后续独立 psql -c 子进程**自动可见**。不强制改 setup 为 psql -c。
+    - **保守可选**：若不确定 sql_driver commit 语义（或 case 跑在老版本 sql_driver 上），把 setup 改成 `kind: shell + cmd: su - gpadmin -c "psql -c '...'"` 仍是安全选择（每次独立连接 + 隐式 commit；与 sql 长连接 commit 等效）。lg-bug-0008 v1 用全 psql -c，v2 (PR #80 user 决策) 改回 kind: sql + 依赖 sql_driver commit；两种写法都通 Try gate。
+    - **何时仍必须 psql -c**：cross-driver 情况下，**non-tx-safe DDL**（#12 列的关键词集合）依然必须 psql -c（这是 #12 的硬约束，与 #13 无关）；仅 tx-safe schema 操作可以 kind: sql。
 
 **任一项未过 → 修正后重试，不打印 BEGIN/END。**
 
