@@ -1,0 +1,174 @@
+id: lg-ext-pg-partman-range-month-retention
+title: pg_partman range partition (1-month interval) + retention 策略缩减分区数
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: "https://github.com/pgpartman/pg_partman"
+issue_url: ""
+tags: [extension, pg_partman, partitioning, range, retention, run_maintenance]
+
+description: |
+  pg_partman 是 PostgreSQL 分区管理扩展。本 case 验证 lightning 集群上
+  pg_partman 的核心使用路径：(1) 用 `partman.create_parent` 给一张
+  RANGE 分区主表自动创建前后各 4 个 + 当前 + default 共 10 个子分区；
+  (2) 通过 `partman.part_config` 设 retention='2 months'；(3) 调
+  `partman.run_maintenance()` 让 retention 生效，历史分区缩到 2 个，
+  总分区数变 8。
+procedure: |
+  1) 前置：shared_preload_libraries 必须含 `pg_partman_bgw`（gpconfig 配
+     置；若缺则本 case 第 1 步 fail，需先重启集群加载，超出本 case 范围）
+  2) 初始化：CREATE SCHEMA + CREATE EXTENSION pg_partman + 清掉旧 part_config
+  3) 建 RANGE 分区主表 test_data (id, created_at, data) PARTITION BY RANGE (created_at)
+  4) partman.create_parent(p_interval='1 month', p_premake=4, p_start_partition=NULL)
+  5) 断言 pg_inherits 看子表数量 = 10
+  6) UPDATE part_config 设 retention='2 months' + retention_keep_table=false
+     再调 partman.run_maintenance() 让策略生效
+  7) 再次断言 pg_inherits 子表数量 = 8
+  8) Teardown: DELETE part_config + DROP TABLE
+expected: |
+  - shared_preload_libraries 含 pg_partman_bgw（precondition）
+  - create_parent 后子分区 count = 10（4 前 + 4 后 + 当前 + default）
+  - run_maintenance 后子分区 count = 8（保留 2 个历史 + 当前 + 4 future + default）
+  - 全程无 ERROR / FATAL
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+setup:
+  - DROP TABLE IF EXISTS test_data CASCADE
+  - CREATE SCHEMA IF NOT EXISTS partman
+  - CREATE EXTENSION IF NOT EXISTS pg_partman SCHEMA partman
+  - DELETE FROM partman.part_config WHERE parent_table = 'public.test_data'
+
+steps:
+  - name: "precondition: shared_preload_libraries 含 pg_partman_bgw"
+    kind: sql
+    sql: |
+      SELECT current_setting('shared_preload_libraries') ~ 'pg_partman_bgw'
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "建 RANGE 分区主表 test_data"
+    kind: sql
+    sql: |
+      CREATE TABLE test_data (
+        id         serial,
+        created_at timestamptz NOT NULL,
+        data       text
+      ) PARTITION BY RANGE (created_at)
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "partman.create_parent: 1 month interval + p_premake=4"
+    kind: sql
+    sql: |
+      SELECT partman.create_parent(
+        p_parent_table    := 'public.test_data',
+        p_control         := 'created_at',
+        p_interval        := '1 month',
+        p_premake         := 4,
+        p_start_partition := NULL
+      )
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "首次断言：pg_inherits 子表数 = 10（4 前 + 4 后 + 当前 + default）"
+    kind: sql
+    sql: |
+      SELECT count(*)::int
+      FROM   pg_inherits
+      WHERE  inhparent = 'public.test_data'::regclass
+    timeout_sec: 30
+    expect:
+      scalar: 10
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "配置 retention='2 months' + retention_keep_table=false"
+    kind: sql
+    sql: |
+      UPDATE partman.part_config
+      SET    retention            = '2 months',
+             retention_keep_table = false
+      WHERE  parent_table = 'public.test_data'
+    timeout_sec: 30
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "执行 partman.run_maintenance() 让 retention 生效"
+    kind: sql
+    sql: |
+      SELECT partman.run_maintenance()
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "再次断言：retention 后子表数 = 8（2 历史 + 当前 + 4 future + default）"
+    kind: sql
+    sql: |
+      SELECT count(*)::int
+      FROM   pg_inherits
+      WHERE  inhparent = 'public.test_data'::regclass
+    timeout_sec: 30
+    expect:
+      scalar: 8
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - DELETE FROM partman.part_config WHERE parent_table = 'public.test_data'
+  - DROP TABLE IF EXISTS test_data CASCADE
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  pg_partman 是 PostgreSQL 周边 extension，提供 RANGE / LIST / TIME 分区
+  自动管理。lightning / SynxDB 升级后必须验证此 extension 仍可用，因为
+  许多业务表依赖它做自动维护。
+
+  **shared_preload_libraries 前置**：pg_partman 需要 `pg_partman_bgw`
+  background worker 加载（用户 outline 第 1 步 gpconfig 输出确认）。本
+  case 第 1 步用 SQL `current_setting('shared_preload_libraries') ~
+  'pg_partman_bgw'` 软检查；若 GUC 缺这个 lib，第 1 步 fail，提示用户
+  按 §3.1 deployment 路径加进 gpconfig 后重启集群。本 case **不**自带
+  改 GUC + restart_db 逻辑（destructive，会污染其他 case）。
+
+  **分区数 10 / 8 的来源**（user outline）：
+    - create_parent(p_premake=4) → 当前月 + 前 4 月 + 后 4 月 + default
+      = 1 + 4 + 4 + 1 = 10
+    - retention='2 months' + run_maintenance() 删除超过 2 个月的历史
+      partition：保留当前月 + 2 个历史月 + 4 个 future 月 + default
+      = 1 + 2 + 4 + 1 = 8
+
+  **idempotency**：setup 用 `DROP TABLE IF EXISTS test_data CASCADE` +
+  `CREATE SCHEMA / EXTENSION IF NOT EXISTS` + `DELETE FROM
+  partman.part_config WHERE parent_table = 'public.test_data'`（DELETE
+  on no rows = 0 rows affected, idempotent）。teardown 顺序很重要：
+  先 DELETE part_config（如果 retention_keep_table=false 的 run_maintenance
+  已经 DROP 历史 partition，剩余 partition 子表会随 main table CASCADE 删）
+  再 DROP TABLE CASCADE。
+
+  **§5.5.7 cross-check 通过 13 项自查**：
+    - #12 non-tx-safe DDL：本 case 无 VACUUM / 顶层 ANALYZE / CREATE DATABASE
+      等关键词，create_parent / run_maintenance 内部虽建 child table，但
+      tx-safe（PG CREATE TABLE 是 tx-safe）。保留 kind: sql。
+    - #13 跨 driver visibility：本 case 全 kind: sql，无 cross-driver 问题。
+    - 其它（#1-11）：step kind 都在 /admin/step-kinds；setup/teardown 幂等
+      守卫齐全（IF EXISTS / IF NOT EXISTS / DELETE 幂等）；status=stable 对
+      extension category 合规；id 前缀 lg-ext-* 对；destructive 不含 gpstop。
+
+  status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 extension 可用"，
+  与 bug_regression 的 status=fixed 语义不同（extension 没有 'fixed
+  version' 概念，因为 extension 本身不是 BUG，是周边功能验证）。
