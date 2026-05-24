@@ -242,13 +242,6 @@ function QuickActions({ categories }: QuickActionsProps) {
             Run all {cat.display_name} (status: {status})
           </button>
         ))}
-        <Link
-          to="/cases/new"
-          data-testid="dashboard-quick-action-new-case"
-          className="dashboard-quick-action"
-        >
-          + New case
-        </Link>
       </div>
     </div>
   );
