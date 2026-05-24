@@ -79,6 +79,7 @@ gh pr merge --auto --squash
 7. **If blocked**, return JSON `"status": "blocked", "reason": "..."` instead of opening a PR.
 8. **Run all local ci-gate commands GREEN before commit** — tsc + eslint + vitest (+ playwright if touched). §14 R24. Cross-shell-tool quirks (dash vs bash, node version skew, etc.) only surface in CI — exercise them locally first.
 9. **All 7 steps required; never bail after commit without opening PR.** §14 R24. Backend already paid this twice (M1-cleanup PR #22).
+10. **One PR = at most 1 novel mechanism (§14 R30, M5-1 PR #94 实战)**. Before commit, self-count "novel mechanisms" introduced. Each of these = 1: 响应式 Tailwind class (`lg:* / md:*`) / `useEffect` 内 `apiFetch` mount race / 新引入的依赖包 / 新 `import.meta.env.*` 访问 / 新 React 模式 (Suspense / ErrorBoundary / portal) / 新 storage 模式 / shadcn 缺失 primitive 用 Tailwind 拼凑 shim。**If novel-count ≥ 2**: return JSON `"status": "blocked", "reason": "R30 multi-mechanism — please split into N PRs, minimal-first, each subsequent PR adds 1 mechanism"` instead of committing. **Minimal-first rationale**: when CI fails on a multi-mechanism PR, root cause can't be binary-searched from logs alone (M5-1 PR #94 → PR #95 教训：close + 重写 minimal Layout.tsx 才解，30+ min 浪费)。
 
 ## Quality bar
 
