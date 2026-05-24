@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 
@@ -15,7 +15,14 @@ function isTerminal(status: string): boolean {
 function CaseResultRow({ result }: { result: CaseResultOut }) {
   return (
     <div data-testid={`run-case-row-${result.case_id}`} className="flex items-center gap-4 py-2 border-b last:border-0">
-      <span className="font-mono text-sm">{result.case_id}</span>
+      {/* M5-3 cross-page link: case_id is now a Link to /cases/:id */}
+      <Link
+        to={`/cases/${result.case_id}`}
+        data-testid={`run-case-link-${result.case_id}`}
+        className="font-mono text-sm text-blue-700 hover:underline"
+      >
+        {result.case_id}
+      </Link>
       <span
         data-testid={`run-case-status-${result.case_id}`}
         className="text-xs font-medium px-2 py-0.5 rounded"

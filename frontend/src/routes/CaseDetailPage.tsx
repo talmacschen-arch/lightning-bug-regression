@@ -6,6 +6,117 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 
 type CaseDetail = components['schemas']['CaseDetail'];
+type CaseRecentRunOut = components['schemas']['CaseRecentRunOut'];
+
+// ---------------------------------------------------------------------------
+// M5-3 — RecentRuns section: list of last N runs that touched this case
+// ---------------------------------------------------------------------------
+
+function formatRelative(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const diffM = Math.floor(diffMs / 60_000);
+  if (diffM < 1) return 'just now';
+  if (diffM < 60) return `${diffM}m ago`;
+  const diffH = Math.floor(diffM / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  return `${Math.floor(diffH / 24)}d ago`;
+}
+
+function CaseRecentRuns({ caseId }: { caseId: string }) {
+  const [runs, setRuns] = useState<CaseRecentRunOut[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/cases/{case_id}/recent-runs', 'get', {
+      path: { case_id: caseId },
+    })
+      .then((data) => {
+        if (!cancelled) setRuns(data as CaseRecentRunOut[]);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [caseId]);
+
+  if (error) {
+    return (
+      <Card data-testid="case-recent-runs-error" className="border-red-200">
+        <CardHeader>
+          <CardTitle className="text-base">Recent runs</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-red-700">Failed to load: {error}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (runs === null) {
+    return (
+      <Card data-testid="case-recent-runs-loading">
+        <CardHeader>
+          <CardTitle className="text-base">Recent runs</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-4 w-64" />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (runs.length === 0) {
+    return (
+      <Card data-testid="case-recent-runs-empty">
+        <CardHeader>
+          <CardTitle className="text-base">Recent runs</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            This case has not been included in any run yet.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+  return (
+    <Card data-testid="case-recent-runs">
+      <CardHeader>
+        <CardTitle className="text-base">
+          Recent runs ({runs.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2">
+          {runs.map((r) => (
+            <li
+              key={r.run_id}
+              data-testid={`case-recent-run-${r.run_id}`}
+              className="flex items-center gap-3 text-sm"
+            >
+              <Link
+                to={`/runs/${r.run_id}`}
+                className="text-blue-700 hover:underline font-mono"
+              >
+                Run #{r.run_id}
+              </Link>
+              <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">
+                {(r.case_status ?? r.run_status ?? '').toUpperCase()}
+              </span>
+              {r.duration_ms !== undefined && r.duration_ms !== null && (
+                <span className="text-xs text-gray-500">{r.duration_ms}ms</span>
+              )}
+              <span className="text-xs text-gray-500 ml-auto">
+                {formatRelative(r.started_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
 
 // Status badge styling — keep it data-driven (no hardcoded category logic per §14 R4b).
 function StatusBadge({ status }: { status: string }) {
@@ -231,6 +342,9 @@ export default function CaseDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* M5-3 — Recent runs that touched this case */}
+      <CaseRecentRuns caseId={caseDetail.id} />
 
       {/* Error notice for invalid YAML cases */}
       {caseDetail.error && (

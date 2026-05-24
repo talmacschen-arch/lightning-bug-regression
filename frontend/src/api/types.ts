@@ -87,7 +87,12 @@ export interface paths {
          *     Filters:
          *       * `category`: exact match (case-sensitive — categories are stable
          *         identifiers, not free text).
-         *       * `q`: case-insensitive substring against id OR title.
+         *       * `q`: case-insensitive substring against id, title, description,
+         *         or tags (joined). The skill at ``.claude/skills/add-test-case``
+         *         uses this to surface near-duplicate cases when authoring a new
+         *         one — searching only id+title misses dups where the author chose
+         *         a different phrasing in the title but the same domain words appear
+         *         in description/tags.
          *
          *     Invalid YAML files are included with `status="invalid"` and `error`
          *     populated; the endpoint never 500s on a single bad file.
@@ -126,6 +131,158 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cases/{case_id}/recent-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Case Recent Runs
+         * @description List most recent runs that touched this case (M5-3 cross-page link).
+         *
+         *     Returns up to `limit` (default 10) `(case_result, run)` rows joined
+         *     on `case_results.run_id = runs.id`, ordered by `runs.started_at` DESC.
+         *     Empty list when the case has never appeared in any run — that's not
+         *     an error.
+         *
+         *     §14 R26: delegates to ``sqlite_store.list_recent_runs_for_case`` — no
+         *     inline SQL. Storage module is the single source of truth for the
+         *     `case_results` table queries.
+         */
+        get: operations["get_case_recent_runs_cases__case_id__recent_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cases/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Case
+         * @description Validate a raw YAML case payload without persisting anything.
+         *
+         *     Delegates to the same modules the GET /cases path uses (§14 R26):
+         *
+         *     * :func:`app.storage.yaml_loader.load_case` for §4.1 schema checks
+         *     * :func:`app.runner.case_normalizer.normalize_case` for step-kind /
+         *       template-field checks the schema layer doesn't catch.
+         *
+         *     Inline copies of either module's logic would be a dual-code-path
+         *     violation (§14 R26 — the bug this endpoint exists to prevent in the
+         *     Web 录入 path); both modules are imported and visibly called below.
+         *
+         *     The validation logic lives in :func:`_validate_yaml_text` which is
+         *     also reused by ``/cases/try`` — two endpoints, one validator.
+         */
+        post: operations["validate_case_cases_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cases/try": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Try Case
+         * @description Trial-run a YAML case in-memory without writing to DB / cases/.
+         *
+         *     Pipeline (design.md §13.7 M3a-2 + §14 R26):
+         *
+         *     1. Hash the raw YAML (sha256) so M3a-3.5 can later cache "this
+         *        payload was Try-PASSED at T" and gate ``/cases/submit`` on it.
+         *     2. Validate via :func:`_validate_yaml_text` (the same helper
+         *        ``/cases/validate`` uses — single validator, two callers). On
+         *        failure: short-circuit, return ok=false + validation_errors,
+         *        step_results=[].
+         *     3. Reuse the same runner stack POST /runs uses (§14 R26):
+         *        :func:`normalize_case` → :func:`dsn_map_from_env` →
+         *        :class:`SqlSessionPool` → :func:`orchestrator.run_case`.
+         *        Inline-recreating any of these would be a dual-code-path violation.
+         *     4. Artifacts go to a tempdir that's wiped on return — Try never
+         *        persists.
+         *     5. Map :class:`CaseExecutionResult` → :class:`TryResponse`, truncating
+         *        stderr to 500 chars per step (UI-friendly preview).
+         *     6. On overall pass, write ``yaml_sha256 → now(UTC)`` into the
+         *        ``app.state.try_pass_cache`` so a subsequent ``/cases/submit`` with
+         *        the same exact YAML can satisfy the §6.2 three-gate without
+         *        re-running. Without this write the cache is dead infrastructure
+         *        and submit's gate rejects everything.
+         *
+         *     NOTE: This endpoint deliberately calls ``orchestrator.run_case`` (NOT
+         *     ``run_suite``). ``run_suite`` persists to ``case_results`` via
+         *     ``insert_case_result_fn`` — we don't want Try output polluting the
+         *     production DB. ``run_case`` is the same function ``run_suite`` calls
+         *     internally, so we're exercising the identical execution code path
+         *     minus the DB write.
+         */
+        post: operations["try_case_cases_try_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cases/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Case
+         * @description Submit a validated, recently-Try'd case YAML as a PR (§13.7 M3a-3).
+         *
+         *     Algorithm:
+         *
+         *     1. Hash the YAML (sha256) and check it against the Try-pass cache
+         *        (§6.2 three-gate / §13.7 M3a-3.5). Missing/stale → 400.
+         *     2. Re-validate via :func:`_validate_yaml_text` (defense in depth — the
+         *        cache hit means *some* prior Try passed, but the YAML may have
+         *        drifted since then via a different Try; re-validation closes the
+         *        window where a stale hit is reused).
+         *     3. Resolve `repo_root` via :func:`_resolve_repo_root` (§14 R27 — env
+         *        override or `__file__`-anchored default, never cwd-implicit).
+         *     4. Resolve `cases_root` via :func:`_cases_root`, look up the category's
+         *        `dir_path` from the DB, and write the YAML to disk.
+         *     5. DRY-RUN guard: if ``LBR_GITHUB_DRY_RUN=1``, return a fake response
+         *        without touching git/gh — tests + dev env exercise the full path
+         *        up to disk write without pushing to a real remote.
+         *     6. Otherwise run the git+gh subprocess chain with explicit ``cwd=``
+         *        (§14 R27), parse PR URL from `gh pr create` stdout, arm auto-merge.
+         *
+         *     Failure modes are surfaced as HTTPException — never let a
+         *     ``subprocess.CalledProcessError`` bubble as a 500 without context.
+         */
+        post: operations["submit_case_cases_submit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/categories": {
         parameters: {
             query?: never;
@@ -143,6 +300,29 @@ export interface paths {
          *     visibly broken in the UI and a human can fix it.
          */
         get: operations["list_categories_admin_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/step-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Step Kinds
+         * @description Return the static step-kind registry in declared order.
+         *
+         *     Order is preserved from `STEP_KINDS` so the skill can rely on
+         *     positional references in its prompt template.
+         */
+        get: operations["list_step_kinds_admin_step_kinds_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -177,6 +357,27 @@ export interface components {
             } | null;
             /** Error */
             error?: string | null;
+        };
+        /**
+         * CaseRecentRunOut
+         * @description One row of `GET /cases/:id/recent-runs` (M5-3 cross-page link).
+         */
+        CaseRecentRunOut: {
+            /** Run Id */
+            run_id: number;
+            /** Run Status */
+            run_status: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Case Status */
+            case_status?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
         };
         /** CaseResultOut */
         CaseResultOut: {
@@ -320,6 +521,97 @@ export interface components {
             target_version?: string | null;
             /** Triggered By */
             triggered_by?: string | null;
+        };
+        /**
+         * StepKindOut
+         * @description One entry in the `/admin/step-kinds` response.
+         *
+         *     Mirrors `app.runner.step_kinds.StepKindMeta` — the skill reads this
+         *     to ground its prompt about which step kinds (and which fields per
+         *     kind) are legal. No DB lookup; static registry.
+         */
+        StepKindOut: {
+            /** Kind */
+            kind: string;
+            /** Description */
+            description: string;
+            /** Required Fields */
+            required_fields: string[];
+            /** Optional Fields */
+            optional_fields: string[];
+        };
+        /** StepResultOut */
+        StepResultOut: {
+            /** Step Id */
+            step_id: string;
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Stderr Preview */
+            stderr_preview?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** SubmitRequest */
+        SubmitRequest: {
+            /** Yaml */
+            yaml: string;
+            /** Case Id */
+            case_id: string;
+            /** Branch Name */
+            branch_name: string;
+        };
+        /** SubmitResponse */
+        SubmitResponse: {
+            /** Pr Url */
+            pr_url: string;
+            /** Pr Number */
+            pr_number: number;
+            /** Branch */
+            branch: string;
+        };
+        /** TryRequest */
+        TryRequest: {
+            /** Yaml */
+            yaml: string;
+        };
+        /** TryResponse */
+        TryResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Yaml Sha256 */
+            yaml_sha256: string;
+            /** Step Results */
+            step_results: components["schemas"]["StepResultOut"][];
+            /**
+             * Validation Errors
+             * @default []
+             */
+            validation_errors: {
+                [key: string]: string;
+            }[];
+        };
+        /** ValidateErrorItem */
+        ValidateErrorItem: {
+            /** Where */
+            where: string;
+            /** Reason */
+            reason: string;
+        };
+        /** ValidateRequest */
+        ValidateRequest: {
+            /** Yaml */
+            yaml: string;
+        };
+        /** ValidateResponse */
+        ValidateResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Errors */
+            errors: components["schemas"]["ValidateErrorItem"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -521,6 +813,138 @@ export interface operations {
             };
         };
     };
+    get_case_recent_runs_cases__case_id__recent_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseRecentRunOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_case_cases_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    try_case_cases_try_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_case_cases_submit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_categories_admin_categories_get: {
         parameters: {
             query?: never;
@@ -537,6 +961,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CategoryOut"][];
+                };
+            };
+        };
+    };
+    list_step_kinds_admin_step_kinds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StepKindOut"][];
                 };
             };
         };
