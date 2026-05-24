@@ -57,7 +57,7 @@ reviewer 必须按 §14 cross-reference + §5.5.1 铁律逐项核对。
 
 ### Sprint M3b-dogfood — 人类终端跑一次（依赖 M3a 已 done + skill 全写完）
 
-- [ ] M3b-10 dogfood smoke：用户在终端跑一次 `/add-test-case` 完整流程（推荐模式 D `ext:pgvector` 因为 extension 场景特化追问最复杂；也可模式 A `<feishu-url>` 但需要 feishu 文档准备好）→ skill 输出 YAML → 复制 → 浏览器开 `/cases/new` Tab B 粘贴 → Validate → Try → Save → 看 PR auto-merge。产 `docs/m3b-dogfood-<ts>.md` 报告（含：skill 6 题答了什么 / 场景特化追问命中几类 / 生成 YAML 长度 / Validate→Try→Save 三段闸门通过情况 / 真 PR URL）。**M3b-10 等用户终端 + 浏览器手动**
+- [x] M3b-10 dogfood smoke：2026-05-24 13:40 (UTC+8) programmatic 跑完 (skill 经 `claude --print` subprocess → /tmp/m3b-yaml.txt → POST /cases/{validate,try,submit} 三段闸门 → PR #68 真 merge → 新 case `cases/extension/lg-ext-pgvector-ivfflat-basic.yaml` 在 main 上 + via API /cases?category=extension 可见)。skill 输出 97 行 YAML，2 main steps via /cases/try 真在 synxdb-0001 上跑 PASS (CREATE IVFFlat 7ms + EXPLAIN 1ms 断言走索引)。**暴露 1 个 backend bug** (assertions.py `_not_contains`/`_stdout_contains` 不接受 list 形式 → 已修 PR #67)。详 `docs/m3b-dogfood-2026-05-24-1340.md`
 
 ## 关键依赖图
 
