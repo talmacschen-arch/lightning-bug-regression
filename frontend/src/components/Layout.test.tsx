@@ -130,6 +130,11 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / External services');
     });
 
+    it('breadcrumb shows Admin / Delete case at /admin/cases', () => {
+      renderAt('/admin/cases');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Delete case');
+    });
+
   });
 
   describe('navigation contract', () => {

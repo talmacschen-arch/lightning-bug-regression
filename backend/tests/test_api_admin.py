@@ -370,3 +370,118 @@ def test_external_services_accepts_both_yml_and_yaml_extensions(
     items = client.get("/admin/external-services").json()
     names = {i["name"] for i in items}
     assert names == {"a", "b"}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /admin/cases/{case_id} (v1.16+)
+# ---------------------------------------------------------------------------
+
+
+def _seed_test_case_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Set up a fake cases/ root with one category dir + 1 case YAML."""
+    cases_root = tmp_path / "cases"
+    cat_dir = cases_root / "bug-regression"
+    cat_dir.mkdir(parents=True)
+    case_yaml = cat_dir / "lg-bug-test-delete.yaml"
+    case_yaml.write_text(
+        "id: lg-bug-test-delete\n"
+        "category: bug_regression\n"
+        "status: open\n"
+        "title: dummy\n"
+        "defaults: {database: gpadmin}\n"
+        "steps:\n  - {id: s1, kind: shell, cmd: 'echo ok'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CASES_ROOT", str(cases_root))
+    return case_yaml
+
+
+def test_delete_case_removes_yaml_file(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    case_yaml = _seed_test_case_dir(monkeypatch, tmp_path)
+    assert case_yaml.exists()
+
+    resp = client.delete("/admin/cases/lg-bug-test-delete")
+    assert resp.status_code == 204
+    assert not case_yaml.exists()
+
+
+def test_delete_case_404_when_not_found(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _seed_test_case_dir(monkeypatch, tmp_path)
+    resp = client.delete("/admin/cases/lg-bug-not-real")
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"]
+
+
+def test_delete_case_path_traversal_attempt_returns_404(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """case_id with .. or path separator can't escape — iter_case_files
+    only yields files inside category dirs, so a `..` case_id has no
+    matching file = 404 (route param doesn't even allow raw `/`)."""
+    _seed_test_case_dir(monkeypatch, tmp_path)
+    resp = client.delete("/admin/cases/..%2Fevil")
+    assert resp.status_code in (404, 400)
+
+
+def test_delete_case_preserves_case_results_history(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Historical case_results rows must NOT be touched by case delete —
+    that's the whole point: delete the definition, keep the audit trail."""
+    case_yaml = _seed_test_case_dir(monkeypatch, tmp_path)
+
+    # Seed a fake run + case_result referencing the case_id
+    from datetime import datetime as _dt
+
+    with sqlite_store.get_session() as sess:
+        run = sqlite_store.create_run(sess, started_at=_dt.utcnow())
+        sqlite_store.finish_run(
+            sess,
+            run.id,
+            status="done",
+            finished_at=_dt.utcnow(),
+            total=1,
+            passed=1,
+            failed=0,
+            skipped=0,
+        )
+        sqlite_store.insert_case_result(
+            sess,
+            run_id=run.id,
+            case_id="lg-bug-test-delete",
+            status="pass",
+            duration_ms=42,
+        )
+        run_id = run.id
+
+    resp = client.delete("/admin/cases/lg-bug-test-delete")
+    assert resp.status_code == 204
+    assert not case_yaml.exists()
+
+    # case_results row still there
+    with sqlite_store.get_session() as sess:
+        rows = sqlite_store.list_case_results(sess, run_id)
+        assert len(rows) == 1
+        assert rows[0].case_id == "lg-bug-test-delete"
+
+
+def test_delete_case_requires_admin_password_when_set(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _seed_test_case_dir(monkeypatch, tmp_path)
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
+
+    # Without header → 401
+    resp = client.delete("/admin/cases/lg-bug-test-delete")
+    assert resp.status_code == 401
+
+    # With header → 204
+    resp = client.delete(
+        "/admin/cases/lg-bug-test-delete",
+        headers={"X-Admin-Password": "secret-pw-2026"},
+    )
+    assert resp.status_code == 204

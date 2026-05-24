@@ -43,6 +43,18 @@ export default function AdminPage() {
             Read-only browser for <code>external/&lt;svc&gt;.yml</code> (DUT + ES + ... edit via filesystem)
           </span>
         </li>
+        <li>
+          <Link
+            to="/admin/cases"
+            data-testid="admin-link-cases"
+            className="text-blue-700 hover:underline"
+          >
+            Delete case →
+          </Link>
+          <span className="ml-2 text-xs text-muted-foreground">
+            ⚠️ Permanent — removes YAML from disk; history preserved. For temporary disable, use Skip list.
+          </span>
+        </li>
       </ul>
     </div>
   );

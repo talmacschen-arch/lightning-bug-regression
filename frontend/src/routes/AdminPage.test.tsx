@@ -7,7 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 import AdminPage from './AdminPage';
 
 describe('AdminPage', () => {
-  it('renders skip-list + external-services links (Settings removed 2026-05-25)', () => {
+  it('renders skip-list + external-services + delete-case links', () => {
     render(
       <MemoryRouter>
         <AdminPage />
@@ -20,6 +20,9 @@ describe('AdminPage', () => {
 
     const extSvc = screen.getByTestId('admin-link-external-services');
     expect(extSvc.getAttribute('href')).toBe('/admin/external-services');
+
+    const deleteCase = screen.getByTestId('admin-link-cases');
+    expect(deleteCase.getAttribute('href')).toBe('/admin/cases');
 
     // Settings link must NOT render — endpoint + page deleted
     expect(screen.queryByTestId('admin-link-settings')).toBeNull();
