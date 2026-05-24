@@ -55,6 +55,37 @@ function statusToBadgeClass(status: string): string {
   return 'badge-muted';
 }
 
+/**
+ * Derive run verdict from a RunSummary.
+ *
+ * Backend `run.status` is the LIFECYCLE phase ('running' / 'done' /
+ * 'aborted') — NOT the verdict. The verdict (pass / fail / running /
+ * aborted / empty) must be derived from the combination of `status` +
+ * `failed` count.
+ *
+ * Before this fix (PR pre-#106): RecentRunsTile filtered `r.status ===
+ * 'pass'` etc., which never matched any real run (backend writes 'done'
+ * not 'pass'), so all 3 counters showed 0. User reported this.
+ */
+function runVerdict(r: RunSummary): 'pass' | 'fail' | 'running' | 'aborted' | 'empty' {
+  if (r.status === 'running') return 'running';
+  if (r.status === 'aborted') return 'aborted';
+  // 'done' (or any other terminal lifecycle status): verdict from failed count
+  const failed = r.failed ?? 0;
+  const passed = r.passed ?? 0;
+  if (failed > 0) return 'fail';
+  if (passed > 0) return 'pass';
+  return 'empty'; // done but no cases ran (shouldn't happen normally)
+}
+
+function verdictToBadgeClass(verdict: ReturnType<typeof runVerdict>): string {
+  if (verdict === 'pass') return 'badge-success';
+  if (verdict === 'fail') return 'badge-danger';
+  if (verdict === 'aborted') return 'badge-danger';
+  if (verdict === 'running') return 'badge-warning';
+  return 'badge-muted'; // empty
+}
+
 // ---- KPI tiles --------------------------------------------------------------
 
 interface CategoryCountTileProps {
@@ -133,9 +164,13 @@ interface RecentRunsTileProps {
 }
 
 function RecentRunsTile({ runs }: RecentRunsTileProps) {
-  const pass = runs.filter((r) => r.status === 'pass').length;
-  const fail = runs.filter((r) => r.status === 'fail').length;
-  const running = runs.filter((r) => r.status === 'running').length;
+  // Count by derived verdict, not raw lifecycle status (backend writes
+  // 'done', not 'pass'/'fail'). See runVerdict() doc.
+  const verdicts = runs.map(runVerdict);
+  const pass = verdicts.filter((v) => v === 'pass').length;
+  const fail = verdicts.filter((v) => v === 'fail').length;
+  const running = verdicts.filter((v) => v === 'running').length;
+  const aborted = verdicts.filter((v) => v === 'aborted').length;
   return (
     <div data-testid="dashboard-kpi-recent-runs" className="kpi-tile">
       <div className="kpi-tile-label">Recent runs (last {runs.length})</div>
@@ -144,6 +179,12 @@ function RecentRunsTile({ runs }: RecentRunsTileProps) {
         <span className="badge badge-success">{pass} pass</span>{' '}
         <span className="badge badge-danger">{fail} fail</span>{' '}
         <span className="badge badge-warning">{running} running</span>
+        {aborted > 0 && (
+          <>
+            {' '}
+            <span className="badge badge-danger">{aborted} aborted</span>
+          </>
+        )}
       </div>
       <Link to="/runs" className="kpi-tile-link">
         View →
@@ -181,8 +222,8 @@ function RecentActivity({ runs }: RecentActivityProps) {
             className="dashboard-activity-item"
           >
             <Link to={`/runs/${r.id}`}>
-              <span className={`badge ${statusToBadgeClass(r.status)}`}>
-                {r.status}
+              <span className={`badge ${verdictToBadgeClass(runVerdict(r))}`}>
+                {runVerdict(r)}
               </span>
               <span className="run-id">Run #{r.id}</span>
               <span className="run-summary">
