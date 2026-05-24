@@ -59,7 +59,7 @@ steps:
   - name: "precondition: ES /_cluster/health status=green (失败则后续 step 跳)"
     kind: shell
     cmd: |
-      su - gpadmin -c 'curl -m 10 -sS "http://192.168.195.203:9200/_cluster/health?pretty"'
+      su - gpadmin -c 'curl -m 10 -sS "{{ external.elasticsearch.extras.scheme }}://{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}/_cluster/health?pretty"'
     timeout_sec: 30
     expect:
       exit_code: 0
@@ -89,7 +89,7 @@ steps:
       );
       CREATE INDEX idx_zombo_products_p ON public.products_p
         USING zombodb ((public.products_p.*))
-        WITH (url='http://192.168.195.203:9200/');
+        WITH (url='{{ external.elasticsearch.extras.scheme }}://{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}/');
     timeout_sec: 120
     expect:
       not_contains: ["ERROR", "FATAL"]
@@ -209,9 +209,10 @@ notes: |
   - **ES service**: `http://192.168.195.203:9200` (Elasticsearch 7.10.2 + Lucene 8.7.0；
     cluster_name = elasticsearch；2026-05-24 status=green / 615 active shards)
   - **zombodb extension**: 3000.1.8 in SynxDB-4.5.0-build130 (gpadmin DB)
-  - **external_deps**: `[elasticsearch]` — runtime injection 暂未上线（M6-5 待）；
-    本 case ES URL 直接 hardcode `192.168.195.203:9200`，M6-5 落地后改 Jinja
-    `{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}` 渲染
+  - **external_deps**: `[elasticsearch]` — runtime injection via `external/elasticsearch.yml`
+    + `{{ external.elasticsearch.{host,port,extras.scheme} }}` Jinja rendering（M6-5 上线，
+    PR #116）。Override 跑不同 ES 集群：改 `external/elasticsearch.yml` 或设
+    `EXTERNAL_DEPS_DIR=/path` env var。
 
   **步骤 1 ES 健康检查策略**：飞书原文要求 "其他情况属于异常则不继续后续测试，报错
   退出"。orchestrator 自带 "step fail blocks downstream main steps" 行为（lg-bug-0008

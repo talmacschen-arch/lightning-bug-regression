@@ -557,3 +557,137 @@ def test_download_artifact_404_for_missing_file(
     run_id, case_id, _ = _seed_run_with_artifacts(tmp_path, monkeypatch)
     resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/no-such.txt")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# M6-5 external_deps runtime injection
+# ---------------------------------------------------------------------------
+
+
+def test_execute_run_injects_external_context_from_yaml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ensure _execute_run loads external/<svc>.yml for each svc in
+    union(case.external_deps) and merges under jinja_context['external'].
+
+    We don't need to actually run a case end-to-end — just verify the
+    orchestrator receives a jinja_context with the right shape.
+    """
+    # Set up external/ dir
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    (ext_dir / "elasticsearch.yml").write_text("host: 10.0.0.5\nport: 9200\n", encoding="utf-8")
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+
+    # Spy on orchestrator.run_suite
+    from app.api import runs as runs_api
+    from app.runner.orchestrator import SuiteSummary
+
+    captured: dict[str, Any] = {}
+
+    async def fake_run_suite(cases, *, jinja_context, **kwargs):
+        captured["jinja_context"] = jinja_context
+        return SuiteSummary(total=0, passed=0, failed=0, errored=0, skipped=0)
+
+    monkeypatch.setattr(runs_api.orchestrator, "run_suite", fake_run_suite)
+
+    # Call _execute_run directly with a case that declares external_deps
+    cases = [
+        {"id": "lg-xs-test", "external_deps": ["elasticsearch"]},
+    ]
+    import asyncio
+
+    # _execute_run needs a real DB session because it calls finish_run +
+    # publishes; reuse the client fixture's setup pattern.
+    engine = create_engine(
+        "sqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False, class_=Session
+    )
+    monkeypatch.setattr(sqlite_store, "_engine", engine, raising=False)
+    monkeypatch.setattr(sqlite_store, "_SessionLocal", SessionLocal, raising=False)
+
+    with SessionLocal() as sess:
+        run = sqlite_store.create_run(sess, started_at=datetime.utcnow())
+        run_id = run.id
+
+    asyncio.run(
+        runs_api._execute_run(
+            run_id=run_id,
+            cases=cases,
+            artifacts_root=tmp_path / "artifacts",
+            jinja_context={"coordinator": {"host": "syn0001"}},
+            dut_hosts=set(),
+        )
+    )
+
+    jc = captured["jinja_context"]
+    # original coordinator key preserved
+    assert jc["coordinator"]["host"] == "syn0001"
+    # external block injected
+    assert "external" in jc
+    assert jc["external"]["elasticsearch"]["host"] == "10.0.0.5"
+    assert jc["external"]["elasticsearch"]["port"] == 9200
+
+    engine.dispose()
+
+
+def test_execute_run_external_override_via_user_context_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If system_settings.jinja_context already provides external.<svc>,
+    user-supplied values should override the file-loaded defaults so a
+    dev can hot-patch a target host without editing external/<svc>.yml."""
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    (ext_dir / "es.yml").write_text("host: from-file\n", encoding="utf-8")
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+
+    from app.api import runs as runs_api
+    from app.runner.orchestrator import SuiteSummary
+
+    captured: dict[str, Any] = {}
+
+    async def fake_run_suite(cases, *, jinja_context, **kwargs):
+        captured["jinja_context"] = jinja_context
+        return SuiteSummary(total=0, passed=0, failed=0, errored=0, skipped=0)
+
+    monkeypatch.setattr(runs_api.orchestrator, "run_suite", fake_run_suite)
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False, class_=Session
+    )
+    monkeypatch.setattr(sqlite_store, "_engine", engine, raising=False)
+    monkeypatch.setattr(sqlite_store, "_SessionLocal", SessionLocal, raising=False)
+
+    with SessionLocal() as sess:
+        run = sqlite_store.create_run(sess, started_at=datetime.utcnow())
+        run_id = run.id
+
+    import asyncio
+
+    asyncio.run(
+        runs_api._execute_run(
+            run_id=run_id,
+            cases=[{"id": "x", "external_deps": ["es"]}],
+            artifacts_root=tmp_path / "artifacts",
+            jinja_context={
+                "external": {"es": {"host": "user-override"}},
+            },
+            dut_hosts=set(),
+        )
+    )
+    assert captured["jinja_context"]["external"]["es"]["host"] == "user-override"
+    engine.dispose()
