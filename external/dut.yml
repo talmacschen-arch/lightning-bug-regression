@@ -1,0 +1,34 @@
+# external/dut.yml — connection to the system under test (SUT) =
+# lightning / SynxDB cluster being regression-tested (post-Settings removal,
+# 2026-05-25).
+#
+# Why this lives under external/ instead of env vars:
+#   The DUT is just one more "external system" to the framework — same
+#   abstraction as external/elasticsearch.yml (M6-5). Editing this file
+#   switches the runner to a different cluster (e.g. dev → staging) without
+#   restarting backend with different PGHOST/PGPORT/... env vars.
+#
+# Backend consumers:
+#   - dsn_builder.dsn_map_from_external_or_env(): builds psycopg DSN for
+#     each case's `defaults.database` + per-step database override
+#   - runs.py::_execute_run: populates `dut_hosts` (used by
+#     jinja_render.decide_ssh_user, §5.3.2 / §14 R13) and injects
+#     `external.dut.*` into the Jinja context
+#
+# Case YAML can also reference:
+#   {{ external.dut.host }} / {{ external.dut.port }} / etc.
+#
+# Falls back to env var (PGHOST/PGPORT/PGUSER/PGDATABASE) if this file is
+# missing or fields are absent — preserves existing dev workflow.
+host: 127.0.0.1
+port: 5432
+user: gpadmin
+database: gpadmin
+
+# DUT cluster host list — ssh to these as `gpadmin` (su - gpadmin -c '...');
+# any other host name → ssh as `root` (build / CI boxes). §5.3.2 / §14 R13.
+hosts:
+  - mdw
+  - synxdb-0001
+  - sdw1
+  - sdw2

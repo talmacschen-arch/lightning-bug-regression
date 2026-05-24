@@ -287,40 +287,50 @@ def test_get_run_returns_run_with_case_results_array(client: TestClient) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_jinja_context_and_dut_hosts_read_from_system_settings(
-    client: TestClient,
+def test_dut_hosts_read_from_external_dut_yml(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If system_settings has jinja_context + dut_hosts entries, the
-    background task should propagate them to run_suite. We assert by
-    setting the rows and checking the orchestrator received them."""
-    captured_ctx: dict[str, Any] = {}
+    """Post-Settings removal (2026-05-25): dut_hosts comes from
+    external/dut.yml, not the system_settings table. Verify the
+    background task picks up the file contents and passes them to
+    run_suite via the dut_hosts argument."""
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    (ext_dir / "dut.yml").write_text(
+        "host: 10.0.0.99\n"
+        "port: 5432\n"
+        "user: gpadmin\n"
+        "database: gpadmin\n"
+        "hosts:\n  - mdw\n  - sdw7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
 
-    async def capture_run_suite(
-        cases: list[dict[str, Any]], *, run_id: int, **kwargs: Any
-    ) -> SuiteSummary:
-        captured_ctx["jinja_context"] = kwargs.get("jinja_context")
-        captured_ctx["dut_hosts"] = kwargs.get("dut_hosts")
+    captured: dict[str, Any] = {}
+
+    async def capture_run_suite(cases, *, jinja_context, dut_hosts, **kwargs):
+        captured["jinja_context"] = jinja_context
+        captured["dut_hosts"] = dut_hosts
         return SuiteSummary(total=0, passed=0, failed=0, errored=0, skipped=0)
 
-    # monkeypatch directly on the runs_api binding
     import pytest as _pytest
 
     mp = _pytest.MonkeyPatch()
     mp.setattr(runs_api.orchestrator, "run_suite", capture_run_suite)
 
     try:
-        with sqlite_store.get_session() as sess:
-            sqlite_store.set_setting(sess, "jinja_context", {"target_version": "2.3.0"})
-            sqlite_store.set_setting(sess, "dut_hosts", {"hosts": ["mdw", "sdw1"]})
-
         r = client.post("/runs", json={})
         run_id = r.json()["run_id"]
         _wait_for_run_terminal(client, run_id)
     finally:
         mp.undo()
 
-    assert captured_ctx["jinja_context"] == {"target_version": "2.3.0"}
-    assert captured_ctx["dut_hosts"] == {"mdw", "sdw1"}
+    # dut_hosts populated from external/dut.yml `hosts:` list
+    assert captured["dut_hosts"] == {"mdw", "sdw7"}
+    # external.dut.* injected into Jinja context so cases can reference
+    # `{{ external.dut.host }}` etc.
+    assert captured["jinja_context"]["external"]["dut"]["host"] == "10.0.0.99"
+    assert captured["jinja_context"]["external"]["dut"]["port"] == 5432
 
 
 def test_background_task_marks_run_aborted_on_unexpected_exception(

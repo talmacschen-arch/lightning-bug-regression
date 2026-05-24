@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime
+from datetime import date
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
@@ -226,101 +226,12 @@ def delete_skip_list_entry(entry_id: int) -> None:
         sess.commit()
 
 
-# ---------------------------------------------------------------------------
-# M6-4 settings list/update
-# ---------------------------------------------------------------------------
-
-
-class SettingOut(BaseModel):
-    key: str
-    value: object  # JSON-decoded value (dict / list / scalar wrapped)
-    value_type: str
-    updated_at: datetime
-
-
-class SettingUpdate(BaseModel):
-    value: object  # any JSON-serializable
-
-
-# Allowlist of keys that the Admin UI can edit. Other keys (e.g. internal
-# bookkeeping) are exposed as read-only via GET but PUT rejects them. This
-# avoids accidentally clobbering things like `jinja_context` shape that
-# the runner depends on without a guided schema.
-#
-# Only keys with a real runtime consumer are listed:
-#   - jinja_context     → runs.py::_load_jinja_context_and_dut_hosts
-#   - dut_hosts         → runs.py + jinja_render.decide_ssh_user (§5.3.2 / R13)
-#   - server_log_path   → runs.py::_execute_run (kind: log_grep default)
-#
-# `dev_db_url` / `cluster_topology` were reserved in the M6-4 design
-# (§13.12 plan) but never wired to a consumer. Removed 2026-05-25 per
-# user request — editing them did nothing and was confusing.
-ADMIN_EDITABLE_SETTINGS = {
-    "jinja_context",
-    "dut_hosts",
-    "server_log_path",
-}
-
-
-@router.get("/settings", response_model=list[SettingOut])
-def list_admin_settings() -> list[SettingOut]:
-    """List all system_settings rows. Caller filters as needed."""
-    with sqlite_store.get_session() as sess:
-        rows = sqlite_store.list_settings(sess)
-        out: list[SettingOut] = []
-        for r in rows:
-            try:
-                v: object = json.loads(r.value)
-            except (ValueError, TypeError):
-                v = r.value
-            out.append(
-                SettingOut(
-                    key=r.key,
-                    value=v,
-                    value_type=r.value_type,
-                    updated_at=r.updated_at,
-                )
-            )
-        return out
-
-
-@router.put(
-    "/settings/{key}",
-    response_model=SettingOut,
-    dependencies=[Depends(require_admin_password)],
-)
-def update_admin_setting(key: str, payload: SettingUpdate) -> SettingOut:
-    """Upsert one setting. Key must be in the editable allowlist.
-
-    Value must be a JSON object (dict). Top-level scalars and arrays
-    are rejected so existing consumers (runs.py, etc.) that read
-    settings as dicts don't break — the storage layer stores anything
-    JSON-serializable but the schema across consumers is "value is a
-    dict". Wrap scalars at the call site if you want them in a setting.
-    """
-    if key not in ADMIN_EDITABLE_SETTINGS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"key {key!r} is not in the admin-editable allowlist",
-        )
-    if not isinstance(payload.value, dict):
-        raise HTTPException(
-            status_code=400,
-            detail="value must be a JSON object (dict); wrap scalars/lists if needed",
-        )
-    with sqlite_store.get_session() as sess:
-        sqlite_store.set_setting(sess, key, payload.value)
-        sess.commit()
-        rows = sqlite_store.list_settings(sess)
-        row = next((r for r in rows if r.key == key), None)
-        assert row is not None  # we just wrote it
-        try:
-            v: object = json.loads(row.value)
-        except (ValueError, TypeError):
-            v = row.value
-        return SettingOut(
-            key=row.key,
-            value=v,
-            value_type=row.value_type,
-            updated_at=row.updated_at,
-        )
+# NOTE: /admin/settings list + PUT endpoints (M6-4 PR #115) were removed
+# 2026-05-25. The 3 keys that endpoint allowlisted (jinja_context /
+# dut_hosts / server_log_path) had near-zero real consumers:
+#   - dut_hosts moved to external/dut.yml (post-Settings refactor, this PR)
+#   - jinja_context never used in any case YAML (M6-5 external_deps_loader
+#     supplanted it for the only real use case = injecting external svc URLs)
+#   - server_log_path: cases write `server_log_path:` per-case in YAML
+# The system_settings table + storage helpers (sqlite_store.get_setting /
+# set_setting / list_settings) remain for future use but have no callers.

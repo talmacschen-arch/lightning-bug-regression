@@ -7,9 +7,15 @@ module + its test exist so both code paths build DSNs the same way.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from app.runner.dsn_builder import build_dsn_map, dsn_map_from_env
+from app.runner.dsn_builder import (
+    build_dsn_map,
+    dsn_map_from_env,
+    dsn_map_from_external_or_env,
+)
 
 # Minimal normalized case shapes — matches what case_normalizer.normalize_case
 # produces (every step has an `on:` session-name field).
@@ -99,3 +105,60 @@ class TestDsnMapFromEnv:
         monkeypatch.setenv("PGPORT", "5555")
         m = dsn_map_from_env([])
         assert ":5555/" in m["default"]
+
+
+class TestDsnMapFromExternalOrEnv:
+    """Post-Settings removal (2026-05-25): DUT connection moved to
+    external/dut.yml. Loader picks file > env > module default per field."""
+
+    def test_reads_external_dut_yml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        ext_dir = tmp_path / "external"
+        ext_dir.mkdir()
+        (ext_dir / "dut.yml").write_text(
+            "host: file-host\nport: 6543\nuser: fileuser\ndatabase: filedb\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+        # Clear env so we don't accidentally hide the file path
+        for k in ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE"):
+            monkeypatch.delenv(k, raising=False)
+        m = dsn_map_from_external_or_env([])
+        assert m["default"] == "postgresql://fileuser@file-host:6543/filedb"
+
+    def test_falls_back_to_env_when_file_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        ext_dir = tmp_path / "external"
+        ext_dir.mkdir()
+        # No dut.yml file
+        monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+        monkeypatch.setenv("PGHOST", "envhost")
+        monkeypatch.setenv("PGPORT", "5432")
+        monkeypatch.setenv("PGUSER", "envuser")
+        monkeypatch.setenv("PGDATABASE", "envdb")
+        m = dsn_map_from_external_or_env([])
+        assert m["default"] == "postgresql://envuser@envhost:5432/envdb"
+
+    def test_partial_file_falls_through_to_env_per_field(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """If external/dut.yml has only `host`, port/user/db fall through to env."""
+        ext_dir = tmp_path / "external"
+        ext_dir.mkdir()
+        (ext_dir / "dut.yml").write_text("host: only-host\n", encoding="utf-8")
+        monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+        monkeypatch.setenv("PGUSER", "envuser")
+        monkeypatch.setenv("PGDATABASE", "envdb")
+        monkeypatch.delenv("PGPORT", raising=False)
+        m = dsn_map_from_external_or_env([])
+        # host from file, user/db from env, port from default (5432)
+        assert m["default"] == "postgresql://envuser@only-host:5432/envdb"
+
+    def test_uses_module_default_when_neither_file_nor_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(tmp_path / "nope"))
+        for k in ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE"):
+            monkeypatch.delenv(k, raising=False)
+        m = dsn_map_from_external_or_env([])
+        assert m["default"] == "postgresql://gpadmin@127.0.0.1:5432/gpadmin"
