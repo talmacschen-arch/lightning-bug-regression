@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,12 @@ function groupCheckState(
 
 export default function RunNewPage() {
   const navigate = useNavigate();
+  // M5-5 — Dashboard Quick Actions navigate here with ?category=X&status=Y
+  // to pre-select cases matching that filter. The preset is one-shot:
+  // applied on first cases-loaded render, then user can edit freely.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const presetCategory = searchParams.get('category');
+  const presetStatus = searchParams.get('status');
 
   const [categories, setCategories] = useState<CategoryOut[]>([]);
   const [casesByCategory, setCasesByCategory] = useState<Record<string, CaseSummary[]>>({});
@@ -41,6 +47,14 @@ export default function RunNewPage() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [targetVersion, setTargetVersion] = useState('');
+  // Tracks the URL preset key string that has been applied, so navigating
+  // to a NEW preset (?category=…&status=…) triggers re-apply, but the
+  // same URL stays sticky after the user edits selection.
+  const [appliedPresetKey, setAppliedPresetKey] = useState<string | null>(null);
+  const presetKey =
+    presetCategory || presetStatus
+      ? `${presetCategory ?? ''}|${presetStatus ?? ''}`
+      : null;
 
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<ConflictError | null>(null);
@@ -89,6 +103,43 @@ export default function RunNewPage() {
       cancelled = true;
     };
   }, []);
+
+  // M5-5 — Apply URL preset (?category=X&status=Y) after cases load.
+  // Pre-selects all cases whose category & status match the preset.
+  // Both params optional: only category → all in category;
+  //                       only status → all with that status anywhere;
+  //                       both → AND-filter
+  // Re-applies if presetKey changes (e.g., user navigates to a NEW preset
+  // via Dashboard Quick Action without page reload).
+  useEffect(() => {
+    if (loading) return;
+    if (presetKey === null) return;
+    if (appliedPresetKey === presetKey) return;
+
+    const allCases = categories.flatMap((cat) => casesByCategory[cat.name] ?? []);
+    const matched = allCases
+      .filter((c) => (presetCategory ? c.category === presetCategory : true))
+      .filter((c) => (presetStatus ? c.status === presetStatus : true))
+      .map((c) => c.id);
+
+    setSelected(new Set(matched));
+    setAppliedPresetKey(presetKey);
+  }, [
+    loading,
+    categories,
+    casesByCategory,
+    presetCategory,
+    presetStatus,
+    presetKey,
+    appliedPresetKey,
+  ]);
+
+  // M5-5 — Clear the URL preset (also empties selection).
+  function clearPreset() {
+    setSearchParams({}, { replace: true });
+    setSelected(new Set());
+    setAppliedPresetKey(null);
+  }
 
   // Keep indeterminate state on DOM checkboxes (React does not support indeterminate as a prop)
   useEffect(() => {
@@ -220,9 +271,54 @@ export default function RunNewPage() {
   );
   const globalState = groupCheckState(selected, allIds);
 
+  // M5-5 — Find matched cases count for banner display (does not affect
+  // selection state; selection is committed via the effect above).
+  const presetMatchedCount =
+    presetKey !== null
+      ? categories
+          .flatMap((cat) => casesByCategory[cat.name] ?? [])
+          .filter((c) => (presetCategory ? c.category === presetCategory : true))
+          .filter((c) => (presetStatus ? c.status === presetStatus : true)).length
+      : 0;
+
   return (
     <div data-testid="page-run-new" className="p-4 space-y-4">
       <h1 className="text-2xl font-semibold">Trigger New Run</h1>
+
+      {/* M5-5 — Preset banner shown when URL has ?category=…&status=… */}
+      {presetKey !== null && (
+        <div
+          data-testid="preset-banner"
+          className="flex items-center gap-3 px-3 py-2 rounded border border-blue-200 bg-blue-50 text-sm"
+        >
+          <span data-testid="preset-banner-label">
+            <strong>Preset from Dashboard</strong>:{' '}
+            {presetCategory && (
+              <span data-testid="preset-banner-category">
+                category={presetCategory}
+              </span>
+            )}
+            {presetCategory && presetStatus && ' · '}
+            {presetStatus && (
+              <span data-testid="preset-banner-status">
+                status={presetStatus}
+              </span>
+            )}
+            {' — '}
+            <span data-testid="preset-banner-count">
+              {presetMatchedCount} case{presetMatchedCount === 1 ? '' : 's'} matched
+            </span>
+          </span>
+          <button
+            type="button"
+            data-testid="preset-banner-clear"
+            className="ml-auto text-xs underline text-blue-700"
+            onClick={clearPreset}
+          >
+            Clear preset
+          </button>
+        </div>
+      )}
 
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         {/* Global controls row */}

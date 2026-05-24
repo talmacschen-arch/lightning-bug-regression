@@ -189,3 +189,126 @@ describe('RunNewPage', () => {
     expect(screen.getByTestId('link-existing-run')).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// M5-5 — URL preset (?category=X&status=Y) tests
+// ---------------------------------------------------------------------------
+
+const FAKE_PRESET_CASES_BUG = [
+  { id: 'bug-001', category: 'bug_regression', title: 'open 1', status: 'open', destructive: false, tags: null, error: null },
+  { id: 'bug-002', category: 'bug_regression', title: 'open 2', status: 'open', destructive: false, tags: null, error: null },
+  { id: 'bug-003', category: 'bug_regression', title: 'fixed 1', status: 'fixed', destructive: false, tags: null, error: null },
+];
+
+const FAKE_PRESET_CASES_EXT = [
+  { id: 'ext-001', category: 'extension', title: 'stable 1', status: 'stable', destructive: false, tags: null, error: null },
+];
+
+function setupPresetMocks() {
+  mockApiFetch.mockImplementation(async (path: string, _method: string, init?: { query?: Record<string, string | number | undefined> }) => {
+    if (path === '/admin/categories') return FAKE_CATEGORIES;
+    if (path === '/cases') {
+      const category = init?.query?.['category'];
+      if (category === 'bug_regression') return FAKE_PRESET_CASES_BUG;
+      if (category === 'extension') return FAKE_PRESET_CASES_EXT;
+      return [...FAKE_PRESET_CASES_BUG, ...FAKE_PRESET_CASES_EXT];
+    }
+    return [];
+  });
+}
+
+function renderAtUrl(url: string) {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <RunNewPage />
+    </MemoryRouter>,
+  );
+}
+
+describe('RunNewPage M5-5 — URL preset (?category=X&status=Y)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupPresetMocks();
+  });
+
+  it('no preset banner when URL has no category/status', async () => {
+    renderAtUrl('/runs/new');
+    await waitFor(() => {
+      expect(screen.getByTestId('case-checkbox-bug-001')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('preset-banner')).toBeNull();
+  });
+
+  it('shows preset banner when URL has category', async () => {
+    renderAtUrl('/runs/new?category=bug_regression');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('preset-banner-category')).toHaveTextContent('bug_regression');
+  });
+
+  it('pre-selects all bug_regression open cases when ?category=bug_regression&status=open', async () => {
+    renderAtUrl('/runs/new?category=bug_regression&status=open');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // 2 "open" cases in fixture (bug-001 / bug-002), bug-003 is "fixed" → excluded
+    expect(screen.getByTestId('preset-banner-count')).toHaveTextContent('2 cases matched');
+    // Selection count visible in select-all label
+    await waitFor(() => {
+      expect(screen.getByText(/Select all \(2 \/ 4\)/)).toBeInTheDocument();
+    });
+  });
+
+  it('pre-selects all matching status across categories when only ?status=stable', async () => {
+    renderAtUrl('/runs/new?status=stable');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // Only ext-001 has status='stable'
+    expect(screen.getByTestId('preset-banner-count')).toHaveTextContent('1 case matched');
+  });
+
+  it('pre-selects entire category when only ?category=bug_regression', async () => {
+    renderAtUrl('/runs/new?category=bug_regression');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // 3 bug cases total (bug-001/002/003)
+    expect(screen.getByTestId('preset-banner-count')).toHaveTextContent('3 cases matched');
+  });
+
+  it('shows 0 cases matched when preset matches nothing', async () => {
+    renderAtUrl('/runs/new?category=bug_regression&status=wontfix');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('preset-banner-count')).toHaveTextContent('0 cases matched');
+  });
+
+  it('Clear preset button removes URL params + deselects all', async () => {
+    renderAtUrl('/runs/new?category=bug_regression&status=open');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // Confirm 2 selected
+    await waitFor(() => {
+      expect(screen.getByText(/Select all \(2 \/ 4\)/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('preset-banner-clear'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('preset-banner')).toBeNull();
+    });
+    // Selection count reset
+    expect(screen.getByText(/Select all \(0 \/ 4\)/)).toBeInTheDocument();
+  });
+
+  it('shows both category and status labels when both present', async () => {
+    renderAtUrl('/runs/new?category=extension&status=stable');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('preset-banner-category')).toHaveTextContent('extension');
+    expect(screen.getByTestId('preset-banner-status')).toHaveTextContent('stable');
+  });
+});
