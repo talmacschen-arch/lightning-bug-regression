@@ -186,11 +186,11 @@ describe('FilterBar (M5-4)', () => {
     expect(input.placeholder).toBe('Search id / title / tags…');
   });
 
-  it('honors qPlaceholder prop override (RunsPage shape)', async () => {
+  it('honors qPlaceholder prop override (RunsPage shape with examples)', async () => {
     renderBar({
-      qPlaceholder: 'Search id / status / version / triggered_by…',
+      qPlaceholder: '搜索 id / status / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin',
     });
     const input = screen.getByTestId('filter-q') as HTMLInputElement;
-    expect(input.placeholder).toBe('Search id / status / version / triggered_by…');
+    expect(input.placeholder).toBe('搜索 id / status / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin');
   });
 });
