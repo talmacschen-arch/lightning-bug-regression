@@ -422,6 +422,114 @@ def test_submit_subprocess_failure_returns_500(
 
 
 # ---------------------------------------------------------------------------
+# /cases/submit — gh transient network retry (M4a-1 dogfood follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_submit_gh_pr_create_retries_on_tls_timeout(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """M4a-1 dogfood (PR #70) hit `Post https://api.github.com/graphql:
+    net/http: TLS handshake timeout` mid-submit. Branch was already
+    pushed; only the gh pr create step needed a retry. The endpoint
+    now retries gh subprocess calls up to 3 times on transient network
+    errors with 5s back-off. Test: first two attempts raise the TLS
+    timeout, third succeeds → endpoint returns 200 + PR URL."""
+    monkeypatch.delenv("LBR_GITHUB_DRY_RUN", raising=False)
+    monkeypatch.setenv("LBR_REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr("app.api.cases.time.sleep", lambda _s: None)  # skip back-off in test
+
+    gh_pr_create_calls = {"count": 0}
+
+    def _fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if argv[:3] == ["gh", "pr", "create"]:
+            gh_pr_create_calls["count"] += 1
+            if gh_pr_create_calls["count"] < 3:
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=argv,
+                    stderr='Post "https://api.github.com/graphql": net/http: TLS handshake timeout',
+                )
+            return subprocess.CompletedProcess(
+                args=argv,
+                returncode=0,
+                stdout="https://github.com/foo/bar/pull/77\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.api.cases.subprocess.run", _fake_run)
+
+    yaml_text = _minimal_valid_yaml()
+    _seed_cache(yaml_text)
+
+    resp = client.post(
+        "/cases/submit",
+        json={
+            "yaml": yaml_text,
+            "case_id": "lg-bug-9999-test-submit",
+            "branch_name": "case/lg-bug-9999-test-submit",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["pr_number"] == 77
+    assert gh_pr_create_calls["count"] == 3, (
+        f"expected 3 attempts on transient TLS timeout, got {gh_pr_create_calls['count']}"
+    )
+
+
+def test_submit_gh_logical_error_does_not_retry(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Non-network errors (e.g. auth fail, branch already exists) MUST NOT
+    burn 15s retrying — they won't fix themselves. Logical errors fail
+    fast with stderr surfaced + a hint that the branch may already be
+    pushed (so the caller can manually `gh pr create` as fallback)."""
+    monkeypatch.delenv("LBR_GITHUB_DRY_RUN", raising=False)
+    monkeypatch.setenv("LBR_REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr("app.api.cases.time.sleep", lambda _s: None)
+
+    gh_pr_create_calls = {"count": 0}
+
+    def _fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if argv[:3] == ["gh", "pr", "create"]:
+            gh_pr_create_calls["count"] += 1
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=argv,
+                stderr="HTTP 422 Unprocessable Entity: A pull request already exists",
+            )
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.api.cases.subprocess.run", _fake_run)
+
+    yaml_text = _minimal_valid_yaml()
+    _seed_cache(yaml_text)
+
+    resp = client.post(
+        "/cases/submit",
+        json={
+            "yaml": yaml_text,
+            "case_id": "lg-bug-9999-test-submit",
+            "branch_name": "case/lg-bug-9999-test-submit",
+        },
+    )
+    assert resp.status_code == 500
+    assert gh_pr_create_calls["count"] == 1, (
+        "logical error should not retry (only transient network errors do)"
+    )
+    detail = resp.json()["detail"]
+    assert "422" in detail
+    assert "manually run" in detail  # caller-fallback hint
+    assert "case/lg-bug-9999-test-submit" in detail  # branch name in hint
+
+
+# ---------------------------------------------------------------------------
 # _resolve_repo_root helper — env override + default
 # ---------------------------------------------------------------------------
 
