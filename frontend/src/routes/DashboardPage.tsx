@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/types';
+import { runVerdict, verdictToBadgeClass } from '@/lib/runVerdict';
 
 type CategoryOut = components['schemas']['CategoryOut'];
 type CaseSummary = components['schemas']['CaseSummary'];
@@ -53,37 +54,6 @@ function statusToBadgeClass(status: string): string {
   }
   if (status === 'running') return 'badge-warning';
   return 'badge-muted';
-}
-
-/**
- * Derive run verdict from a RunSummary.
- *
- * Backend `run.status` is the LIFECYCLE phase ('running' / 'done' /
- * 'aborted') — NOT the verdict. The verdict (pass / fail / running /
- * aborted / empty) must be derived from the combination of `status` +
- * `failed` count.
- *
- * Before this fix (PR pre-#106): RecentRunsTile filtered `r.status ===
- * 'pass'` etc., which never matched any real run (backend writes 'done'
- * not 'pass'), so all 3 counters showed 0. User reported this.
- */
-function runVerdict(r: RunSummary): 'pass' | 'fail' | 'running' | 'aborted' | 'empty' {
-  if (r.status === 'running') return 'running';
-  if (r.status === 'aborted') return 'aborted';
-  // 'done' (or any other terminal lifecycle status): verdict from failed count
-  const failed = r.failed ?? 0;
-  const passed = r.passed ?? 0;
-  if (failed > 0) return 'fail';
-  if (passed > 0) return 'pass';
-  return 'empty'; // done but no cases ran (shouldn't happen normally)
-}
-
-function verdictToBadgeClass(verdict: ReturnType<typeof runVerdict>): string {
-  if (verdict === 'pass') return 'badge-success';
-  if (verdict === 'fail') return 'badge-danger';
-  if (verdict === 'aborted') return 'badge-danger';
-  if (verdict === 'running') return 'badge-warning';
-  return 'badge-muted'; // empty
 }
 
 // ---- KPI tiles --------------------------------------------------------------
