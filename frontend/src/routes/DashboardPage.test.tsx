@@ -63,10 +63,17 @@ const FAKE_EXT_CASES = [
   { id: 'lg-ext-postgis', category: 'extension', title: 'postgis', status: 'stable', destructive: false, tags: null, error: null },
 ];
 
+// Fixture mirrors REAL backend behavior: run.status is 'done' lifecycle
+// phase (not verdict 'pass'/'fail'). Verdict is derived from `failed`
+// count via runVerdict():
+//   id=42: done + failed=0 + passed=9  → verdict=pass
+//   id=41: done + failed=5             → verdict=fail
+//   id=40: done + failed=0 + passed=10 → verdict=pass
+// → 2 pass / 1 fail (counts match REAL backend after bug fix).
 const FAKE_RUNS = [
-  { id: 42, status: 'pass', started_at: new Date(Date.now() - 4 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 9, failed: 1, skipped: 0, target_version: null, triggered_by: null },
-  { id: 41, status: 'fail', started_at: new Date(Date.now() - 24 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 5, failed: 5, skipped: 0, target_version: null, triggered_by: null },
-  { id: 40, status: 'pass', started_at: new Date(Date.now() - 48 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 10, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+  { id: 42, status: 'done', started_at: new Date(Date.now() - 4 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 9, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+  { id: 41, status: 'done', started_at: new Date(Date.now() - 24 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 5, failed: 5, skipped: 0, target_version: null, triggered_by: null },
+  { id: 40, status: 'done', started_at: new Date(Date.now() - 48 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 10, failed: 0, skipped: 0, target_version: null, triggered_by: null },
 ];
 
 function setupMocks(opts?: {
@@ -218,9 +225,35 @@ describe('DashboardPage (M5-2)', () => {
         expect(screen.getByTestId('dashboard-kpi-recent-runs')).toBeInTheDocument();
       });
       const tile = screen.getByTestId('dashboard-kpi-recent-runs');
-      // 2 pass, 1 fail, 0 running in fixture
+      // 2 pass, 1 fail, 0 running via verdict-derived counting (NOT raw
+      // status — backend writes 'done' not 'pass'/'fail'. Bug pre-fix
+      // would show 0/0/0 for any data with status='done').
       expect(within(tile).getByText('2 pass')).toBeInTheDocument();
       expect(within(tile).getByText('1 fail')).toBeInTheDocument();
+    });
+
+    it('counts verdict (not raw status) — handles real backend status="done"', async () => {
+      // Real-world fixture: 3 done runs, mix of pass/fail by failed count;
+      // 1 running run; 1 aborted run.
+      setupMocks({
+        runs: [
+          { id: 100, status: 'done',    started_at: new Date().toISOString(), finished_at: null, total: 5, passed: 5, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+          { id: 101, status: 'done',    started_at: new Date().toISOString(), finished_at: null, total: 5, passed: 3, failed: 2, skipped: 0, target_version: null, triggered_by: null },
+          { id: 102, status: 'done',    started_at: new Date().toISOString(), finished_at: null, total: 5, passed: 5, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+          { id: 103, status: 'running', started_at: new Date().toISOString(), finished_at: null, total: 0, passed: 0, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+          { id: 104, status: 'aborted', started_at: new Date().toISOString(), finished_at: null, total: 0, passed: 0, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+        ],
+      });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-kpi-recent-runs')).toBeInTheDocument();
+      });
+      const tile = screen.getByTestId('dashboard-kpi-recent-runs');
+      // verdict: id=100 pass, 101 fail, 102 pass, 103 running, 104 aborted
+      expect(within(tile).getByText('2 pass')).toBeInTheDocument();
+      expect(within(tile).getByText('1 fail')).toBeInTheDocument();
+      expect(within(tile).getByText('1 running')).toBeInTheDocument();
+      expect(within(tile).getByText('1 aborted')).toBeInTheDocument();
     });
 
     it('shows recent activity list with up to 10 runs', async () => {
