@@ -1,0 +1,156 @@
+id: lg-bug-0009-union-all-const-distributed-row-order
+title: UNION ALL (常量 SELECT) 与 (分布式表 SELECT) 拼接时常量行未稳定出现在结果集首行
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-9.12-union-all-const-distributed-row-order"
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/800
+tags: [union_all, planner, row_order, distributed, optimizer_off]
+
+description: |
+  飞书 §9.12：把 (常量 4 列 SELECT) 与 (分布式表 4 列 SELECT) 用 UNION ALL 拼起来，
+  关闭 ORCA（optimizer=off）下连跑 3 次，期望每次返回的 3 行顺序一致，且常量
+  "标题行"（'column1','column2','column3','seg34'）出现在结果集第 1 行。飞书
+  原文记录顺序乱——常量行有时不在首行，跨多次执行顺序也不一致。
+procedure: |
+  1) 建普通表 tmp_data_union (column1/column2/column3/seg34 TEXT)；
+  2) INSERT 2 行 ('no1','no2','no3'), ('no4','no5','no6')（seg34 留 NULL）；
+  3) 连续 3 次执行同一 UNION ALL 查询（每次先 SET optimizer TO off）；
+     每次断言：UNION ALL 结果 LIMIT 1 取到的 column1 = 'column1'，即常量
+     "标题行"出现在 server-returned 行序的首行；
+  4) 健康检查：UNION ALL 总行数 = 3；
+  5) 收尾 DROP TABLE。
+expected: |
+  - 3 个 UNION ALL 单行断言 step 的 scalar = 'column1'（常量行稳定居首）；
+  - 健康检查 step scalar = 3（拼接行数完整）；
+  - 全程无 ERROR / FATAL。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+sessions: []
+
+setup:
+  - DROP TABLE IF EXISTS tmp_data_union
+  - |
+    CREATE TABLE IF NOT EXISTS tmp_data_union (
+      column1 TEXT,
+      column2 TEXT,
+      column3 TEXT,
+      seg34   TEXT
+    )
+  - |
+    INSERT INTO tmp_data_union (column1, column2, column3) VALUES
+      ('no1', 'no2', 'no3'),
+      ('no4', 'no5', 'no6')
+
+steps:
+  - name: "第 1 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 2 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 3 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "健康检查：UNION ALL 总行数 = 3"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT count(*) FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+    timeout_sec: 60
+    expect:
+      scalar: 3
+
+teardown:
+  - DROP TABLE IF EXISTS tmp_data_union
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.12。
+  关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/800
+
+  **复现意图**：UNION ALL 把 (常量 SELECT) 拼接到 (分布式表 SELECT) 之前，
+  期望服务端按声明顺序返回 3 行——先返回常量"标题行"，再返回 tmp_data_union
+  的 2 行。飞书原文记录顺序不稳定（多次执行结果不一致；常量行有时不在第 1 行）。
+
+  **断言策略**：每轮跑 `SELECT column1 FROM (UNION ALL) LIMIT 1`，断言
+  scalar = 'column1'。LIMIT 1 直接截取 server-returned 行序的首行（不加 ORDER BY），
+  正是本 BUG 直接关注的属性；不是用 ORDER BY 强排（那会把 BUG 掩盖掉）。
+  - 修复前 BUG 复现：scalar 可能随机取到 'no1' / 'no4'，断言失败；
+  - 修复后期望：常量行稳定居首，3 轮 scalar 均为 'column1'。
+  3 轮重复 = 验证跨执行稳定性，对应飞书原文"连跑3次顺序一致"人工验证。
+  末尾一个 count(*)=3 健康检查 = 兜底确认 UNION ALL 行数完整、未被错误折叠或截断。
+
+  **表名规范**：飞书原文用 `CREATE TEMP TABLE TMP_DATA`，本 case 改为常规表
+  `tmp_data_union` + 显式 teardown DROP。理由：本框架多个 `kind: sql` step 在
+  psycopg AsyncConnection 之间是否共享连接 = executor 实现细节；TEMP 表是
+  session-local，跨连接不可见。常规表更安全，复现路径不受连接策略影响。
+
+  **优化器路径**：必须 SET optimizer TO off（planner 路径），与飞书原文一致；
+  ORCA 路径未在原文验证，本 case 不覆盖。若以后扩展，可加一组镜像 step。
+
+  **§4.1.2 / §5.5.7 cross-check #12 #13 评估**：
+    - #12 non-tx-safe DDL：本 case 仅含 CREATE TABLE / INSERT / SELECT /
+      DROP TABLE（均 tx-safe），无 VACUUM / 顶层 ANALYZE / CREATE DATABASE /
+      REINDEX CONCURRENTLY / CREATE INDEX CONCURRENTLY / DROP INDEX
+      CONCURRENTLY / CREATE TABLESPACE / DROP TABLESPACE / ALTER SYSTEM /
+      CLUSTER 等关键词 → 不触发 psql -c 改写要求。
+    - #13 跨 driver 持久化 setup：本 case 全部 step 走 `kind: sql`（psycopg
+      AsyncConnection），无 `kind: shell + psql -c` 主步骤 → setup 走同一 driver，
+      无跨连接 commit 可见性问题 → 不触发 psql -c 改写要求。
+    二项均通过；保留 `kind: sql` 是正确选择。
+
+  status: open 保留直到某个 build 上验证非复现，再迁 fixed + 填 fixed_version。
