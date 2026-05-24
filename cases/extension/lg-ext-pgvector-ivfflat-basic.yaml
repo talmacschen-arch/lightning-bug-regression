@@ -1,0 +1,97 @@
+id: lg-ext-pgvector-ivfflat-basic
+title: pgvector IVFFlat 索引基础功能验证
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: "https://github.com/pgvector/pgvector"
+issue_url: ""
+tags: [extension, pgvector, vector, ivfflat, similarity_search]
+
+description: |
+  验证 pgvector extension 在 lightning 环境下的基础集成链路：
+  CREATE EXTENSION → vector 类型 → IVFFlat 索引 → L2 距离查询 → 计划走索引。
+  覆盖 pgvector 最常见的 ANN（approximate nearest neighbor）搜索路径。
+procedure: |
+  1) CREATE EXTENSION IF NOT EXISTS vector，建 vectors_demo(id int, embedding vector(3));
+  2) 插入 10000 条随机三维向量，ANALYZE；
+  3) 在 embedding 上创建 IVFFlat 索引（lists=10, vector_l2_ops）；
+  4) SET enable_seqscan = off 强制走索引，EXPLAIN ANALYZE 一个 LIMIT 10 的相似度查询；
+  5) 断言执行计划包含 "Index Scan using" 且不含 "Seq Scan"。
+expected: |
+  - CREATE EXTENSION vector 成功（pgvector 的注册名是 vector，不是 pgvector）；
+  - CREATE INDEX ... USING ivfflat 成功且不报错；
+  - EXPLAIN 输出含 "Index Scan using idx_vectors_ivfflat"；
+  - 不出现 "ERROR" / "FATAL"。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+sessions: []
+
+setup:
+  - DROP TABLE IF EXISTS vectors_demo
+  - CREATE EXTENSION IF NOT EXISTS vector
+  - |
+    CREATE TABLE IF NOT EXISTS vectors_demo (
+      id SERIAL PRIMARY KEY,
+      embedding vector(3)
+    )
+  - |
+    INSERT INTO vectors_demo (embedding)
+    SELECT ARRAY[random(), random(), random()]::vector(3)
+    FROM generate_series(1, 10000)
+  - ANALYZE vectors_demo
+
+steps:
+  - name: "在 embedding 上创建 IVFFlat 索引"
+    kind: sql
+    sql: |
+      CREATE INDEX IF NOT EXISTS idx_vectors_ivfflat
+      ON vectors_demo
+      USING ivfflat (embedding vector_l2_ops)
+      WITH (lists = 10)
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "强制走索引并断言 IVFFlat 命中"
+    kind: sql
+    sql: |
+      SET enable_seqscan = off;
+      EXPLAIN
+      SELECT id, embedding <-> '[0.5,0.5,0.5]'::vector(3) AS dist
+      FROM vectors_demo
+      ORDER BY embedding <-> '[0.5,0.5,0.5]'::vector(3)
+      LIMIT 10
+    expect:
+      plan_contains: ["Index Scan", "idx_vectors_ivfflat"]
+      not_contains: ["ERROR", "Seq Scan on vectors_demo"]
+
+teardown:
+  - DROP INDEX IF EXISTS idx_vectors_ivfflat
+  - DROP TABLE IF EXISTS vectors_demo
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  关键事实：
+  - pgvector 在 PG 注册的扩展名是 `vector`，故 `CREATE EXTENSION vector`
+    （不是 `CREATE EXTENSION pgvector` —— SKILL.md example 那处不准）。
+  - IVFFlat 是近似 NN 索引，须配 operator class（vector_l2_ops / vector_ip_ops
+    / vector_cosine_ops）三选一；本 case 选 L2 距离 `<->`。
+  - lists 是聚类中心数，经验值 sqrt(rows) 量级；本 case rows=10000 故 lists=10
+    够大；query 时可调 GUC `ivfflat.probes` 控精度。
+  - 小数据 + 默认 enable_seqscan=on 时 planner 可能仍选全表扫描 —— 这里显式
+    SET enable_seqscan=off 锁定走索引路径，让 plan_contains 断言稳定。
+  - 本 case 假设 lightning / SynxDB 集群已编译/打包 pgvector；若 CREATE
+    EXTENSION 报 "could not open extension control file"，是部署问题不是代码
+    问题，应在 §3.1 外部依赖准备阶段解决。
