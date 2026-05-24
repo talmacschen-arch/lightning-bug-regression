@@ -392,8 +392,6 @@ def test_recent_runs_respects_limit_parameter(
     assert len(resp_default.json()) == 10
 
     # explicit limit=3
-    resp_three = client_with_real_cases.get(
-        f"/cases/{case_id}/recent-runs?limit=3"
-    )
+    resp_three = client_with_real_cases.get(f"/cases/{case_id}/recent-runs?limit=3")
     assert resp_three.status_code == 200
     assert len(resp_three.json()) == 3
