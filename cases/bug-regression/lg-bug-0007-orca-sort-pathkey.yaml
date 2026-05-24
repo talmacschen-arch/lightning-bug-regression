@@ -1,14 +1,14 @@
 id: lg-bug-0007-orca-sort-pathkey
 title: 默认 ORCA + enable_sort(on) 时 DISTINCT/GROUP BY/ORDER BY 嵌套查询报 "could not find pathkey item to sort"
 category: bug_regression
-status: open
+status: fixed
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "section-9.7-orca-enable-sort-pathkey"
   reported_at: "2026-05-24"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/738
 tags: [optimizer, orca, sort, pathkey, planner]
@@ -160,3 +160,11 @@ notes: |
   断言策略：第 1 步直接 not_contains 错误字符串 + 不出现 ERROR；第 2 步
   外包 count(*) 用 scalar_ge 兜底验证查询真正生成了结果集（而非 0 行的
   "成功"——若 ORCA fallback 到 planner 静默返回 0 行也会被这步抓住）。
+
+  ---
+  **Verified upstream-fixed (M4a dogfood, 2026-05-24)**: POST /cases/try on
+  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 2/2
+  steps PASS (step 1: DISTINCT+GROUP BY+ORDER BY 未报 pathkey 错 50ms;
+  step 2: scalar_ge ≥ 1 兜底通过 15ms). fixed_version above = verified-
+  non-reproducing version, NOT necessarily the fix introduction commit
+  (not yet researched against 飞书 LG history / source).
