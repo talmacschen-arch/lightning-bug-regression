@@ -82,7 +82,7 @@
 | external_systems category | §16.4 | §0 v1.10 / §13.10 M4c plan / §14 R4b |
 | add-test-case skill 设计 | **§17**（v1.11 PR-A2）| §5.5（stub→§17）/ §13.8 M3b plan / §13.9.4 skill 硬化 |
 | skill 模型规则 (opus 4.7) | **§17.8**（v1.11 PR-A2）| SKILL.md model rule block + memory `feedback_model_override_2026-05-24` §B |
-| Milestones (M0-M6) plan + retro | §13.x（**待 PR-A3 整理**） | §0 changelog rows / §12 Roadmap |
+| Milestones (M0-M6) 全貌索引 | **§18**（v1.11 PR-A3，按 M 视角导航）| §13.x detail (chronological 视角) / §0 changelog rows / §12 Roadmap |
 | 风险预警与反模式 R1-R28 | §14（**不动**，memory 大量引用）| §0 changelog 中 R 入档记录 |
 | 多 Agent 协作 (dev workflow) | §8 / §15 | §13.4 M1 retro 中 dispatch 教训 |
 
@@ -3036,5 +3036,107 @@ id: lg-bug-NNNN-<slug>
 - ❌ 修改 skip_list / settings / 任何 admin 资源
 
 skill 是 **YAML 编辑器的打字助手**，不是 deployer，不是 reviewer。前端的 Validate + Try + Save 才是 source of truth。
+
+---
+
+## 18. Milestones index（v1.11 PR-A3，按 M 视角导航）
+
+> **本章是 milestone-视角的索引**——按 M0 / M1 / M2 / M3a / M3b / M4 / M4c / M5 / M6 顺序，每个 M 给一段 summary + plan / retro / 关键 PR / 完成定义的 §13.x 链接。**§13 仍是 detail 主体**（chronological 视角，sprint 真实顺序）；本章给你"想看某个 M 全貌"时的入口。
+>
+> 原 §13.0-§13.12 不动，仅头部不加 stub（§13 这个章节本来就是 canonical detail；本章只是导航，不是 canonical）。
+
+### 18.0 概述
+
+design.md §13 当前 13 个子节按时间线展开：plan 写在 sprint 启动时（§13.5 M2 plan / §13.7 M3a plan 等），retro 写在 sprint 收尾时（§13.4 M1 retro / §13.6 M2 retro 等），混在一起。用户从 milestone 视角查"M2 是怎么搞的"得跳 §13.5 + §13.6 两节；找 "M4 整体回顾"得看 §13.9 + cross-ref 飞回 §0 changelog v1.10 行。本章按 M 顺序集中每个 milestone 的索引。
+
+### 18.M0 项目骨架（done）
+
+- **状态**：✅ done（design.md 定稿 + 8 agent 配置 + skill 占位 + 仓库创建 + CI 框架）
+- **关键 §**：§13.0 启动前自检 / §13.1 M0 计划 / §13.2 待跟进项 / §0 changelog v1.0-v1.3
+- **关键 PR**：#1 initial commit (29b2507) + foreman dry-run smoke (commit `7d97986` / `31f8653`)
+- **核心收尾**：M0 step 9 dry-run 发现 doc-writer 漏 `git checkout -b` 直推 main → 6-step → **7-step PR contract** 硬化（§14 R24 入档）
+
+### 18.M1 后端 MVP（done）
+
+- **状态**：✅ done — 4 sprint chain (M1 main + followup + cleanup P0/P1/P2)，25 PR + 3 direct commit
+- **关键 §**：§13.4 M1 实战回顾（含 sprint 时间线 + 文件 deliverable map + opus review 10 finding P0/P1/P2 三级 fix 对照）
+- **关键 PR**：#2~#10 + #12~#25
+- **核心交付**：load YAML / run / sql_driver + shell_driver + log_grep / SQLite 5 表 / 基本 API / 5 例 dogfood 5/5 PASS / **§14 R22/R23/R24/R25 入档**
+- **完成定义**：API path 跑 5/5 PASS（M2 dogfood 才挖出 dual-code-path 残余，§13.6）
+
+### 18.M2 前端 MVP（done）
+
+- **状态**：✅ done — 5 sprint round + 2 followup hotfix + 2 docs PR，20 PR 横跨 #26~#45
+- **关键 §**：§13.5 M2 计划 + §13.6 M2 实战回顾（plan + retro 已相邻）
+- **关键 PR**：#28~#41（10 个 M2-* item）+ #42（case_normalizer hotfix）+ #43（dsn_builder hotfix）+ #44（§14 R26/R27 入档）+ #45（§0 v1.4+v1.5 retroactive bump）
+- **核心交付**：Vite + React + TS strict / Tailwind + shadcn/ui / 4 个页面 / Playwright E2E / **dual-code-path 暴露 + §14 R26 / R27 入档**
+- **完成定义**：UI 6 路径走查全 PASS（`docs/m2-dogfood-2026-05-24-0535.md`）
+
+### 18.M3a Web 录入（done）
+
+- **状态**：✅ done — 10/10 子步骤 + 4 spec gap follow-up
+- **关键 §**：§13.7 M3a Web 录入计划
+- **关键 PR**：#49~#55 + #56/#57 hotfix + #58/#59 浏览器 dogfood + #60 报告 + #61 spec gap
+- **核心交付**：`/cases/new` 双入口编辑器 + Validate→Try→Save 三段闸门 + `POST /cases/submit` 真 git push + gh pr create + auto-merge
+- **完成定义**：浏览器用户视角真 web flow 通 PR #58/#59 merge 进 main
+
+### 18.M3b Skill 录入（done）
+
+- **状态**：✅ done — 10/10 子步骤 + 1 bug 修补 + skill 硬化 3 PR (#85/#86/#89)
+- **关键 §**：§13.8 M3b Skill 录入计划 / §17 add-test-case Skill canonical（v1.11 PR-A2）
+- **关键 PR**：#63（cases?q=）+ #64（/admin/step-kinds）+ #65（SKILL.md 588 行 bundle）+ #66（lint）+ #67（assertions list-form fix）+ #68（首例 lg-ext-pgvector via skill 路径）+ #69 dogfood 报告 / 硬化：#85 model pin + #86 7 spec fixes + #89 追问迁 external_systems
+- **核心交付**：`.claude/skills/add-test-case/SKILL.md` runtime + grounding 端点 + CI lint 守 + **claude-opus-4-7 永久钉**（§17.8）
+- **完成定义**：programmatic skill 路径走通三段闸门 + dogfood `docs/m3b-dogfood-2026-05-24-1340.md`
+
+### 18.M4 用例填充（done）
+
+**M4 是 3 子轨道 parallel**（不是单一 sprint）：M4a + M4b + 附加 external_systems landing + skill 硬化。
+
+- **状态**：✅ done — 17 PR 横跨 #68~#89
+- **关键 §**：§13.9 M4 实战回顾（6 子节：M4a + M4b + external_systems landed + skill hardening + R28 候选 + §0 gap defense）
+- **M4a 飞书 BUG 补录**：3 例新 case (`lg-bug-0007` §9.7 / `0008` §9.11 V1+V2 / `0009` §9.12 intermittent) + sql_driver chain refactor（PR #73→#75→#80 autocommit→commit-after-step）
+- **M4b extension 首批 5 例**：pgvector #68 / pg_partman #82 / anon #83 / plpython3u+numpy #84 / postgis #87 — **§12 首批 3~5 例上限达成**
+- **核心副产**：§14 R28 入档（intermittent BUG sampling ≥10 rounds，`lg-bug-0009` 反转 fixed→open 实战）；§16 测试门类 super-section（PR-A1，本 reorg 链 §16）；§17 skill super-section（PR-A2，本 reorg 链 §17）
+- **完成定义**：3 类 case YAML 共 14 例 stable / 5 旧 BUG `fixed` 维持 / `lg-bug-0009` `open`（铁律 1 实战）
+
+### 18.M4c external_systems 首批 case（plan，待 user 添加）
+
+- **状态**：📋 plan only — case 蓝图可写 `status: awaiting_env` 占位；真跑 Try 阻塞 M6-5 runtime injection
+- **关键 §**：§13.10 M4c plan / §16.4 external_systems schema 特化
+- **候选 cases**：datalake_fdw（外部依赖最少，推荐首例）/ hive_connector / PXF / zombodb
+- **完成定义**：1~3 例 `lg-xs-*` YAML 落 `cases/external-systems/`，validate ok；前端 tab 列出
+- **不做的事**：不强制集群部署对应外部服务；不在本 milestone 加 runtime injection（M6-5 才做）
+
+### 18.M5 前端 UX 统一面板（plan，**用户优先级 #1**）
+
+- **状态**：📋 plan only — 6 子步骤
+- **关键 §**：§13.11 M5 plan
+- **触发**：用户 2026-05-24 反馈"前端使用不方便、没有统一面板"——M5 原 catch-all (SSE/Admin UI/diff/etc) 拆出"前端 UX"单列 milestone，**先做**
+- **子步骤**：M5-1 Layout sidebar / M5-2 Dashboard `/` (KPI + recent activity + quick actions) / M5-3 跨页关联 / M5-4 全局筛选 + URL 持久化 / M5-5 Quick Actions（preset 卡片） / M5-6 dogfood
+- **完成定义**：Dashboard `/` 显得出 + sidebar 工作 + 跨页跳转 + 全局筛选 URL 持久化 + preset 触发 run；产 `docs/m5-dogfood-<ts>.md`
+- **§14 R 预付**：R2 (Playwright contract) / R4b (不写死 category) / R26 / R27
+
+### 18.M6 运行体验深化（plan）
+
+- **状态**：📋 plan only — 6 子步骤
+- **关键 §**：§13.12 M6 plan
+- **子步骤**：M6-1 SSE 进度条 / M6-2 artifacts download / M6-3 history diff（依赖 M6-2）/ M6-4 Admin UI (skip_list / settings) / M6-5 external_deps runtime injection（**M4c 真跑通的前提**）/ M6-6 dogfood
+- **完成定义**：至少 1 例 external_systems case (M4c-1) Try 跑通真集群 + SSE 进度条工作 + artifacts download 可用 + Admin UI skip_list 改动持久；产 `docs/m6-dogfood-<ts>.md`
+- **§14 R 预付**：R26 (M6-5 external context 加载 / Jinja 渲染模块化) / R27 / R8 / R28
+
+### 18.x 共通教训对照（cross-milestone）
+
+| Milestone | 触发的关键 §14 R 入档 | 触发的关键设计转向 |
+|---|---|---|
+| M0 | R24 (specialist 漏 step 0) | foreman.md / fixer.md 6→7 step PR contract |
+| M1 | R22 (--auto 不等 CI), R23 (required check name), R25 (foreman no final JSON), R24 (本地 ci-gate triplet) | ci-gate.yml 聚合 + branch protection + dispatch-foreman.sh wrapper |
+| M2 | R26 (dual-code-path), R27 (relative-path env defaults) | case_normalizer.py + dsn_builder.py 抽共享 prep 模块 |
+| M3a | R26 轻量变体 (frontend regex vs backend parser 容忍度) | extractCaseId regex 与 backend 同步；M3a-10 dogfood 暴露 |
+| M3b | — | SKILL.md 硬化 + lint CI 守 (PR #85/#86/#89) |
+| M4 | R28 (intermittent BUG sampling ≥10 rounds) | sql_driver chain refactor + lg-bug-0009 反转 fixed→open 铁律 1 实战；§4.1.2 psql -c 约定硬化 |
+| M5 (待) | — | sidebar + dashboard 统一面板；moving away from flat top nav |
+| M6 (待) | — | SSE / Admin UI / external_deps runtime injection |
+
+**模式**：每个 milestone 至少触发 1 个新 §14 R 入档 / 1 个核心设计转向。"sprint = 学习一轮 = 沉淀一条反模式"——§14 是 milestone 的副产物，不是孤立的章节。
 
 ---
