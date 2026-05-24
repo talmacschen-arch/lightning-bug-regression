@@ -118,13 +118,20 @@ skill 在题 1 拿到答案后，把对应 category 的 `id_prefix` / `default_s
 | pgvector 关键词 / `vector(` / `<->` / `<=>` / IVFFlat / HNSW | "做 IVFFlat / HNSW 索引断言吗？" | step 加 `CREATE INDEX ... USING ivfflat / hnsw`，配 `expect.plan_contains: ["IVFFlat" 或 "HNSW Index Scan"]` |
 | postgis 关键词 / `ST_*` / `GEOMETRY` / SRID | "需要空间索引 + ST 函数验证吗？" | 加 `CREATE INDEX USING gist`，配 `ST_DWithin` 等查询；setup 注意 `CREATE EXTENSION postgis;`（不带 IF NOT EXISTS 会因 schema 已有报错 → 用 IF NOT EXISTS） |
 | pgcrypto 关键词 / `crypt(` / `digest(` / `gen_random_*` | "对 hash 输出做精确断言（确定性算法）还是仅断言无错（随机算法）？" | 确定性（sha256/md5）→ `expect.scalar: "<hex>"`；随机（gen_random_uuid/bcrypt salt）→ 只校验返回非空 |
-| `CREATE FOREIGN TABLE` / `IMPORT FOREIGN SCHEMA` / FDW / dblink | "外部数据源是否本机已部署？" | 若否，提示用户补 external_deps（首版不支持自动 provision，让用户在 §3.1 外部依赖准备阶段搞定） |
 | `plpython` / `plperl` / `plgo` / `plr` / `plcontainer` / 过程语言 | "过程语言是否安装？需要重启 DB 吗？" | 部分语言（plpython3u）需 `shared_preload_libraries` → 提示加 `kind: restart_db` step |
 | **v0.9 加：`shared_preload_libraries` / pgaudit / pg_search / 必须 preload** | "本 extension 需要进 shared_preload_libraries（必须 restart）吗？如是，要自管理还是依赖 deployer 全局加？[self-managed]" | self-managed → 把"加 preload + restart + 业务测试 + 移除 preload + restart"全写进同一 case；标 `destructive: true`（preflight 11_pg_search.yaml 是范本：第 53 步把 pg_search 加进 preload，最后两步移除并再 restart） |
-| **v0.9 加：`gphdfs.conf` / `gphive.conf` / `krb5.conf` / 服务端配置文件** | "需要写/改 master 上的配置文件吗？" | 提示用 cli step `cat >> "$DD/<file>" <<'YML' ... YML`（**追加 + grep -q guard**），**不要** `cat > ` 覆盖——preflight Run 112 教训：truncate 把 deployer 写的块清空，后续 case 全 fail |
-| **v0.9 加：`kinit` / `keytab` / `principal` / Kerberos** | "kinit 用什么 principal / keytab 路径？" | step 用 `{{ external.<svc>.extras.client_principal }}` + `{{ external.<svc>.extras.client_keytab_local }}` 渲染；**避免** `_HOST` 占位（preflight 13_cdh_kerberos 教训：datalake_fdw 里 _HOST 替换不稳，直接写 FQDN） |
-| **v0.9 加：`beeline` / `sqlplus` / `mysql` 等远端 CLI** | "需要 SSH 到外部主机执行吗？" | step 加 `host: '{{ external.<svc>.host }}'`，cmd 开头**显式 source profile.d**：`[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true`（preflight 12_datalake_fdw_hive 教训：SSH 非交互不 source，beeline 找不到 HIVE_HOME） |
-| **v0.9 加：fresh pool / 服务刚起来 / "可能 warmup 中"** | "外部服务可能在测试启动时还没 ready 吗？" | seed step 包 retry 循环（典型 6×10s back-off + `break on success`，preflight 12_datalake_fdw_hive seed_hive_fixture 范本） |
+
+**Category-tagged external_systems 组**（仅当首题答 category=external_systems 时本组生效；2026-05-24 从原 extension 组迁来——FDW + 配置文件 + Kerberos + 远端 CLI + warmup 这 5 类追问本质上是"外部服务可用性"而非"PG 扩展功能"问题）：
+
+> **注**：表里 `{{ external.<svc>.* }}` Jinja 占位**当前 runner 不解析**（external_deps 字段仍为文档性质，PR #88 范围决策）；case 作者按目标语义写，runtime injection 待 M5 followup。
+
+| 检测关键词 | 追问 | 影响 |
+|-----------|------|------|
+| `CREATE FOREIGN TABLE` / `IMPORT FOREIGN SCHEMA` / FDW / dblink / datalake_fdw / hive_connector / PXF / zombodb | "外部数据源是否本机已部署？" | 若否，提示用户补 `external_deps: [<svc>]`（首版不支持自动 provision，让用户在 §3.1 外部依赖准备阶段搞定）；status 默认 `awaiting_env` 直到环境就绪 |
+| `gphdfs.conf` / `gphive.conf` / `krb5.conf` / 服务端配置文件 | "需要写/改 master 上的配置文件吗？" | 提示用 cli step `cat >> "$DD/<file>" <<'YML' ... YML`（**追加 + grep -q guard**），**不要** `cat > ` 覆盖——preflight Run 112 教训：truncate 把 deployer 写的块清空，后续 case 全 fail |
+| `kinit` / `keytab` / `principal` / Kerberos | "kinit 用什么 principal / keytab 路径？" | step 用 `{{ external.<svc>.extras.client_principal }}` + `{{ external.<svc>.extras.client_keytab_local }}` 渲染；**避免** `_HOST` 占位（preflight 13_cdh_kerberos 教训：datalake_fdw 里 _HOST 替换不稳，直接写 FQDN） |
+| `beeline` / `sqlplus` / `mysql` 等远端 CLI | "需要 SSH 到外部主机执行吗？" | step 加 `host: '{{ external.<svc>.host }}'`，cmd 开头**显式 source profile.d**：`[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true`（preflight 12_datalake_fdw_hive 教训：SSH 非交互不 source，beeline 找不到 HIVE_HOME） |
+| fresh pool / 服务刚起来 / "可能 warmup 中" | "外部服务可能在测试启动时还没 ready 吗？" | seed step 包 retry 循环（典型 6×10s back-off + `break on success`，preflight 12_datalake_fdw_hive seed_hive_fixture 范本） |
 
 未命中任何关键词 → 跳过本步，进入草拟。
 
