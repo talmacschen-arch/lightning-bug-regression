@@ -256,10 +256,21 @@ def test_update_setting_rejects_key_not_in_allowlist(client: TestClient) -> None
 
 
 def test_update_setting_rejects_non_dict_value(client: TestClient) -> None:
-    resp = client.put("/admin/settings/dev_db_url", json={"value": "string-value"})
+    resp = client.put("/admin/settings/dut_hosts", json={"value": "string-value"})
     assert resp.status_code == 400
-    resp = client.put("/admin/settings/dev_db_url", json={"value": ["a", "b"]})
+    resp = client.put("/admin/settings/dut_hosts", json={"value": ["a", "b"]})
     assert resp.status_code == 400
+
+
+def test_update_setting_rejects_removed_dev_db_url_key(client: TestClient) -> None:
+    """dev_db_url / cluster_topology were removed from the allowlist
+    2026-05-25 — they had no runtime consumer (M6-4 spec gap)."""
+    resp = client.put("/admin/settings/dev_db_url", json={"value": {"v": "x"}})
+    assert resp.status_code == 400
+    assert "allowlist" in resp.json()["detail"]
+    resp = client.put("/admin/settings/cluster_topology", json={"value": {"v": "x"}})
+    assert resp.status_code == 400
+    assert "allowlist" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

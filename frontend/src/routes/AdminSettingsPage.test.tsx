@@ -49,9 +49,10 @@ describe('AdminSettingsPage', () => {
     });
     // All allowlisted keys present even if not yet stored
     expect(screen.getByTestId('settings-key-dut_hosts')).toBeInTheDocument();
-    expect(screen.getByTestId('settings-key-dev_db_url')).toBeInTheDocument();
-    expect(screen.getByTestId('settings-key-cluster_topology')).toBeInTheDocument();
     expect(screen.getByTestId('settings-key-server_log_path')).toBeInTheDocument();
+    // dev_db_url / cluster_topology were removed 2026-05-25 (no consumer)
+    expect(screen.queryByTestId('settings-key-dev_db_url')).toBeNull();
+    expect(screen.queryByTestId('settings-key-cluster_topology')).toBeNull();
 
     // jinja_context textarea pre-populated
     const ta = screen.getByTestId('settings-textarea-jinja_context') as HTMLTextAreaElement;
