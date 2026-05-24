@@ -13,8 +13,11 @@ so the UI can show what's broken without dropping into a generic 5xx.
 Filter semantics:
   * `category` — exact match on the case's `category:` field (whitelist
     enforced; unknown categories yield empty).
-  * `q` — case-insensitive substring match against either `id` or
-    `title`.
+  * `q` — case-insensitive substring match against ``id``, ``title``,
+    ``description``, or ``tags`` (joined). ``description`` is read from
+    the parsed YAML dict and used for matching only; it is NOT surfaced
+    on :class:`CaseSummary` to keep the list payload lean for the M3a
+    ``/cases/new`` duplicate-check dropdown.
 
 CASES_ROOT env var overrides the on-disk root (default: `cases/` next to
 the repo root). M1-11 uses the default; tests set it explicitly.
@@ -282,7 +285,12 @@ def list_cases(category: str | None = None, q: str | None = None) -> list[CaseSu
     Filters:
       * `category`: exact match (case-sensitive — categories are stable
         identifiers, not free text).
-      * `q`: case-insensitive substring against id OR title.
+      * `q`: case-insensitive substring against id, title, description,
+        or tags (joined). The skill at ``.claude/skills/add-test-case``
+        uses this to surface near-duplicate cases when authoring a new
+        one — searching only id+title misses dups where the author chose
+        a different phrasing in the title but the same domain words appear
+        in description/tags.
 
     Invalid YAML files are included with `status="invalid"` and `error`
     populated; the endpoint never 500s on a single bad file.
@@ -308,7 +316,24 @@ def list_cases(category: str | None = None, q: str | None = None) -> list[CaseSu
 
         if q:
             needle = q.lower()
-            hay = f"{summary.id or ''} {summary.title or ''}".lower()
+            # description is read straight from the parsed YAML — we
+            # deliberately do NOT expose it on CaseSummary (keeps the
+            # /cases/new dropdown payload lean for M3a-2); it's used
+            # for q-filtering only. tags already lives on summary.
+            description = ""
+            if raw_dict is not None:
+                desc_raw = raw_dict.get("description")
+                if isinstance(desc_raw, str):
+                    description = desc_raw
+            tags_joined = " ".join(summary.tags) if summary.tags else ""
+            hay = " ".join(
+                (
+                    summary.id or "",
+                    summary.title or "",
+                    description,
+                    tags_joined,
+                )
+            ).lower()
             if needle not in hay:
                 continue
 
