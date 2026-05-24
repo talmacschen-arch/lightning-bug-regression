@@ -111,8 +111,8 @@ def test_case_categories_seeded(fresh_db_url: str) -> None:
                 "FROM case_categories ORDER BY display_order"
             )
         ).fetchall()
-    assert len(rows) == 2
-    bug, ext = rows
+    assert len(rows) == 3
+    bug, ext, xs = rows
     assert bug.name == "bug_regression"
     assert bug.id_prefix == "lg-bug-"
     assert bug.dir_path == "bug-regression"
@@ -124,6 +124,12 @@ def test_case_categories_seeded(fresh_db_url: str) -> None:
     assert ext.dir_path == "extension"
     assert ext.default_status == "stable"
     assert ext.display_order == 20
+    assert xs.name == "external_systems"
+    assert xs.id_prefix == "lg-xs-"
+    assert xs.dir_path == "external-systems"
+    assert xs.default_status == "awaiting_env"
+    assert xs.display_order == 30
+    assert xs.is_active in (1, True)
 
 
 def test_status_whitelist_is_valid_json_array(fresh_db_url: str) -> None:
@@ -133,6 +139,7 @@ def test_status_whitelist_is_valid_json_array(fresh_db_url: str) -> None:
     by_name = {r.name: json.loads(r.status_whitelist) for r in rows}
     assert by_name["bug_regression"] == ["open", "fixed", "wontfix", "stub"]
     assert by_name["extension"] == ["stable", "experimental", "deprecated", "stub"]
+    assert by_name["external_systems"] == ["stable", "awaiting_env", "deprecated", "stub"]
 
 
 def test_id_prefix_and_dir_path_are_unique(fresh_db_url: str) -> None:
