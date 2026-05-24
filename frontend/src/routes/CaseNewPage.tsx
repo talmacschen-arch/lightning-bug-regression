@@ -69,7 +69,12 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 // ---------------------------------------------------------------------------
 
 function extractCaseId(yaml: string): string | null {
-  const m = /^id:\s*(\S+)/m.exec(yaml);
+  // Tolerate leading whitespace / BOM / blank lines before `id:` line.
+  // yaml_loader handles those when parsing the full file; the frontend
+  // extractor matches that leniency. /m makes ^ match start-of-line; the
+  // \uFEFF escape (not a literal BOM) keeps eslint no-irregular-whitespace
+  // happy while still consuming a leading byte-order mark if present.
+  const m = /^[\s\uFEFF]*id:\s*(\S+)/m.exec(yaml);
   return m ? m[1] : null;
 }
 
