@@ -265,18 +265,6 @@ function QuickActions({ categories }: QuickActionsProps) {
 
 // ---- Page ------------------------------------------------------------------
 
-function bugCategory(cats: CategoryOut[]): CategoryOut | undefined {
-  // Find the bug category by id_prefix ('lg-bug-') — avoids hardcoding name
-  // string per §14 R4b. (any category whose prefix targets bugs)
-  return cats.find((c) => c.id_prefix.startsWith('lg-bug'));
-}
-
-function extensionCategory(cats: CategoryOut[]): CategoryOut | undefined {
-  return cats.find(
-    (c) => c.id_prefix.startsWith('lg-ext-') && !c.id_prefix.startsWith('lg-xs'),
-  );
-}
-
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -340,9 +328,6 @@ export default function DashboardPage() {
     );
   }
 
-  const bugCat = bugCategory(data.categories);
-  const extCat = extensionCategory(data.categories);
-
   return (
     <div data-testid="page-dashboard" className="dashboard">
       <h1 className="dashboard-title">Dashboard</h1>
@@ -362,24 +347,20 @@ export default function DashboardPage() {
         <RecentRunsTile runs={data.recentRuns} />
       </div>
 
-      {/* KPI tiles row 2: status breakdowns for bug & extension */}
-      <div className="dashboard-kpi-row">
-        {bugCat && (
+      {/* KPI tiles row 2: status breakdown for EVERY active category.
+         Pre-fix (2026-05-25) only hardcoded bug + extension via
+         id_prefix matching — violated §14 R4b and dropped external_systems
+         entirely. Now data-driven across all categories. */}
+      <div data-testid="dashboard-kpi-row-status" className="dashboard-kpi-row">
+        {data.categories.map((cat) => (
           <StatusBreakdownTile
-            testid="dashboard-kpi-bug-status"
-            title={`${bugCat.display_name} — status breakdown`}
-            cases={data.casesByCategory[bugCat.name] ?? []}
-            statusWhitelist={bugCat.status_whitelist}
+            key={cat.name}
+            testid={`dashboard-kpi-status-${cat.name}`}
+            title={`${cat.display_name} — status breakdown`}
+            cases={data.casesByCategory[cat.name] ?? []}
+            statusWhitelist={cat.status_whitelist}
           />
-        )}
-        {extCat && (
-          <StatusBreakdownTile
-            testid="dashboard-kpi-extension-stability"
-            title={`${extCat.display_name} — status breakdown`}
-            cases={data.casesByCategory[extCat.name] ?? []}
-            statusWhitelist={extCat.status_whitelist}
-          />
-        )}
+        ))}
       </div>
 
       <RecentActivity runs={data.recentRuns} />
