@@ -269,3 +269,131 @@ def test_list_empty_when_no_categories_directories_exist(
         resp = client.get("/cases")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# M5-3 — GET /cases/:id/recent-runs (cross-page link)
+# ---------------------------------------------------------------------------
+
+
+def _seed_runs_and_results(
+    sess: Session,
+    runs_and_results: list[tuple[str, list[tuple[str, str | None]]]],
+) -> None:
+    """Helper: seed `runs` + `case_results` for the recent-runs endpoint test.
+
+    `runs_and_results` is a list of (run_status, [(case_id, case_status), ...])
+    pairs in chronological order. Each call adds a run with a `started_at`
+    spaced 1 hour apart so ordering is deterministic.
+    """
+    import datetime as dt
+
+    base = dt.datetime(2026, 5, 1, tzinfo=dt.UTC)
+    from app.storage.models import CaseResult, Run
+
+    for i, (run_status, rows) in enumerate(runs_and_results):
+        run = Run(
+            started_at=base + dt.timedelta(hours=i),
+            finished_at=base + dt.timedelta(hours=i, minutes=10),
+            status=run_status,
+            total=len(rows),
+            passed=sum(1 for _, s in rows if s == "pass"),
+            failed=sum(1 for _, s in rows if s == "fail"),
+            skipped=0,
+        )
+        sess.add(run)
+        sess.flush()  # to populate run.id
+        for case_id, case_status in rows:
+            sess.add(
+                CaseResult(
+                    run_id=run.id,
+                    case_id=case_id,
+                    status=case_status,
+                    duration_ms=100,
+                )
+            )
+    sess.commit()
+
+
+def test_recent_runs_returns_empty_when_case_never_run(
+    client_with_real_cases: TestClient,
+) -> None:
+    """A case that's never appeared in any run gets `[]`, not 404."""
+    resp = client_with_real_cases.get("/cases/lg-bug-0001-hashjoin-right-table/recent-runs")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_recent_runs_returns_runs_in_descending_started_at_order(
+    client_with_real_cases: TestClient,
+) -> None:
+    """Multiple runs touching the same case → most recent first."""
+    case_id = "lg-bug-0001-hashjoin-right-table"
+    with sqlite_store.get_session() as sess:
+        _seed_runs_and_results(
+            sess,
+            [
+                ("pass", [(case_id, "pass")]),  # 2026-05-01T00:00
+                ("fail", [(case_id, "fail")]),  # 2026-05-01T01:00
+                ("pass", [(case_id, "pass")]),  # 2026-05-01T02:00 (newest)
+            ],
+        )
+
+    resp = client_with_real_cases.get(f"/cases/{case_id}/recent-runs")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 3
+    # Sorted by started_at desc → newest first
+    started_ats = [r["started_at"] for r in rows]
+    assert started_ats == sorted(started_ats, reverse=True)
+    # First row is the newest (2026-05-01T02:00)
+    assert "02:00" in rows[0]["started_at"]
+    assert rows[0]["run_status"] == "pass"
+    assert rows[0]["case_status"] == "pass"
+    assert rows[0]["duration_ms"] == 100
+
+
+def test_recent_runs_only_returns_rows_for_the_requested_case_id(
+    client_with_real_cases: TestClient,
+) -> None:
+    """A run that touched multiple cases — only the requested case row is returned."""
+    target = "lg-bug-0002-array-unnest-crash"
+    other = "lg-bug-0003-count-no-statistics"
+    with sqlite_store.get_session() as sess:
+        _seed_runs_and_results(
+            sess,
+            [
+                ("pass", [(target, "pass"), (other, "pass")]),
+                ("fail", [(other, "fail")]),  # this run did NOT touch `target`
+            ],
+        )
+
+    resp = client_with_real_cases.get(f"/cases/{target}/recent-runs")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1  # only the first run touched `target`
+    assert rows[0]["case_status"] == "pass"
+
+
+def test_recent_runs_respects_limit_parameter(
+    client_with_real_cases: TestClient,
+) -> None:
+    """`?limit=N` clamps the result; default is 10."""
+    case_id = "lg-bug-0004-ctas-rowcount-zero"
+    with sqlite_store.get_session() as sess:
+        _seed_runs_and_results(
+            sess,
+            [("pass", [(case_id, "pass")]) for _ in range(15)],
+        )
+
+    # default limit=10
+    resp_default = client_with_real_cases.get(f"/cases/{case_id}/recent-runs")
+    assert resp_default.status_code == 200
+    assert len(resp_default.json()) == 10
+
+    # explicit limit=3
+    resp_three = client_with_real_cases.get(
+        f"/cases/{case_id}/recent-runs?limit=3"
+    )
+    assert resp_three.status_code == 200
+    assert len(resp_three.json()) == 3
