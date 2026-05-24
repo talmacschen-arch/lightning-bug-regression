@@ -242,6 +242,58 @@ def delete_skip_list_entry(entry_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Delete case (v1.16+ post-Settings refactor)
+#
+# Deletes the case's YAML file from disk. case_results / runs rows are
+# untouched — historical run data is independent of case definition.
+# Path traversal protected: case_id must match `_iter_case_files` stem.
+# Educational note in confirm dialog (frontend): skip-list handles
+# temporary disable; delete is for permanent removal only.
+# ---------------------------------------------------------------------------
+
+
+@router.delete(
+    "/cases/{case_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_admin_password)],
+)
+def delete_case(case_id: str) -> None:
+    """Remove a case YAML file from disk. 404 if no file matches.
+
+    Historical runs are preserved automatically (case_results rows hold
+    case_id as a string, no FK). Caller is expected to `git rm + commit +
+    push` after — the endpoint only touches the working tree.
+    """
+    # Resolve via the same iter that powers /cases — ensures we never
+    # walk outside CASES_ROOT (§14 R26 single source).
+    from app.api.cases import _iter_case_files, _load_categories
+
+    categories = _load_categories()
+    for path, _cat_name in _iter_case_files(categories):
+        if path.stem != case_id:
+            continue
+        # Defense-in-depth: even though _iter_case_files only returns
+        # files under each category's dir_path, double-check that the
+        # resolved path is inside CASES_ROOT before unlinking.
+        from app.api.cases import _cases_root
+
+        try:
+            path.resolve().relative_to(_cases_root().resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"case file {path} resolved outside cases root",
+            ) from None
+        try:
+            path.unlink()
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"failed to delete {path}: {e}") from None
+        logger.info("admin delete_case: removed %s (case_id=%s)", path, case_id)
+        return
+    raise HTTPException(status_code=404, detail=f"case {case_id!r} not found in any category dir")
+
+
+# ---------------------------------------------------------------------------
 # Read-only external/<svc>.yml browser (v1.15+ post-Settings refactor)
 # ---------------------------------------------------------------------------
 
