@@ -31,6 +31,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -793,20 +794,73 @@ def submit_case(req: SubmitRequest, request: Request) -> SubmitResponse:
             ),
         ) from None
 
+    # Transient network error signatures from gh CLI / underlying http client.
+    # Hit live during M4a-1 dogfood (PR #70) when `gh pr create` got a TLS
+    # handshake timeout to api.github.com — branch was already pushed, only
+    # PR creation needed a retry.
+    _TRANSIENT_GH_ERROR_HINTS = (
+        "tls handshake timeout",
+        "i/o timeout",
+        "no such host",
+        "connection refused",
+        "connection reset",
+        "request canceled while waiting",
+        "context deadline exceeded",
+        "temporary failure in name resolution",
+        "could not resolve host",
+    )
+
+    def _is_transient_gh_error(stderr: str) -> bool:
+        s = (stderr or "").lower()
+        return any(hint in s for hint in _TRANSIENT_GH_ERROR_HINTS)
+
     def _run(step: str, argv: list[str]) -> subprocess.CompletedProcess[str]:
-        try:
-            return subprocess.run(
-                argv,
-                cwd=str(repo_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"git/gh failed at {step}: stderr={e.stderr}",
-            ) from e
+        """Run subprocess with retry for `gh` invocations on transient
+        network errors (3 attempts, 5s back-off). git commands and other
+        non-gh subprocesses fail-fast on first error (no network dependency
+        once auth helper is configured)."""
+        is_gh = bool(argv) and argv[0] == "gh"
+        max_attempts = 3 if is_gh else 1
+        last_err: subprocess.CalledProcessError | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return subprocess.run(
+                    argv,
+                    cwd=str(repo_root),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                last_err = e
+                # Only retry on transient network errors, not logical errors
+                # (auth fail, branch already exists, etc.) — those won't fix
+                # themselves and burning 15s on retry is wasteful.
+                if is_gh and _is_transient_gh_error(e.stderr) and attempt < max_attempts:
+                    logger.warning(
+                        "git/gh %s attempt %d/%d transient network error, retrying in 5s: %s",
+                        step,
+                        attempt,
+                        max_attempts,
+                        (e.stderr or "").strip()[:200],
+                    )
+                    time.sleep(5)
+                    continue
+                # Non-transient or max retries exhausted — raise with full
+                # context. Branch may already be pushed; include hint so the
+                # caller can manually `gh pr create` as fallback.
+                detail = f"git/gh failed at {step}: stderr={e.stderr}"
+                if step.startswith("gh "):
+                    detail += (
+                        f" (branch {req.branch_name!r} may already be pushed — "
+                        f"caller can manually run: gh pr create --head {req.branch_name})"
+                    )
+                raise HTTPException(status_code=500, detail=detail) from e
+        # Unreachable — loop returns or raises. Defensive:
+        raise HTTPException(
+            status_code=500,
+            detail=f"git/gh failed at {step}: {last_err}",
+        )
 
     _run("git checkout", ["git", "checkout", "-b", req.branch_name])
     _run("git add", ["git", "add", str(file_relative)])
