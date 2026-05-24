@@ -222,59 +222,26 @@ def test_delete_skip_list_404_for_unknown_id(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# M6-4 settings list/update
+# /admin/settings endpoints removed 2026-05-25 — see admin.py for rationale.
+# dut_hosts moved to external/dut.yml; jinja_context + server_log_path had
+# zero real consumers in 15 case YAMLs. Tests below cover the regression:
+# the endpoints must now 404, ensuring frontend doesn't still try to call
+# them after the refactor.
 # ---------------------------------------------------------------------------
 
 
-def test_settings_list_empty_returns_empty_array(client: TestClient) -> None:
+def test_settings_list_endpoint_removed(client: TestClient) -> None:
     resp = client.get("/admin/settings")
-    assert resp.status_code == 200
-    assert resp.json() == []
+    assert resp.status_code == 404
 
 
-def test_update_setting_round_trip(client: TestClient) -> None:
-    resp = client.put(
-        "/admin/settings/jinja_context",
-        json={"value": {"cluster": "synxdb-0001", "extras": {"foo": "bar"}}},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["key"] == "jinja_context"
-    assert body["value"]["cluster"] == "synxdb-0001"
-    assert body["value_type"] == "json"
-
-    # Listing should now contain it
-    listing = client.get("/admin/settings").json()
-    keys = [s["key"] for s in listing]
-    assert "jinja_context" in keys
-
-
-def test_update_setting_rejects_key_not_in_allowlist(client: TestClient) -> None:
-    resp = client.put("/admin/settings/random-key", json={"value": {}})
-    assert resp.status_code == 400
-    assert "allowlist" in resp.json()["detail"]
-
-
-def test_update_setting_rejects_non_dict_value(client: TestClient) -> None:
-    resp = client.put("/admin/settings/dut_hosts", json={"value": "string-value"})
-    assert resp.status_code == 400
-    resp = client.put("/admin/settings/dut_hosts", json={"value": ["a", "b"]})
-    assert resp.status_code == 400
-
-
-def test_update_setting_rejects_removed_dev_db_url_key(client: TestClient) -> None:
-    """dev_db_url / cluster_topology were removed from the allowlist
-    2026-05-25 — they had no runtime consumer (M6-4 spec gap)."""
-    resp = client.put("/admin/settings/dev_db_url", json={"value": {"v": "x"}})
-    assert resp.status_code == 400
-    assert "allowlist" in resp.json()["detail"]
-    resp = client.put("/admin/settings/cluster_topology", json={"value": {"v": "x"}})
-    assert resp.status_code == 400
-    assert "allowlist" in resp.json()["detail"]
+def test_settings_put_endpoint_removed(client: TestClient) -> None:
+    resp = client.put("/admin/settings/jinja_context", json={"value": {"x": 1}})
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# M6-4 X-Admin-Password auth guard
+# X-Admin-Password auth guard (M6-4; still active for skip-list mutations)
 # ---------------------------------------------------------------------------
 
 
@@ -319,5 +286,4 @@ def test_get_endpoints_remain_open_with_admin_password(
     """GETs should still work without password (read-only access OK)."""
     monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
     assert client.get("/admin/skip-list").status_code == 200
-    assert client.get("/admin/settings").status_code == 200
     assert client.get("/admin/categories").status_code == 200

@@ -43,7 +43,7 @@ from sqlalchemy import select
 from app.api.cases import _iter_case_files, _load_categories
 from app.runner import event_broker, orchestrator
 from app.runner.case_normalizer import normalize_case
-from app.runner.dsn_builder import dsn_map_from_env
+from app.runner.dsn_builder import dsn_map_from_external_or_env
 from app.runner.external_deps_loader import (
     collect_external_deps,
     load_external_context,
@@ -125,30 +125,28 @@ def _artifacts_root() -> Path:
     return Path(os.getenv("ARTIFACTS_ROOT", "artifacts"))
 
 
-def _load_jinja_context_and_dut_hosts() -> tuple[dict[str, Any], set[str]]:
-    """Read jinja_context + dut_hosts from system_settings.
+def _dut_hosts_from_external() -> set[str]:
+    """Read DUT host list from `external/dut.yml` (post-Settings removal).
 
-    M1-11 dogfood seeds these via system_settings before triggering runs.
-    Missing → empty dict / empty set so dev/test runs work without setup.
+    Replaces the M1-era system_settings reader: dut config moved to a
+    single source of truth under external/, unifying with the M6-5
+    external_deps mechanism. Missing file / missing `hosts` field →
+    empty set (caller can still ssh as root to non-DUT boxes).
+
+    `hosts` field shape: a YAML list like `[mdw, sdw1, sdw2]`. Anything
+    else (None, dict, scalar) → empty set + warning.
     """
-    jinja_ctx: dict[str, Any] = {}
-    dut_hosts: set[str] = set()
-    try:
-        with sqlite_store.get_session() as sess:
-            jc = sqlite_store.get_setting(sess, "jinja_context")
-            if isinstance(jc, dict):
-                jinja_ctx = jc
-            dh = sqlite_store.get_setting(sess, "dut_hosts")
-            if isinstance(dh, dict):
-                # stored as {"hosts": ["mdw", "sdw1", ...]}
-                hosts = dh.get("hosts")
-                if isinstance(hosts, list):
-                    dut_hosts = {str(h) for h in hosts}
-            elif isinstance(dh, list):
-                dut_hosts = {str(h) for h in dh}
-    except Exception as e:  # noqa: BLE001 — startup-style; log and continue
-        logger.warning("could not read jinja_context/dut_hosts settings: %s", e)
-    return jinja_ctx, dut_hosts
+    dut = load_external_context(["dut"]).get("dut") or {}
+    hosts_raw = dut.get("hosts")
+    if not isinstance(hosts_raw, list):
+        if hosts_raw is not None:
+            logger.warning(
+                "external/dut.yml: `hosts` must be a list, got %s; "
+                "no DUT hosts will route to gpadmin user",
+                type(hosts_raw).__name__,
+            )
+        return set()
+    return {str(h) for h in hosts_raw}
 
 
 def _load_cases_from_disk(
@@ -209,15 +207,16 @@ async def _execute_run(
     error with "sql step requires sql_pool to be configured" — M2 dogfood
     2026-05-24 followup.
     """
-    sql_pool = SqlSessionPool(dsn_map_from_env(cases))
-    # M6-5: load external/<svc>.yml for every svc referenced by these
-    # cases' external_deps, inject under jinja_context["external"]. Cases
-    # then template `{{ external.<svc>.host }}` etc.
-    svc_names = collect_external_deps(cases)
-    if svc_names:
-        external_ctx = load_external_context(svc_names)
+    sql_pool = SqlSessionPool(dsn_map_from_external_or_env(cases))
+    # M6-5 + post-Settings: load external/<svc>.yml for every svc referenced
+    # by cases' external_deps, PLUS always include `dut` so cases can
+    # template `{{ external.dut.host }}` etc. Inject under
+    # jinja_context["external"].
+    svc_names = sorted({"dut", *collect_external_deps(cases)})
+    external_ctx = load_external_context(svc_names)
+    if external_ctx:
         # Merge but don't clobber: a user-supplied jinja_context.external
-        # takes precedence (lets dev override per-run via system_settings).
+        # takes precedence (lets caller override per-run).
         existing_external = jinja_context.get("external")
         if isinstance(existing_external, dict):
             merged_external = {**external_ctx, **existing_external}
@@ -346,7 +345,10 @@ def create_run(
             },
         )
 
-    jinja_context, dut_hosts = _load_jinja_context_and_dut_hosts()
+    # Jinja context starts empty; `_execute_run` merges in external.*
+    # context from external/<svc>.yml (M6-5) + external/dut.yml.
+    jinja_context: dict[str, Any] = {}
+    dut_hosts = _dut_hosts_from_external()
     artifacts_root = _artifacts_root()
 
     background_tasks.add_task(

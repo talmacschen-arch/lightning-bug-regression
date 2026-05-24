@@ -125,10 +125,6 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Skip list');
     });
 
-    it('breadcrumb shows Admin / Settings at /admin/settings', () => {
-      renderAt('/admin/settings');
-      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Settings');
-    });
   });
 
   describe('navigation contract', () => {
