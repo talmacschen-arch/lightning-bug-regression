@@ -1,5 +1,9 @@
 /**
- * AdminSkipListPage smoke tests (M6-4).
+ * AdminSkipListPage smoke tests (M6-4 + combobox).
+ *
+ * Combobox UX: case_id input is now a CaseIdCombobox that fetches
+ * /cases on mount and shows fuzzy-searchable popover. Tests mock /cases
+ * + interact via the combobox testids (trigger / search / item-{id}).
  */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,11 +11,27 @@ import { MemoryRouter } from 'react-router-dom';
 import AdminSkipListPage from './AdminSkipListPage';
 
 const mockFetch = vi.fn();
+const apiFetchMock = vi.fn();
+
+// CaseIdCombobox calls apiFetch from @/api/client (typed fetch wrapper),
+// not raw fetch — mock that path. Other endpoints in AdminSkipListPage
+// (skip-list CRUD) use raw fetch.
+vi.mock('@/api/client', () => ({
+  apiFetch: (...args: unknown[]) => apiFetchMock(...args),
+}));
 
 beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch);
   vi.stubGlobal('confirm', () => true);
   mockFetch.mockReset();
+  apiFetchMock.mockReset();
+  // Default /cases payload — used by CaseIdCombobox; tests can override
+  // before render() if a specific case row needs to be selected.
+  apiFetchMock.mockResolvedValue([
+    { id: 'lg-bug-9999-flaky', category: 'bug_regression', title: 'Flaky bug', status: 'open', destructive: false, tags: null, error: null },
+    { id: 'lg-bug-x', category: 'bug_regression', title: 'Test case X', status: 'open', destructive: false, tags: null, error: null },
+    { id: 'a', category: 'bug_regression', title: 'Single-letter id', status: 'open', destructive: false, tags: null, error: null },
+  ]);
   if (typeof localStorage !== 'undefined') localStorage.clear();
 });
 
@@ -38,6 +58,15 @@ const SAMPLE_ENTRIES = [
     until_date: '2026-12-31',
   },
 ];
+
+/** Pick a case via the combobox: click trigger → click item. */
+async function pickCaseInCombobox(caseId: string) {
+  fireEvent.click(screen.getByTestId('skip-list-input-case-id-trigger'));
+  await waitFor(() => {
+    expect(screen.getByTestId(`skip-list-input-case-id-item-${caseId}`)).toBeInTheDocument();
+  });
+  fireEvent.click(screen.getByTestId(`skip-list-input-case-id-item-${caseId}`));
+}
 
 describe('AdminSkipListPage', () => {
   it('renders existing entries from GET /admin/skip-list', async () => {
@@ -66,11 +95,11 @@ describe('AdminSkipListPage', () => {
     });
   });
 
-  it('add form POSTs and refreshes', async () => {
+  it('add form POSTs and refreshes (case_id picked via combobox)', async () => {
     mockFetch
-      .mockResolvedValueOnce(mockJson([])) // initial GET
-      .mockResolvedValueOnce(mockJson({ ...SAMPLE_ENTRIES[0], id: 7 }, true, 201)) // POST
-      .mockResolvedValueOnce(mockJson([{ ...SAMPLE_ENTRIES[0], id: 7 }])); // refresh GET
+      .mockResolvedValueOnce(mockJson([])) // initial GET /admin/skip-list
+      .mockResolvedValueOnce(mockJson({ ...SAMPLE_ENTRIES[0], id: 7, case_id: 'lg-bug-x' }, true, 201)) // POST
+      .mockResolvedValueOnce(mockJson([{ ...SAMPLE_ENTRIES[0], id: 7, case_id: 'lg-bug-x' }])); // refresh GET
 
     render(
       <MemoryRouter>
@@ -79,7 +108,7 @@ describe('AdminSkipListPage', () => {
     );
     await waitFor(() => expect(screen.getByTestId('skip-list-empty')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByTestId('skip-list-input-case-id'), { target: { value: 'lg-bug-x' } });
+    await pickCaseInCombobox('lg-bug-x');
     fireEvent.change(screen.getByTestId('skip-list-input-reason'), { target: { value: 'test reason' } });
     fireEvent.click(screen.getByTestId('skip-list-add-submit'));
 
@@ -126,7 +155,7 @@ describe('AdminSkipListPage', () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByTestId('skip-list-empty')).toBeInTheDocument());
-    fireEvent.change(screen.getByTestId('skip-list-input-case-id'), { target: { value: 'a' } });
+    await pickCaseInCombobox('a');
     fireEvent.change(screen.getByTestId('skip-list-input-reason'), { target: { value: 'b' } });
     fireEvent.click(screen.getByTestId('skip-list-add-submit'));
     await waitFor(() => expect(mockFetch.mock.calls.length).toBeGreaterThan(1));
