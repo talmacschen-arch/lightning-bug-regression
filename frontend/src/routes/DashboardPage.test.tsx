@@ -193,27 +193,79 @@ describe('DashboardPage (M5-2)', () => {
     });
   });
 
-  describe('Status breakdown tiles (BUG + Extension)', () => {
-    it('renders BUG status breakdown with whitelist rows', async () => {
+  describe('Status breakdown tiles (data-driven across ALL categories)', () => {
+    it('renders status breakdown for every active category (post-2026-05-25)', async () => {
       setupMocks();
       renderPage();
+      // Row 2 container is testid'd
       await waitFor(() => {
-        expect(screen.getByTestId('dashboard-kpi-bug-status')).toBeInTheDocument();
+        expect(screen.getByTestId('dashboard-kpi-row-status')).toBeInTheDocument();
       });
-      // 4 status rows for bug_regression
-      expect(screen.getByTestId('dashboard-kpi-bug-status-row-open')).toBeInTheDocument();
-      expect(screen.getByTestId('dashboard-kpi-bug-status-row-fixed')).toBeInTheDocument();
-      expect(screen.getByTestId('dashboard-kpi-bug-status-row-wontfix')).toBeInTheDocument();
-      expect(screen.getByTestId('dashboard-kpi-bug-status-row-stub')).toBeInTheDocument();
+      // All 3 categories (from FAKE_CATEGORIES) get a status tile —
+      // including external_systems, which was missed by the pre-fix
+      // hardcoded `bugCategory()` / `extensionCategory()` helpers.
+      expect(screen.getByTestId('dashboard-kpi-status-bug_regression')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-extension')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems')).toBeInTheDocument();
     });
 
-    it('renders extension status breakdown', async () => {
+    it('BUG status tile lists all 4 statuses from whitelist', async () => {
       setupMocks();
       renderPage();
       await waitFor(() => {
-        expect(screen.getByTestId('dashboard-kpi-extension-stability')).toBeInTheDocument();
+        expect(screen.getByTestId('dashboard-kpi-status-bug_regression')).toBeInTheDocument();
       });
-      expect(screen.getByTestId('dashboard-kpi-extension-stability-row-stable')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-bug_regression-row-open')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-bug_regression-row-fixed')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-bug_regression-row-wontfix')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-bug_regression-row-stub')).toBeInTheDocument();
+    });
+
+    it('external_systems status tile uses its OWN whitelist (awaiting_env, not open)', async () => {
+      setupMocks();
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-kpi-status-external_systems')).toBeInTheDocument();
+      });
+      // status_whitelist = [stable, awaiting_env, deprecated, stub]
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-awaiting_env')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-stable')).toBeInTheDocument();
+      // bug-specific status MUST NOT appear here
+      expect(screen.queryByTestId('dashboard-kpi-status-external_systems-row-open')).toBeNull();
+      expect(screen.queryByTestId('dashboard-kpi-status-external_systems-row-fixed')).toBeNull();
+    });
+
+    it('new category gets a status tile without code change (§14 R4b)', async () => {
+      // Add a 4th category; row 2 should render its tile too.
+      const extra = [
+        ...FAKE_CATEGORIES,
+        {
+          name: 'perf_smoke',
+          display_name: 'Performance Smoke',
+          description: null,
+          id_prefix: 'lg-perf-',
+          dir_path: 'perf',
+          status_whitelist: ['baseline', 'regression'],
+          default_status: 'baseline',
+          display_order: 40,
+        },
+      ];
+      setupMocks({
+        categories: extra,
+        cases: {
+          bug_regression: FAKE_BUG_CASES,
+          extension: FAKE_EXT_CASES,
+          external_systems: [],
+          perf_smoke: [],
+        },
+      });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-kpi-status-perf_smoke')).toBeInTheDocument();
+      });
+      // its own whitelist rows
+      expect(screen.getByTestId('dashboard-kpi-status-perf_smoke-row-baseline')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-perf_smoke-row-regression')).toBeInTheDocument();
     });
   });
 
