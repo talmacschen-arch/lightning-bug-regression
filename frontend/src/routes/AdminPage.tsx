@@ -33,7 +33,7 @@ export default function AdminPage() {
             Settings →
           </Link>
           <span className="ml-2 text-xs text-muted-foreground">
-            jinja_context / dut_hosts / dev_db_url / cluster_topology / server_log_path
+            jinja_context / dut_hosts / server_log_path
           </span>
         </li>
       </ul>
