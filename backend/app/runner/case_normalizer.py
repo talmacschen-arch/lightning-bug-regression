@@ -17,8 +17,12 @@ from __future__ import annotations
 
 from typing import Any
 
-# Valid step kinds (mirrors orchestrator's dispatch).
-VALID_KINDS = {"sql", "shell", "log_grep"}
+from app.runner.step_kinds import VALID_KIND_NAMES
+
+# Valid step kinds — re-exported as `VALID_KINDS` for backwards compat.
+# The canonical source is `app.runner.step_kinds.STEP_KINDS`; other modules
+# (and tests) may still import `VALID_KINDS` from here.
+VALID_KINDS = VALID_KIND_NAMES
 
 
 def normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
