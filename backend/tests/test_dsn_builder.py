@@ -88,11 +88,12 @@ class TestDsnMapFromEnv:
 
     def test_defaults_match_section_3_1_convention(self, monkeypatch: pytest.MonkeyPatch):
         # §3.1: API server runs on mdw; psycopg connects to localhost via
-        # `trust` over TCP as `gpadmin` to `postgres` database.
+        # `trust` over TCP as `gpadmin` to the `gpadmin` database (owner-home
+        # db on Synxdb/Cloudberry — user 2026-05-24 decision, was `postgres`).
         for k in ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE"):
             monkeypatch.delenv(k, raising=False)
         m = dsn_map_from_env([])
-        assert m["default"] == "postgresql://gpadmin@127.0.0.1:5432/postgres"
+        assert m["default"] == "postgresql://gpadmin@127.0.0.1:5432/gpadmin"
 
     def test_pgport_parsed_as_int(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("PGPORT", "5555")
