@@ -11,7 +11,6 @@ import RunDetailPage from './routes/RunDetailPage';
 import RunsDiffPage from './routes/RunsDiffPage';
 import AdminPage from './routes/AdminPage';
 import AdminSkipListPage from './routes/AdminSkipListPage';
-import AdminSettingsPage from './routes/AdminSettingsPage';
 import NotFoundPage from './routes/NotFoundPage';
 
 export default function App() {
@@ -30,7 +29,6 @@ export default function App() {
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/admin/skip-list" element={<AdminSkipListPage />} />
-          <Route path="/admin/settings" element={<AdminSettingsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>

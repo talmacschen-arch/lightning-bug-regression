@@ -89,3 +89,40 @@ def dsn_map_from_env(cases: list[dict[str, Any]]) -> dict[str, str]:
         pguser=os.getenv("PGUSER", _DEFAULT_PGUSER),
         pgdatabase=os.getenv("PGDATABASE", _DEFAULT_PGDATABASE),
     )
+
+
+def dsn_map_from_external_or_env(cases: list[dict[str, Any]]) -> dict[str, str]:
+    """Prefer external/dut.yml; fall back to env vars (post-Settings removal).
+
+    Unifies DUT connection with the external/<svc>.yml mechanism (M6-5).
+    Editing `external/dut.yml` switches the runner to a different cluster
+    without bouncing backend with new PG* env vars.
+
+    Lookup order per field:
+      1. external/dut.yml field (host / port / user / database)
+      2. env var (PGHOST / PGPORT / PGUSER / PGDATABASE)
+      3. module default (127.0.0.1 / 5432 / gpadmin / gpadmin)
+
+    Each field is resolved independently — a partial `external/dut.yml`
+    (e.g. only `host:`) still works; missing fields fall through to
+    env / default.
+    """
+    # Local import to avoid a module-load cycle if external_deps_loader
+    # ever grows to import this builder. Cheap; same pattern as
+    # orchestrator → event_broker.
+    from app.runner.external_deps_loader import load_external_context
+
+    dut = load_external_context(["dut"]).get("dut") or {}
+
+    def pick(field: str, env_key: str, default: Any) -> Any:
+        if field in dut and dut[field] is not None:
+            return dut[field]
+        return os.getenv(env_key, default)
+
+    return build_dsn_map(
+        cases,
+        pghost=str(pick("host", "PGHOST", _DEFAULT_PGHOST)),
+        pgport=int(pick("port", "PGPORT", _DEFAULT_PGPORT)),
+        pguser=str(pick("user", "PGUSER", _DEFAULT_PGUSER)),
+        pgdatabase=str(pick("database", "PGDATABASE", _DEFAULT_PGDATABASE)),
+    )

@@ -1,5 +1,5 @@
 /**
- * AdminPage landing — smoke test (M6-4).
+ * AdminPage landing — smoke test (M6-4, post-Settings refactor 2026-05-25).
  */
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -7,7 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 import AdminPage from './AdminPage';
 
 describe('AdminPage', () => {
-  it('renders skip-list + settings links', () => {
+  it('renders skip-list link (Settings removed 2026-05-25)', () => {
     render(
       <MemoryRouter>
         <AdminPage />
@@ -15,8 +15,8 @@ describe('AdminPage', () => {
     );
     expect(screen.getByTestId('page-admin')).toBeInTheDocument();
     const skip = screen.getByTestId('admin-link-skip-list');
-    const settings = screen.getByTestId('admin-link-settings');
     expect(skip.getAttribute('href')).toBe('/admin/skip-list');
-    expect(settings.getAttribute('href')).toBe('/admin/settings');
+    // Settings link must NOT render — endpoint + page deleted
+    expect(screen.queryByTestId('admin-link-settings')).toBeNull();
   });
 });
