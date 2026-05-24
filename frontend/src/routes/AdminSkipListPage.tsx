@@ -141,14 +141,22 @@ export default function AdminSkipListPage() {
           onChange={(e) => setDraft({ ...draft, upstream_issue: e.target.value })}
           className="border px-2 py-1 rounded"
         />
-        <input
-          data-testid="skip-list-input-until"
-          type="date"
-          placeholder="until_date (optional)"
-          value={draft.until_date}
-          onChange={(e) => setDraft({ ...draft, until_date: e.target.value })}
-          className="border px-2 py-1 rounded"
-        />
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="skip-list-input-until"
+            className="text-xs text-gray-600"
+          >
+            skip 自动过期日（可选）— 不填 = 永久 skip 直到手动删；填了 = 当天起恢复跑
+          </label>
+          <input
+            id="skip-list-input-until"
+            data-testid="skip-list-input-until"
+            type="date"
+            value={draft.until_date}
+            onChange={(e) => setDraft({ ...draft, until_date: e.target.value })}
+            className="border px-2 py-1 rounded"
+          />
+        </div>
         <button
           type="submit"
           data-testid="skip-list-add-submit"
