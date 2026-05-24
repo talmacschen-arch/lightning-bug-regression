@@ -42,7 +42,7 @@ reviewer 必须按 §14 cross-reference + §6.4 8 条逐项核对（详 `.claude
 ### Sprint M3a-frontend-tests-and-polish — 测试 + polling（可并行）
 
 - [x] M3a-8 Playwright contract test for `/cases/submit`：`frontend/e2e/cases-submit-contract.spec.ts`。`page.route("**/api/cases/submit", route => { const body = route.request().postDataJSON(); expect(body).toMatchObject({yaml: expect.any(String), case_id: expect.any(String), branch_name: expect.any(String)}); route.fulfill({status: 200, body: JSON.stringify({pr_url: "https://example/pr/1", pr_number: 1, branch: "..."}); })`。**§14 R2 强约束**：必须断言 body shape，不只断 button 渲染。complete the full Validate→Try→Save flow in this e2e (mock 全 3 endpoint)
-- [ ] M3a-9 Try mode polling for live step results（实时反馈）：M3a-2 backend 同步返结果（case 跑完才返），前端用 setInterval `(POST /cases/try/status/<try_id>` 风格的 polling 让 UI 看起来有进度感即可。**v1 简化**：if backend M3a-2 直接同步返完整结果（case 通常 < 30s），UI 显示 "Trying… (12s)" spinner + 完成后 batch 展示 step results。SSE 推到 M5
+- [x] M3a-9 Try mode polling for live step results（实时反馈）：M3a-2 backend 同步返结果（case 跑完才返），前端用 setInterval `(POST /cases/try/status/<try_id>` 风格的 polling 让 UI 看起来有进度感即可。**v1 简化**：if backend M3a-2 直接同步返完整结果（case 通常 < 30s），UI 显示 "Trying… (12s)" spinner + 完成后 batch 展示 step results。SSE 推到 M5
 
 ### Sprint M3a-dogfood — 人类浏览器手动验
 
