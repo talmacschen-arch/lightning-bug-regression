@@ -1,0 +1,184 @@
+id: lg-ext-postgis-st-dwithin-gist-index
+title: PostGIS ST_DWithin / ST_Distance + GIST 空间索引基础链路
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: "https://postgis.net/docs/manual-2.5/"
+issue_url: ""
+tags: [extension, postgis, spatial, gist, st_dwithin, st_distance, wgs84]
+
+description: |
+  PostGIS 是 PostgreSQL 最重要的空间扩展。本 case 验证 lightning 集群上
+  PostGIS 2.5.4 的核心链路：
+    (1) CREATE EXTENSION + GEOMETRY(Point, 4326) 类型注册；
+    (2) ST_GeomFromText 写入 5 个 POI（4 北京 + 1 上海）；
+    (3) USING GIST 空间索引建立 + ANALYZE 统计；
+    (4) ST_DWithin geography 球面距离查询（天安门 2km 内 = 3 POI）；
+    (5) ST_Distance geography 长距离查询（天安门↔上海 ≈ 1067km）；
+    (6) EXPLAIN 验证 GIST 索引被命中（"Index Scan using"）。
+procedure: |
+  1) precondition: postgis 在 pg_available_extensions
+  2) setup: DROP TABLE IF EXISTS + CREATE EXTENSION IF NOT EXISTS postgis
+  3) 建数据：CREATE TABLE pois_postgis_demo (id, name, geom GEOMETRY(Point,4326))
+     + INSERT 5 POI + CREATE INDEX USING GIST + ANALYZE
+  4) 断言 ST_DWithin geography 球面 2km 内 = 3
+  5) 断言 ST_Distance geography 天安门↔上海 ≈ 1066732m (1000m 容差)
+  6) 断言 EXPLAIN 含 "Index Scan"（GIST 命中）
+  7) teardown: DROP TABLE（保留 postgis 共享扩展）
+expected: |
+  - PostGIS 2.5.4 加载成功（PostGIS_Version() 返非空）
+  - ST_DWithin(2km from Tiananmen, geography 球面) 返 3（天安门 + 故宫 + 王府井，北海稍远 ~2.1km 排除，上海远不在）
+  - ST_Distance(Tiananmen↔Shanghai, geography 球面) ≈ 1066732m，容差 ±1000m
+  - EXPLAIN 输出含 "Index Scan"（GIST 索引被规划器选中）
+  - 全程无 ERROR / FATAL
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+setup:
+  - DROP TABLE IF EXISTS pois_postgis_demo
+  - CREATE EXTENSION IF NOT EXISTS postgis
+
+steps:
+  - name: "precondition: postgis 在 pg_available_extensions"
+    kind: sql
+    sql: |
+      SELECT count(*)::int
+      FROM   pg_available_extensions
+      WHERE  name = 'postgis'
+    timeout_sec: 30
+    expect:
+      scalar: 1
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "建 pois_postgis_demo 表 + 5 POI + GIST 索引 + ANALYZE"
+    kind: sql
+    sql: |
+      CREATE TABLE pois_postgis_demo (
+        id   SERIAL PRIMARY KEY,
+        name TEXT,
+        geom GEOMETRY(Point, 4326)
+      );
+      INSERT INTO pois_postgis_demo (name, geom) VALUES
+        ('Tiananmen',  ST_GeomFromText('POINT(116.397428 39.90923)',   4326)),
+        ('Forbidden',  ST_GeomFromText('POINT(116.397026 39.917544)',  4326)),
+        ('Beihai',     ST_GeomFromText('POINT(116.388814 39.927006)',  4326)),
+        ('Wangfujing', ST_GeomFromText('POINT(116.410829 39.913423)',  4326)),
+        ('Shanghai',   ST_GeomFromText('POINT(121.4737 31.2304)',      4326));
+      CREATE INDEX pois_postgis_demo_geom_idx
+        ON pois_postgis_demo USING GIST (geom);
+      ANALYZE pois_postgis_demo;
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "ST_DWithin geography 球面 2km 内 = 3 POI（含天安门本身）"
+    kind: sql
+    sql: |
+      SELECT count(*)::int
+      FROM   pois_postgis_demo
+      WHERE  ST_DWithin(
+               geom::geography,
+               ST_GeomFromText('POINT(116.397428 39.90923)', 4326)::geography,
+               2000
+             )
+    timeout_sec: 30
+    expect:
+      scalar: 3
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "ST_Distance geography 天安门↔上海 ≈ 1066732m (±1000m 容差)"
+    kind: sql
+    sql: |
+      SELECT abs(
+        ST_Distance(
+          ST_GeomFromText('POINT(116.397428 39.90923)', 4326)::geography,
+          ST_GeomFromText('POINT(121.4737 31.2304)',    4326)::geography
+        )::int - 1066732
+      ) < 1000
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "EXPLAIN 验证 GIST 索引命中（Index Scan using ...）"
+    kind: sql
+    sql: |
+      EXPLAIN SELECT name FROM pois_postgis_demo
+      WHERE ST_DWithin(
+              geom,
+              ST_GeomFromText('POINT(116.397428 39.90923)', 4326),
+              0.02
+            )
+    timeout_sec: 30
+    expect:
+      plan_contains: ["Index Scan"]
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - DROP TABLE IF EXISTS pois_postgis_demo
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  来源：M4b extension 第 5 例（M4b 首批扩展首批已达 3~5 例上限）。
+
+  **核心算子覆盖**：
+  - **ST_GeomFromText + GEOMETRY(Point, 4326)**：写入端，WGS84 SRID 注册
+  - **GIST + ST_DWithin (geometry)**：典型平面索引查询（"Index Cond: geom &&"
+    在 EXPLAIN 里可见）
+  - **ST_DWithin (geography)**：球面查询，自动按 spheroid 算距离（米单位），与
+    geometry 平面查询语义不同；测两套
+  - **ST_Distance (geography)**：长距离精确算（天安门↔上海 ~1067km），测
+    geography 类型 + 距离精度
+  - **EXPLAIN plan_contains "Index Scan"**：验证 GIST 索引被规划器命中（GPORCA
+    优化器输出含 "Index Scan using pois_postgis_demo_geom_idx"，本 case 用
+    部分匹配 "Index Scan" 既容兼容 PG 原生 plan 也容 GPORCA）
+
+  **postgis 2.5.4 + USE_GEOS=1 + USE_PROJ=1 + USE_STATS=1**（dogfood 前 probe
+  确认）：完整 GIS 栈装好（GEOS = 几何运算库 / PROJ = 坐标投影 / STATS = 索引
+  统计）。该集群也含 postgis_sfcgal / postgis_tiger_geocoder 备扩展，但本 case
+  只测主 postgis。
+
+  **断言策略**：
+  - **ST_DWithin 2km 期望 3**：天安门(0m, 自己) + 故宫(~900m, 北) + 王府井
+    (~1200m, 东)；北海公园(~2100m) 略超 2km 排除；上海(~1067km) 远不在。
+    geography 用 spheroid 算，与 EPSG:4326 平面距离（度）不同，所以用米单位
+    更直观。
+  - **ST_Distance 容差 ±1000m**：1066732m / ±1000m = 0.094% 精度，远大于
+    WGS84 转换 + PROJ 库 numerical jitter；不会假阳性。
+  - **plan_contains "Index Scan"**：通用前缀，避绑死 GPORCA-specific 名（"Index
+    Scan using pois_postgis_demo_geom_idx"）。GPORCA 与 Postgres planner 都
+    输出 "Index Scan"。
+
+  **idempotency**：
+  - setup 用 DROP TABLE IF EXISTS + CREATE EXTENSION IF NOT EXISTS。
+  - teardown 仅 DROP TABLE；**不** DROP EXTENSION postgis（共享扩展，其他
+    case / 业务 / 其他 schema 中的空间列可能依赖；DROP CASCADE 会牵连无关）。
+
+  **§5.5.7 cross-check 通过 12 项**（design.md §5.5 v1.10 后）：
+    - #11 non-tx-safe DDL：本 case 无 VACUUM / 顶层裸跑 ANALYZE / CREATE DATABASE
+      / REINDEX CONCURRENTLY / ALTER SYSTEM；`ANALYZE pois_postgis_demo` 是
+      表级 tx-safe；CREATE INDEX USING GIST 无 CONCURRENTLY 也 tx-safe。
+      全 kind: sql 合规。
+    - #12 跨 driver visibility：本 case 全 kind: sql 同一 psycopg session，
+      sql_driver 末尾 conn.commit() 保证 step 2 CREATE TABLE 对后续 step 可见。
+    - #7 destructive=false 合理（无 gpstop / gpconfig / shared_preload_libraries
+      改动）。
+    - 其它 (#1-6, #8-10)：step kind 在 /admin/step-kinds (sql)；setup/teardown
+      幂等齐全；status=stable 对 extension category 合规；id 前缀 lg-ext-* 对；
+      无 Jinja typo / 无远端 cli step；无服务端配置文件。
+
+  status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 postgis 2.5.4 完整链路
+  可用（CREATE EXTENSION + GEOMETRY 类型 + ST_DWithin + ST_Distance + GIST 索引
+  + EXPLAIN 走索引）"。
