@@ -159,19 +159,50 @@ def _plan_contains_any(actual: str | None, expected: list[str]) -> tuple[bool, s
     return passed, f"expected plan to contain any of {expected!r}, got plan_text={actual!r}"
 
 
-def _stdout_contains(actual: str, expected: str) -> tuple[bool, str]:
+def _stdout_contains(actual: str, expected: str | list[str]) -> tuple[bool, str]:
+    """Pass iff every substring in expected appears in actual.
+
+    Accepts either a single string (back-compat) or a list[str] (spec form,
+    symmetric with plan_contains). Empty list passes vacuously.
+    """
     if actual is None:
         return False, f"expected stdout to contain {expected!r}, got None (actual is None)"
-    passed = expected in actual
-    return passed, f"expected stdout to contain {expected!r}, got stdout={actual!r}"
+    if isinstance(expected, str):
+        passed = expected in actual
+        return passed, f"expected stdout to contain {expected!r}, got stdout={actual!r}"
+    missing = [needle for needle in expected if needle not in actual]
+    passed = not missing
+    if passed:
+        return True, f"expected stdout to contain all of {expected!r}, got stdout={actual!r}"
+    return (
+        False,
+        f"expected stdout to contain all of {expected!r}, missing: {missing!r}, "
+        f"got stdout={actual!r}",
+    )
 
 
-def _not_contains(actual: str, expected: str) -> tuple[bool, str]:
-    """Pass iff expected substring is NOT in actual."""
+def _not_contains(actual: str, expected: str | list[str]) -> tuple[bool, str]:
+    """Pass iff none of the expected substrings appears in actual.
+
+    Accepts either a single string (back-compat) or a list[str]. With a list,
+    ALL items must be absent — finding any of them fails the assertion.
+    M3b-10 dogfood bug: skill output uses list form per §5.5.5 extension
+    plan_contains pattern + symmetry; previously TypeError on list input.
+    """
     if actual is None:
         return False, f"expected stdout to NOT contain {expected!r}, got None (actual is None)"
-    passed = expected not in actual
-    return passed, f"expected stdout to NOT contain {expected!r}, got stdout={actual!r}"
+    if isinstance(expected, str):
+        passed = expected not in actual
+        return passed, f"expected stdout to NOT contain {expected!r}, got stdout={actual!r}"
+    found = [needle for needle in expected if needle in actual]
+    passed = not found
+    if passed:
+        return True, f"expected stdout to NOT contain any of {expected!r}, got stdout={actual!r}"
+    return (
+        False,
+        f"expected stdout to NOT contain any of {expected!r}, but found: {found!r}, "
+        f"got stdout={actual!r}",
+    )
 
 
 def _regex(actual: str, expected: str) -> tuple[bool, str]:

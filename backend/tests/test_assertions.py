@@ -170,6 +170,35 @@ def test_not_contains_pass_and_fail() -> None:
     assert passed is False
 
 
+def test_not_contains_accepts_list_form() -> None:
+    """M3b-10 dogfood bug: skill output uses `not_contains: ["ERROR", "FATAL"]`
+    list form per §5.5.5 plan_contains symmetry; previously TypeError on list."""
+    # All absent => PASS.
+    passed, detail = _not_contains("everything is fine", ["ERROR", "FATAL", "panic"])
+    assert passed is True
+    assert "everything is fine" in detail
+
+    # Any present => FAIL, detail names the found items.
+    passed, detail = _not_contains("got ERROR: something broke", ["ERROR", "FATAL"])
+    assert passed is False
+    assert "ERROR" in detail
+    # Items that did NOT match should not appear in "found" list.
+    assert "FATAL" not in detail.split("but found:")[1] if "but found:" in detail else True
+
+
+def test_stdout_contains_accepts_list_form() -> None:
+    """Symmetric with plan_contains list form."""
+    # All present => PASS.
+    passed, detail = _stdout_contains("foo bar baz", ["foo", "baz"])
+    assert passed is True
+
+    # Some missing => FAIL, detail names the missing items.
+    passed, detail = _stdout_contains("foo bar", ["foo", "missing_str"])
+    assert passed is False
+    assert "missing" in detail
+    assert "missing_str" in detail
+
+
 def test_plan_contains_any_match_in_concatenated_text() -> None:
     passed, _ = _plan_contains_any("Hash Join nested loop", ["Merge Join", "Hash Join"])
     assert passed is True
