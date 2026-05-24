@@ -2,15 +2,17 @@
  * M5-4 RunsPage — list of runs with global FilterBar (URL-persistent).
  *
  * Replaces the M2-8 placeholder. Lists /runs with simple filtering by
- * status + since (time range). Click a row → /runs/:id.
+ * verdict + since (time range). Click a row → /runs/:id.
  *
  * Category / tag / q filters live in the FilterBar UI but DON'T apply
  * to runs in this minimal version — runs don't carry tags or categories
- * directly. Status + since are the practical filters here.
+ * directly. Verdict + since are the practical filters here.
  *
- * §14 R4b: status options come from a fixed set used by the runs
- * lifecycle (running / pass / fail / etc); not category names. Wire-up
- * matches FilterBar's controlled-component contract.
+ * The filter chip is labeled "Status:" in FilterBar (shared UI), but
+ * the values are VERDICTS ('pass' / 'fail' / 'running' / 'aborted')
+ * derived from backend lifecycle status + failed count — see
+ * @/lib/runVerdict. URL key remains `status` for filter-state continuity
+ * via useFilters() — semantics is "what the user wants to filter on".
  */
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -18,10 +20,9 @@ import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 import { FilterBar } from '@/components/FilterBar';
 import { useFilters } from '@/lib/useFilters';
+import { runVerdict, verdictToBadgeClass, VERDICT_OPTIONS } from '@/lib/runVerdict';
 
 type RunSummary = components['schemas']['RunSummary'];
-
-const RUN_STATUS_OPTIONS = ['pass', 'fail', 'running', 'error', 'completed'];
 
 function formatRelative(dateStr: string): string {
   const diffMs = Date.now() - new Date(dateStr).getTime();
@@ -61,7 +62,7 @@ export default function RunsPage() {
 
   const cutoffMs = sinceToCutoffMs(filters.since);
   const filtered = (runs ?? []).filter((r) => {
-    if (filters.status.length > 0 && !filters.status.includes(r.status)) {
+    if (filters.status.length > 0 && !filters.status.includes(runVerdict(r))) {
       return false;
     }
     if (cutoffMs !== null && new Date(r.started_at).getTime() < cutoffMs) {
@@ -69,7 +70,7 @@ export default function RunsPage() {
     }
     if (filters.q) {
       const q = filters.q.toLowerCase();
-      const hay = `${r.id} ${r.status} ${r.target_version ?? ''} ${r.triggered_by ?? ''}`.toLowerCase();
+      const hay = `${r.id} ${runVerdict(r)} ${r.target_version ?? ''} ${r.triggered_by ?? ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -83,9 +84,9 @@ export default function RunsPage() {
         filters={filters}
         setFilter={setFilter}
         clear={clear}
-        statusOptions={RUN_STATUS_OPTIONS}
+        statusOptions={VERDICT_OPTIONS}
         showSinceFilter
-        qPlaceholder="搜索 id / status / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin"
+        qPlaceholder="搜索 id / verdict / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin"
       />
 
       {error && (
@@ -120,9 +121,9 @@ export default function RunsPage() {
               <span className="font-mono text-sm">#{r.id}</span>
               <span
                 data-testid={`runs-page-status-${r.id}`}
-                className="text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-700"
+                className={`badge ${verdictToBadgeClass(runVerdict(r))}`}
               >
-                {r.status.toUpperCase()}
+                {runVerdict(r).toUpperCase()}
               </span>
               <span className="text-xs text-gray-500">
                 {r.passed ?? 0} pass / {r.failed ?? 0} fail / {r.total ?? 0} total
