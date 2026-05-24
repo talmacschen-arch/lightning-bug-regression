@@ -82,7 +82,16 @@ class _FakeAsyncCursor:
 
 
 class _FakeAsyncConnection:
-    """Minimal AsyncConnection stub with notice-handler hooks."""
+    """Minimal AsyncConnection stub with notice-handler hooks.
+
+    Matches psycopg AsyncConnection's API contract for autocommit: the
+    `autocommit` attribute is readable (so production code can do
+    `getattr(conn, "autocommit", False)` for the rollback guard) but
+    must be mutated via the async `set_autocommit()` method — direct
+    assignment would fail on a real AsyncConnection (M4a-2 dogfood
+    case lg-bug-0008 tripped this when sql_driver.py used `conn.
+    autocommit = True` which is read-only on async connections).
+    """
 
     def __init__(self, cursor: _FakeAsyncCursor) -> None:
         self._cursor = cursor
@@ -103,6 +112,12 @@ class _FakeAsyncConnection:
 
     async def close(self) -> None:
         self.closed = True
+
+    async def set_autocommit(self, value: bool) -> None:
+        """psycopg AsyncConnection requires this async setter; the
+        attribute is read-only as a property on real connections.
+        Tests can still read `.autocommit` via getattr for assertions."""
+        self.autocommit = value
 
     def add_notice_handler(self, cb: Any) -> None:
         self._handlers.append(cb)
