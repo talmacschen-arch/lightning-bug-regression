@@ -1,0 +1,195 @@
+id: lg-ext-plpython3u-numpy-array-distance-matmul
+title: PL/Python3u + numpy 数组聚合 / 欧氏距离 / 矩阵乘法三典型用例
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: "https://www.postgresql.org/docs/14/plpython.html"
+issue_url: ""
+tags: [extension, plpython3u, numpy, array, euclidean, matmul, untrusted-language]
+
+description: |
+  PL/Python3u 是 PostgreSQL 的 untrusted Python 过程语言扩展。本 case
+  验证 lightning 集群上 plpython3u + numpy 三个典型计算路径：
+    (1) numpy_array_sum: float8[] → np.sum → 标量；
+    (2) numpy_euclidean_distance: 两个 float8[] → np.linalg.norm；
+    (3) numpy_matrix_mult: 两个 float8[] + 形状 (m,n,p) → reshape +
+        np.matmul → flatten 后回到 float8[]。
+  函数本身验证 PL/Python ↔ PG 类型转换 + numpy import + 计算正确性。
+procedure: |
+  1) 前置：plpython3u 在 pg_available_extensions（如未装会被 §11 admin
+     检查到，本 case 不负责自动安装）
+  2) setup: 清掉旧函数 + IF NOT EXISTS 装 plpython3u 扩展
+  3) 主 step 1: CREATE 3 个 plpython3u 函数（sum / distance / matmul）
+  4) 主 step 2: SELECT numpy_array_sum(ARRAY[1.1,2.2,3.3]) → ≈6.6
+  5) 主 step 3: SELECT numpy_euclidean_distance([1,2,3],[4,5,6]) → ≈sqrt(27)
+  6) 主 step 4: SELECT numpy_matrix_mult([1,2,3,4],[5,6,7,8],2,2,2) → [19,22,43,50]
+  7) teardown: DROP 3 个函数（保留 plpython3u 扩展，可能其他业务依赖）
+expected: |
+  - plpython3u 扩展可装（precondition 软检查）
+  - numpy_array_sum(ARRAY[1.1,2.2,3.3]) - 6.6 在 1e-9 容差内
+  - numpy_euclidean_distance(...) - 5.196152422706632 在 1e-9 容差内
+  - numpy_matrix_mult(...) 4 元素与 [19,22,43,50] 在 1e-9 容差内
+  - 全程无 ERROR / FATAL（特别是不出 `ModuleNotFoundError: No module named 'numpy'`）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+setup:
+  - DROP FUNCTION IF EXISTS numpy_array_sum(float8[])
+  - DROP FUNCTION IF EXISTS numpy_euclidean_distance(float8[], float8[])
+  - DROP FUNCTION IF EXISTS numpy_matrix_mult(float8[], float8[], int, int, int)
+  - CREATE EXTENSION IF NOT EXISTS plpython3u
+
+steps:
+  - name: "precondition: plpython3u 在 pg_available_extensions"
+    kind: sql
+    sql: |
+      SELECT count(*)::int
+      FROM   pg_available_extensions
+      WHERE  name = 'plpython3u'
+    timeout_sec: 30
+    expect:
+      scalar: 1
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "CREATE 3 个 plpython3u + numpy 函数 (sum / distance / matmul)"
+    kind: sql
+    sql: |
+      CREATE OR REPLACE FUNCTION numpy_array_sum(arr float8[])
+      RETURNS float8 AS $py$
+          import numpy as np
+          np_array = np.array(arr)
+          return float(np.sum(np_array))
+      $py$ LANGUAGE plpython3u;
+
+      CREATE OR REPLACE FUNCTION numpy_euclidean_distance(a float8[], b float8[])
+      RETURNS float8 AS $py$
+          import numpy as np
+          arr1 = np.array(a)
+          arr2 = np.array(b)
+          return float(np.linalg.norm(arr1 - arr2))
+      $py$ LANGUAGE plpython3u;
+
+      CREATE OR REPLACE FUNCTION numpy_matrix_mult(a float8[], b float8[], m int, n int, p int)
+      RETURNS float8[] AS $py$
+          import numpy as np
+          mat_a = np.array(a).reshape(m, n)
+          mat_b = np.array(b).reshape(n, p)
+          result = np.matmul(mat_a, mat_b)
+          return result.flatten().tolist()
+      $py$ LANGUAGE plpython3u;
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "用例 1: numpy_array_sum([1.1,2.2,3.3]) ≈ 6.6 (1e-9 容差)"
+    kind: sql
+    sql: |
+      SELECT abs(numpy_array_sum(ARRAY[1.1, 2.2, 3.3]) - 6.6) < 1e-9
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL", "ModuleNotFoundError"]
+
+  - name: "用例 2: numpy_euclidean_distance([1,2,3],[4,5,6]) ≈ sqrt(27) (1e-9 容差)"
+    kind: sql
+    sql: |
+      SELECT abs(
+        numpy_euclidean_distance(ARRAY[1,2,3]::float8[], ARRAY[4,5,6]::float8[])
+        - 5.196152422706632
+      ) < 1e-9
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL", "ModuleNotFoundError"]
+
+  - name: "用例 3: numpy_matrix_mult 2x2 ⊗ 2x2 = [19,22,43,50] (1e-9 容差)"
+    kind: sql
+    sql: |
+      WITH r AS (
+        SELECT numpy_matrix_mult(
+          ARRAY[1,2,3,4]::float8[],
+          ARRAY[5,6,7,8]::float8[],
+          2, 2, 2
+        ) AS m
+      )
+      SELECT
+            abs(m[1] - 19) < 1e-9
+        AND abs(m[2] - 22) < 1e-9
+        AND abs(m[3] - 43) < 1e-9
+        AND abs(m[4] - 50) < 1e-9
+      FROM r
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL", "ModuleNotFoundError"]
+
+teardown:
+  - DROP FUNCTION IF EXISTS numpy_array_sum(float8[])
+  - DROP FUNCTION IF EXISTS numpy_euclidean_distance(float8[], float8[])
+  - DROP FUNCTION IF EXISTS numpy_matrix_mult(float8[], float8[], int, int, int)
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  来源：user 直接给的 outline (M4b extension 第 4 例)。
+
+  **为何 plpython3u 而非 plpython3** (PG 14 / SynxDB 4.5)：
+  - plpython3 = "trusted"（非 superuser 可装，但禁用 import 等危险操作）
+  - plpython3u = "untrusted"（需 superuser；可自由 import 任意 module，
+    包含 numpy 等数值库）
+  数据科学 + 业务计算几乎都需要 import numpy / pandas / sklearn，所以业务
+  实际用 plpython3u；本 case 跟随实际用法验证 plpython3u + numpy 整条链。
+  `gpadmin` 在 SynxDB 默认 superuser，CREATE EXTENSION plpython3u 可过。
+
+  **3 个用例覆盖的 numpy API 路径**：
+  1. **np.sum(np.array(arr))**：标量聚合 — PG float8[] ↔ Python list ↔
+     numpy ndarray 单向转换 + 标量返回。
+  2. **np.linalg.norm(a-b)**：向量距离 — 两个 float8[] 参数 + 数组算术
+     广播 + linalg 子库符号链接（验证 numpy 整包不只是 core 装到位）。
+  3. **np.matmul + reshape + flatten**：矩阵乘法 — 1D float8[] 通过
+     reshape 还原 2D 矩阵 → matmul → flatten 回 1D → 返回 float8[]。
+     验证 array 双向转换 + 矩阵线性代数路径（matmul 在 BLAS 层调
+     libopenblas / libmkl，与 norm 不同的底层）。
+
+  **断言策略 — 浮点容差**：
+  - sum 用例 6.6 看似 exact，实际 1.1+2.2+3.3 IEEE 754 加和可能是
+    6.6000000000000005；
+  - euclidean sqrt(27) = 5.196152422706632... 末位 IEEE 754 截断；
+  - matmul 整数输入整数结果但 float8 储存 19.0 == 19 实际 True；
+  统一用 `abs(actual - expected) < 1e-9` 单 bool 断言（参考 §5.5.7 推荐
+  浮点比较模式），避稳定性误判。
+
+  **断言 not_contains 含 `ModuleNotFoundError`**：plpython3u CREATE FUNCTION
+  本身不检查 import，只在执行时报 `ImportError: No module named 'numpy'`。
+  显式断言这个关键字，避免"plpython3u 装好但 numpy 没装"这种半成功状态
+  被误判为 PASS。本集群 numpy 1.25.2 ✓（dogfood 前手工 probe）。
+
+  **idempotency**：
+  - setup 用 DROP FUNCTION IF EXISTS × 3 + CREATE EXTENSION IF NOT EXISTS。
+  - teardown 同 DROP FUNCTION IF EXISTS × 3；**不** DROP EXTENSION plpython3u
+    （其他业务可能依赖；DROP CASCADE 会牵连无关函数）。
+
+  **§5.5.7 cross-check 通过 13 项**：
+    - #12 non-tx-safe DDL：CREATE EXTENSION / CREATE FUNCTION / SELECT
+      / DROP FUNCTION 均 tx-safe；本 case 无 VACUUM / 顶层 ANALYZE /
+      CREATE DATABASE / REINDEX CONCURRENTLY / ALTER SYSTEM，可全 kind: sql。
+    - #13 跨 driver visibility：本 case 全 kind: sql 同一 psycopg session，
+      sql_driver 末尾 conn.commit() 保证 step 1 CREATE FUNCTION 对后续
+      step 可见，无 cross-driver tx 问题。
+    - 其它 (#1-11)：step kind 都在 /admin/step-kinds (sql)；setup/teardown
+      幂等守卫齐全；status=stable 对 extension category 合规；id 前缀
+      lg-ext-* 对；destructive=false 合理（无 gpstop / DROP DATABASE）。
+
+  status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 plpython3u + numpy 1.25.2
+  完整链路可用"，与 bug_regression 的 status=fixed 语义不同。
