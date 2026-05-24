@@ -95,6 +95,7 @@ class _FakeAsyncConnection:
         self.executed: list[str] = []
         self.closed = False
         self.rollbacks = 0
+        self.commits = 0
 
     def cursor(self) -> _FakeAsyncCursor:
         return self._cursor
@@ -104,6 +105,9 @@ class _FakeAsyncConnection:
 
     async def rollback(self) -> None:
         self.rollbacks += 1
+
+    async def commit(self) -> None:
+        self.commits += 1
 
     async def close(self) -> None:
         self.closed = True
