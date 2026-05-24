@@ -1,5 +1,5 @@
 /**
- * M3a-8 contract test — verifies the POST /api/cases/submit body shape sent by CaseNewPage.
+ * M3a-8 contract test — verifies the POST /cases/submit body shape sent by CaseNewPage.
  *
  * All API calls are intercepted via page.route() — no real backend needed.
  * The critical §14 R2 assertion is on route.request().postDataJSON(), which
@@ -21,7 +21,7 @@ test.describe('/cases/new → /cases/submit contract (M3a-8)', () => {
   test('full Validate→Try→Save flow asserts submit body shape', async ({ page }) => {
     // CaseNewPage uses API_BASE (http://127.0.0.1:8000) + path, so we route
     // against the absolute origin pattern.
-    await page.route('**/api/cases/validate', async (route) => {
+    await page.route('**/cases/validate', async (route) => {
       const body = route.request().postDataJSON() as { yaml: string };
       expect(body).toMatchObject({ yaml: expect.any(String) });
       await route.fulfill({
@@ -31,7 +31,7 @@ test.describe('/cases/new → /cases/submit contract (M3a-8)', () => {
       });
     });
 
-    await page.route('**/api/cases/try', async (route) => {
+    await page.route('**/cases/try', async (route) => {
       const body = route.request().postDataJSON() as { yaml: string };
       expect(body).toMatchObject({ yaml: expect.any(String) });
       await route.fulfill({
@@ -61,7 +61,7 @@ test.describe('/cases/new → /cases/submit contract (M3a-8)', () => {
       case_id: string;
       branch_name: string;
     } | null = null;
-    await page.route('**/api/cases/submit', async (route) => {
+    await page.route('**/cases/submit', async (route) => {
       submitBodyCaptured = route.request().postDataJSON() as {
         yaml: string;
         case_id: string;
