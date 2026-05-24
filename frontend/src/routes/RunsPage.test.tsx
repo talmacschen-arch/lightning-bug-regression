@@ -196,6 +196,19 @@ describe('RunsPage', () => {
     expect(input.placeholder).toContain('fail');
   });
 
+  it('hides category chips (RunsPage has no category filter logic)', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('runs-page-list')).toBeInTheDocument();
+    });
+    // Filter bar present + verdict chips present, but NO category row
+    expect(screen.getByTestId('filter-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('filter-status-pass')).toBeInTheDocument();
+    expect(screen.queryByTestId('filter-categories')).toBeNull();
+    expect(screen.queryByTestId('filter-category-bug_regression')).toBeNull();
+  });
+
   it('empty state when no runs from API', async () => {
     setupMocks([]);
     renderPage();
