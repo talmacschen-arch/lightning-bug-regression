@@ -197,7 +197,7 @@ skill 在打印 BEGIN/END 之前必须自查：
    - `category=bug_regression` → status ∈ {open, fixed, wontfix, stub}；`status=fixed` 时 `source.fixed_version` 必填。
    - `category=extension` → status ∈ {stable, experimental, deprecated, stub}。
    - 两类都满足：`status=stub` 时 `steps:` 必须为空（与 §4.1 stub 语义一致）。
-6. **id 前缀与 category 匹配**：`bug_regression` 必须 `lg-bug-*`；`extension` 必须 `lg-ext-*`。前缀错 = skill bug，立即修正。
+6. **id 前缀与 category 匹配**：`bug_regression` 必须 `lg-bug-*`；`extension` 必须 `lg-ext-*`；`external_systems` 必须 `lg-xs-*`。前缀错 = skill bug，立即修正。
 7. **destructive 一致性**：steps 里出现 `gpstop` / `gpstart` / `gpconfig -c shared_preload_libraries` / `restart_db` step / `rm -rf .../data` 任一关键词，则 `destructive` 必须为 `true`。漏标 = case 在 suite 中前置跑，污染后续。
 8. **Jinja typo 检查**：所有 `{{ external.<svc>.<field> }}` 的 `<svc>` 必须出现在 case 的 `external_deps` 里；不在则 skill 静默修正（把缺的服务名加进 external_deps）或反问用户"这是 typo 还是新依赖？"。
 9. **远端 cli step profile.d 显式 source**：所有带 `host: '{{ external.* }}'` 的 cli step，cmd 开头**必须**有 `[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true` 这种模式；缺则插入（按 svc 名推测 `<x>` 是 hadoop / hive / oracle / mysql / kafka 等）。
