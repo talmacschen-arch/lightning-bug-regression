@@ -1,14 +1,14 @@
 id: lg-bug-0008-pax-toast-vacuum-analyze-crash
 title: PAX 表含 TOAST 大数组与 NULL 行时 VACUUM FULL + ANALYZE 触发数据库 crash
 category: bug_regression
-status: open
+status: fixed
 severity: high
 destructive: false
 
 source:
   feishu_anchor: "section-9.11-pax-toast-vacuum-analyze-crash"
   reported_at: "2026-05-24"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/774
 tags: [pax, toast, vacuum, analyze, crash]
@@ -84,3 +84,12 @@ notes: |
   仅 psql exit code，再补 step。
 
   status: open 保留直到验证某个 build 修复非复现，再迁 fixed + 填 fixed_version。
+
+  ---
+  **Verified upstream-fixed (M4a-2 dogfood, 2026-05-24)**: POST /cases/try on
+  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 2/2
+  main steps PASS (VACUUM FULL 2845ms, ANALYZE 976ms; setup 含 10M-element
+  PAX TOAST ARRAY 真插入; 全程无 ERROR/FATAL/server closed/recover mode 关键词).
+  PR #74 (case submit) + PR #75 (this status flip). fixed_version above =
+  verified-non-reproducing version, NOT the specific fix introduction
+  commit (not yet researched against 飞书 LG history / source).

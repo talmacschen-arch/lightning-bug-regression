@@ -49,7 +49,7 @@ model: opus
 | 3 | 分析输入，从输入推导 5 个默认值 + 检测场景关键词 |
 | 4 | 按 §5.5.4 顺序提 5 题，每题展示默认值；空回车 = 接受默认 |
 | 5 | 按 §5.5.5 追问场景特化问题（只问检测到的） |
-| 6 | 按 §5.5.6 canonical 顺序起草 YAML；做 5 项 cross-check（§5.5.7） |
+| 6 | 按 §5.5.6 canonical 顺序起草 YAML；做 13 项 cross-check（§5.5.7） |
 | 7 | 打印 `─── BEGIN YAML ───` … `─── END YAML ───` + 3 行 footer |
 
 **自动推导规则**：
@@ -177,7 +177,7 @@ notes: |
   <workaround / 触发条件 / 已知信息>
 ```
 
-## 打印前 cross-check（11 项）
+## 打印前 cross-check（13 项）
 
 skill 在打印 BEGIN/END 之前必须自查：
 
@@ -195,6 +195,8 @@ skill 在打印 BEGIN/END 之前必须自查：
 9. **v0.9：Jinja typo 检查**：所有 `{{ external.<svc>.<field> }}` 的 `<svc>` 必须出现在 case 的 `external_deps` 里；不在则 skill 静默修正（把缺的服务名加进 external_deps）或反问用户"这是 typo 还是新依赖？"。
 10. **v0.9：远端 cli step profile.d 显式 source**：所有带 `host: '{{ external.* }}'` 的 cli step，cmd 开头**必须**有 `[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true` 这种模式；缺则插入（按 svc 名推测 `<x>` 是 hadoop / hive / oracle / mysql / kafka 等）。
 11. **v0.9：服务端配置文件用追加 + grep guard**：cli step 里 `cat > $DD/gphdfs.conf` 这种**覆盖写**模式 → 强制改成 `cat >> + grep -q '^<key>:' guard` 模式（preflight Run 112 教训）。
+12. **v1.8：non-tx-safe DDL 必须走 psql -c**（design.md §4.1.2，M4a-2 BUG 9.11 实战暴露）：steps / setup / teardown 里出现 `VACUUM` / `VACUUM FULL` / 顶层裸跑的 `ANALYZE` / `CREATE DATABASE` / `DROP DATABASE` / `REINDEX CONCURRENTLY` / `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` / `CREATE TABLESPACE` / `DROP TABLESPACE` / `ALTER SYSTEM` / `CLUSTER` 任一关键词时，**绝禁** `kind: sql` 走 psycopg，**必须**改写为 `kind: shell` + `cmd: su - gpadmin -c "psql -c '<DDL>'"`（如果 setup 是 list[str] 字符串，写成 `su - gpadmin -c "psql -c '<DDL>'"` 字符串项，case_normalizer 自动识别 `psql ` 前缀转 shell driver）。理由：sql_driver post-M4a-2 已移除 autocommit 分支；non-tx-safe DDL 走 psycopg 必报 PG 错或撞 AsyncConnection autocommit 状态机怪圈。
+13. **v1.8：跨 driver 持久化 setup 必须走 psql -c**（M4a-2 BUG 9.11 实战暴露）：当主 `steps:` 含 `kind: shell` step（特别是 `psql -c` 形式），且 setup 创建持久化 schema（CREATE TABLE / INSERT 等需被后续 shell step 看见的数据）时，setup 也必须用 `kind: shell + cmd: psql -c '...'`，**不能**用 `kind: sql`。理由：`kind: sql` 走 psycopg AsyncConnection 长连接，autocommit=False 默认，setup 的 CREATE TABLE 不会 commit，shell step 用独立 psql 进程看不到。`psql -c` 每次开独立连接 + 隐式 commit，跨 step 状态一致。
 
 **任一项未过 → 修正后重试，不打印 BEGIN/END。**
 
