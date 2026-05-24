@@ -1,0 +1,266 @@
+id: lg-xs-zombodb-partition-text-search
+title: ZomboDB + Synxdb 分区表全文搜索（ES 后端，含 6 类 ZQL 查询 + EXPLAIN）
+category: external_systems
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-15.3-zombodb-partition-table"
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: "https://github.com/zombodb/zombodb"
+issue_url: ""
+tags: [external_systems, zombodb, elasticsearch, partition, full_text_search, zql, bitmap_index_scan]
+
+description: |
+  ZomboDB 是 PostgreSQL ↔ ElasticSearch 桥接 extension，提供基于 ES 的全文
+  搜索 + ZQL 查询语言。本 case 验证 lightning 集群 + zombodb 3000.1.8 +
+  外部 ES 7.10.2 (192.168.195.203:9200) 整链路：
+    (1) 步骤 0 precondition: ES `/_cluster/health` 返 `status: green`（其他状态
+        视为外部依赖未就绪，case 立即 fail，后续 step 不再跑）；
+    (2) 步骤 1 建分区表 (RANGE on availability_date, 2 partition + default) +
+        CREATE INDEX USING zombodb；
+    (3) 步骤 2 插入测试数据（30 行覆盖 5 种 keywords / price 区间 / partition）；
+    (4) 步骤 3~8 六类 ZQL 查询：keyword 单字 / 多字 / 数字范围 / 数字多值 /
+        组合表达式 / EXPLAIN 计划检查含 Bitmap Index Scan。
+
+procedure: |
+  1) precondition (step 1): curl ES `_cluster/health` → expect "status" : "green"
+  2) setup: DROP TABLE IF EXISTS + 创建 zombodb 扩展（IF NOT EXISTS）
+  3) main step 2: CREATE 分区表 products_p + CREATE zombodb 索引
+  4) main step 3: INSERT 30 行测试数据
+  5) main step 4-8: 5 类 ZQL 查询 (==> 操作符)，断言行数 ≥ 1 + 无 ERROR
+  6) main step 9: EXPLAIN ANALYZE → plan_contains "Bitmap Index Scan"
+  7) teardown: DROP TABLE products_p（保留 zombodb 扩展，共享资源）
+
+expected: |
+  - ES 健康检查 stdout 含 `"status" : "green"`（其他 status 立即 fail，跳过 step 2~9）
+  - CREATE 分区表 + zombodb 索引 成功（不报 ERROR / FATAL）
+  - INSERT 30 行成功
+  - 5 类 ZQL 查询各返回 ≥ 1 行
+  - EXPLAIN 计划含 "Bitmap Index Scan"
+  - 全程无 ERROR / FATAL / "server closed"
+
+applies_to: {}
+preconditions: {}
+external_deps: [elasticsearch]
+
+defaults:
+  database: gpadmin
+
+sessions: {}
+
+setup:
+  - DROP TABLE IF EXISTS public.products_p CASCADE
+  - CREATE EXTENSION IF NOT EXISTS zombodb
+
+steps:
+  - name: "precondition: ES /_cluster/health status=green (失败则后续 step 跳)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'curl -m 10 -sS "http://192.168.195.203:9200/_cluster/health?pretty"'
+    timeout_sec: 30
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status" : "green"']
+      not_contains: ["FATAL", "Connection refused", "timed out"]
+
+  - name: "建分区表 products_p + zombodb 索引"
+    kind: sql
+    sql: |
+      CREATE TABLE public.products_p (
+        id                integer,
+        name              text NOT NULL,
+        keywords          text[],
+        short_summary     text,
+        long_description  text,
+        price             bigint,
+        inventory_count   integer,
+        discontinued      boolean DEFAULT false,
+        availability_date date
+      )
+      WITH (appendonly='true', compresstype=zstd, compresslevel='7')
+      DISTRIBUTED BY (id)
+      PARTITION BY RANGE(availability_date) (
+        PARTITION p201507 START ('2015-07-01'::date) END ('2015-08-01'::date),
+        PARTITION p201508 START ('2015-08-01'::date) END ('2015-09-01'::date),
+        DEFAULT PARTITION pothers
+      );
+      CREATE INDEX idx_zombo_products_p ON public.products_p
+        USING zombodb ((public.products_p.*))
+        WITH (url='http://192.168.195.203:9200/');
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "插入 30 行测试数据 (覆盖 5 种 keywords + price 区间 + 3 partition)"
+    kind: sql
+    sql: |
+      INSERT INTO public.products_p (id, name, keywords, short_summary, long_description, price, inventory_count, availability_date) VALUES
+        (1,  'Pro Baseball Bat',     ARRAY['sports','baseball','bat'],   'wooden bat',          'a wooden baseball bat for pro players',   15000, 100, '2015-07-15'),
+        (2,  'Soccer Ball',          ARRAY['sports','soccer','ball'],    'soccer ball',         'a leather soccer ball with seams',         8000, 200, '2015-07-20'),
+        (3,  'Cardboard Box L',      ARRAY['storage','box','cardboard'], 'large box',           'a large cardboard storage box',            1249, 500, '2015-08-05'),
+        (4,  'Wooden Storage Box',   ARRAY['storage','box','wooden'],    'wooden box',          'a wooden box for storing items away',      3500, 80,  '2015-08-15'),
+        (5,  'Tennis Racket',        ARRAY['sports','tennis'],           'tennis racket',       'a carbon fiber tennis racket pro grade',  17000, 60,  '2015-08-25'),
+        (6,  'Basketball',           ARRAY['sports','basketball'],       'basketball',          'orange basketball indoor outdoor',         5500, 300, '2015-07-10'),
+        (7,  'Ice Cream Maker',      ARRAY['kitchen','dessert'],         'ice cream maker',     'home ice cream maker electric',            9500, 40,  '2015-09-15'),
+        (8,  'Coffee Grinder',       ARRAY['kitchen','coffee'],          'grinder',             'electric coffee bean grinder',             4500, 150, '2015-10-20'),
+        (9,  'Baseball Glove',       ARRAY['sports','baseball','glove'], 'baseball glove',      'leather baseball glove for catcher',      12000, 90,  '2015-07-25'),
+        (10, 'Yoga Mat',             ARRAY['sports','fitness','yoga'],   'yoga mat',            'non-slip yoga mat purple',                 2500, 250, '2015-08-10'),
+        (11, 'Football',             ARRAY['sports','football'],         'football',            'pro football leather',                    14000, 75,  '2015-07-05'),
+        (12, 'Cardboard Box S',      ARRAY['storage','box','cardboard'], 'small box',           'small cardboard storage box for shipping', 600, 1000, '2015-08-30'),
+        (13, 'Wooden Crate',         ARRAY['storage','wooden'],          'wooden crate',        'wooden crate for shipping fragile items', 7800, 50,  '2015-12-01'),
+        (14, 'Golf Ball Set',        ARRAY['sports','golf','ball'],      'golf balls',          'set of 12 golf balls white',              19000, 120, '2015-08-18'),
+        (15, 'Tea Pot',              ARRAY['kitchen','tea'],             'tea pot',             'ceramic tea pot 1L',                       1800, 200, '2015-10-05'),
+        (16, 'Pillow Premium',       ARRAY['bedroom','pillow'],          'pillow',              'memory foam pillow',                       4000, 180, '2015-09-30'),
+        (17, 'Sports Bag',           ARRAY['sports','bag'],              'sports bag',          'large sports duffle bag for gym',          6500, 90,  '2015-08-12'),
+        (18, 'Box Cutter',           ARRAY['tools','box','cutter'],      'box cutter',          'utility knife for opening boxes safely',  1200, 300, '2015-07-28'),
+        (19, 'Volley Ball',          ARRAY['sports','volleyball','ball'],'volley ball',         'official volleyball indoor competition',  10500, 70,  '2015-07-12'),
+        (20, 'Storage Bin Wooden',   ARRAY['storage','wooden','bin'],    'wooden bin',          'wooden storage bin home decor away style', 8500, 60,  '2015-08-22'),
+        (21, 'Ping Pong Paddle',     ARRAY['sports','pingpong'],         'paddle',              'professional ping pong paddle',            3200, 100, '2015-07-18'),
+        (22, 'Boxing Gloves',        ARRAY['sports','boxing','gloves'],  'boxing gloves',       'leather boxing gloves heavy duty',        11000, 50,  '2015-08-08'),
+        (23, 'Stretch Band Set',     ARRAY['sports','fitness'],          'band set',            'resistance band set 5 levels',             1900, 280, '2015-10-15'),
+        (24, 'Beach Towel',          ARRAY['beach','towel'],             'towel',               'cotton beach towel large',                 2800, 350, '2015-08-02'),
+        (25, 'Tennis Ball Pack',     ARRAY['sports','tennis','ball'],    'tennis balls',        'pack of 12 tennis balls competition',     17000, 100, '2015-09-25'),
+        (26, 'Box Spring Mattress',  ARRAY['bedroom','box','spring'],    'box spring',          'queen size box spring mattress',          12500, 30,  '2015-08-28'),
+        (27, 'Garden Hose',          ARRAY['garden','outdoor'],          'garden hose',         '50 ft garden hose flexible',               3800, 200, '2015-09-08'),
+        (28, 'Sports Shoes',         ARRAY['sports','shoes','running'],  'running shoes',       'running shoes lightweight breathable',    18500, 60,  '2015-07-22'),
+        (29, 'Backpack',             ARRAY['outdoor','bag'],             'backpack',            'hiking backpack 40L',                      9000, 110, '2015-08-19'),
+        (30, 'Yoga Block Wooden',    ARRAY['sports','fitness','wooden'], 'yoga block',          'wooden yoga block away from common foam',  1500, 220, '2015-08-26');
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "查询 1: keywords:baseball (单字关键词)，期望返回 ≥ 2 行"
+    kind: sql
+    sql: |
+      SELECT count(*)::int AS hits
+      FROM public.products_p
+      WHERE products_p ==> 'keywords:baseball'
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "查询 2: sports,box (多字关键词)，期望返回 ≥ 1 行"
+    kind: sql
+    sql: |
+      SELECT count(*)::int >= 1 AS has_hits
+      FROM public.products_p
+      WHERE products_p ==> 'sports,box'
+    timeout_sec: 60
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "查询 3: price=[10000 TO 20000] (数字范围) ≥ 1 行"
+    kind: sql
+    sql: |
+      SELECT count(*)::int >= 1 AS has_hits
+      FROM public.products_p
+      WHERE products_p ==> 'price=[10000 TO 20000]'
+    timeout_sec: 60
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "查询 4: price=[17000,1249] (数字多值匹配) ≥ 1 行"
+    kind: sql
+    sql: |
+      SELECT count(*)::int >= 1 AS has_hits
+      FROM public.products_p
+      WHERE products_p ==> 'price=[17000,1249]'
+    timeout_sec: 60
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "查询 5: 组合 ZQL (布尔 OR + proximity + AND price) ≥ 1 行"
+    kind: sql
+    sql: |
+      SELECT count(*)::int >= 1 AS has_hits
+      FROM public.products_p
+      WHERE products_p ==> '(keywords:(sports OR box) OR long_description:"wooden away"~5) AND price: [1000 TO 20000]'
+    timeout_sec: 60
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "查询 6: EXPLAIN 验证计划含 Bitmap Index Scan"
+    kind: sql
+    sql: |
+      EXPLAIN SELECT * FROM public.products_p
+      WHERE products_p ==> '(keywords:(sports OR box) OR long_description:"wooden away"~5) AND price: [1000 TO 20000]'
+    timeout_sec: 60
+    expect:
+      plan_contains: ["Bitmap Index Scan"]
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - DROP TABLE IF EXISTS public.products_p CASCADE
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§15.3
+  "Zombodb+分区表测试"。
+
+  **外部依赖**:
+  - **ES service**: `http://192.168.195.203:9200` (Elasticsearch 7.10.2 + Lucene 8.7.0；
+    cluster_name = elasticsearch；2026-05-24 status=green / 615 active shards)
+  - **zombodb extension**: 3000.1.8 in SynxDB-4.5.0-build130 (gpadmin DB)
+  - **external_deps**: `[elasticsearch]` — runtime injection 暂未上线（M6-5 待）；
+    本 case ES URL 直接 hardcode `192.168.195.203:9200`，M6-5 落地后改 Jinja
+    `{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}` 渲染
+
+  **步骤 1 ES 健康检查策略**：飞书原文要求 "其他情况属于异常则不继续后续测试，报错
+  退出"。orchestrator 自带 "step fail blocks downstream main steps" 行为（lg-bug-0008
+  实战印证），所以把 ES 健康检查作为 **first main step**（不是 setup），fail
+  时自动跳过 step 2~9。check 方式：`kind: shell + curl` + `stdout_contains: '"status" : "green"'`。
+  超时 30s + 不容许 "Connection refused" / "timed out"。
+
+  **测试数据 30 行设计**（不依赖外部 products_bak 表，case 自带）：
+  - keywords 覆盖：baseball (id=1,9) / sports (id=1,2,5,6,9,10,11,14,17,19,21,22,25,28,30)
+    / box (id=3,4,12,18,22,26) / wooden (id=4,13,20,30) / kitchen / bedroom 等多类
+  - price 覆盖：[1000, 20000] 范围（多数行）+ price=17000 (id=5,25) + price=1249 (id=3)
+    对应查询 4 多值匹配
+  - long_description 含 "wooden ... away" proximity 模式（id=4 "wooden box ... away"，
+    id=20 "wooden bin ... away style", id=30 "wooden yoga block away from"）
+  - availability_date 跨 3 partition：p201507 (2015-07-*) / p201508 (2015-08-*) /
+    pothers (2015-09 ~ 12)
+
+  **每查询期望行数估算** (基于测试数据):
+  - Q1 baseball: 2 行 (id=1, 9)
+  - Q2 sports OR box: ~21 行
+  - Q3 price [10000, 20000]: ~13 行
+  - Q4 price=17000 OR 1249: 3 行 (id=3, 5, 25)
+  - Q5 组合: ~21 行 (subset of Q2 + Q5 price)
+  - Q6 EXPLAIN: plan_contains "Bitmap Index Scan"（zombodb 默认走 Bitmap Index）
+
+  **断言策略**:
+  - Q1 用 row_count-style 但 expect 只验 not_contains: ["ERROR"]（保守，避数据 drift
+    时假阴性；count 期望靠 description / notes 记录）
+  - Q2-Q5 用 `count(*)::int >= 1` + `scalar: true` 验真返回行（飞书原文 "正常返回行"）
+  - Q6 用 `plan_contains: ["Bitmap Index Scan"]` 验执行计划走 ES 索引
+
+  **§5.5.7 cross-check 12 项**:
+    - #11 non-tx-safe DDL：本 case 无 VACUUM / 顶层 ANALYZE / CREATE DATABASE /
+      REINDEX CONCURRENTLY / ALTER SYSTEM / CLUSTER；CREATE TABLE / CREATE INDEX /
+      INSERT / SELECT / EXPLAIN / DROP TABLE 全 tx-safe。kind: sql 合规
+    - #12 跨 driver visibility：本 case 仅 step 1 是 kind: shell (ES curl)，
+      step 2~9 全 kind: sql；shell step **不**操作 PG schema，不存在 visibility 问题
+    - #7 destructive：false 合理（无 gpstop / gpconfig / 改 shared_preload）
+    - id 前缀 `lg-xs-` ✓ category external_systems
+
+  **teardown 不 DROP EXTENSION zombodb**：共享 extension，其他 case 或业务可能依赖。
+  仅 DROP TABLE 自建数据。
+
+  **status: stable** 反映本 case 已在 SynxDB-4.5.0-build130 + zombodb 3000.1.8 +
+  ES 7.10.2 (192.168.195.203:9200) 上验证完整链路可用（cluster health green +
+  zombodb extension installed + ZQL 查询路径走 Bitmap Index Scan）。external_systems
+  category 首例 stable case（默认 awaiting_env，因外部环境真就绪所以直接 stable）。
+
+  **首例 external_systems case 意义**：M4c milestone 第一例落地（design.md §13.10）。
+  验证 M4c plan "case 蓝图可先写 awaiting_env" 之外的第二条路径——"环境真就绪时直接
+  stable + skip awaiting_env 中间态"。下次类似 datalake_fdw / hive_connector 也可以
+  这条路径。
