@@ -7,6 +7,7 @@
  * /admin/settings).
  */
 import { useCallback, useEffect, useState } from 'react';
+import { CaseIdCombobox } from '@/components/CaseIdCombobox';
 
 const API_BASE =
   ((import.meta as { env?: { VITE_API_BASE_URL?: string } }).env
@@ -113,12 +114,11 @@ export default function AdminSkipListPage() {
         onSubmit={handleAdd}
         className="grid gap-2 max-w-2xl"
       >
-        <input
-          data-testid="skip-list-input-case-id"
-          placeholder="case_id (required, e.g. lg-bug-0009-flaky)"
+        <CaseIdCombobox
           value={draft.case_id}
-          onChange={(e) => setDraft({ ...draft, case_id: e.target.value })}
-          className="border px-2 py-1 rounded"
+          onChange={(v) => setDraft({ ...draft, case_id: v })}
+          placeholder="case_id (required) — 点击选择已有 case"
+          testid="skip-list-input-case-id"
         />
         <input
           data-testid="skip-list-input-reason"
