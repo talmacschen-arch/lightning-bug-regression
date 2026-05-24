@@ -4,13 +4,14 @@ import { MemoryRouter } from 'react-router-dom';
 import App from './App';
 
 describe('App routing', () => {
-  it('redirects "/" to "/cases" and renders CasesPage', () => {
+  it('redirects "/" to "/dashboard" (M5-2)', () => {
     render(
       <MemoryRouter initialEntries={['/']}>
         <App />
       </MemoryRouter>,
     );
-    expect(screen.getByTestId('page-cases')).toBeInTheDocument();
+    // DashboardPage starts in loading state when first mounted (fetches data)
+    expect(screen.getByTestId('page-dashboard-loading')).toBeInTheDocument();
   });
 
   it('renders NotFoundPage for unknown routes', () => {
