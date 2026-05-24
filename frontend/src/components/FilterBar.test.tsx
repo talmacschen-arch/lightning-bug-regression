@@ -193,4 +193,26 @@ describe('FilterBar (M5-4)', () => {
     const input = screen.getByTestId('filter-q') as HTMLInputElement;
     expect(input.placeholder).toBe('搜索 id / status / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin');
   });
+
+  it('shows category chips by default (showCategoryFilter omitted)', async () => {
+    renderBar();
+    await waitFor(() => {
+      expect(screen.getByTestId('filter-categories')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('filter-category-bug_regression')).toBeInTheDocument();
+  });
+
+  it('hides category chips when showCategoryFilter=false (RunsPage shape)', async () => {
+    renderBar({
+      showCategoryFilter: false,
+      statusOptions: ['pass', 'fail', 'running', 'aborted'],
+    });
+    // Allow categories fetch to settle so any chip rendering would have happened
+    await waitFor(() => {
+      expect(screen.getByTestId('filter-status-pass')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('filter-categories')).toBeNull();
+    expect(screen.queryByTestId('filter-category-bug_regression')).toBeNull();
+    expect(screen.queryByTestId('filter-category-extension')).toBeNull();
+  });
 });

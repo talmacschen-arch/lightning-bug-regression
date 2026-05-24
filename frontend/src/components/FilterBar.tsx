@@ -37,6 +37,13 @@ interface FilterBarProps {
    */
   showSinceFilter?: boolean;
   /**
+   * Whether to show the category chips. Default true (CasesPage uses them
+   * as the primary axis). RunsPage doesn't apply category to its filter
+   * logic — runs don't carry a category directly — so it sets this to
+   * false to avoid rendering chips that look interactive but no-op.
+   */
+  showCategoryFilter?: boolean;
+  /**
    * Placeholder text for the search input. Must reflect what the consuming
    * page ACTUALLY searches in its filter logic. Default is the case-page
    * shape ("id / title / tags"); /runs which doesn't have title/tags
@@ -56,6 +63,7 @@ export function FilterBar({
   clear,
   statusOptions,
   showSinceFilter = false,
+  showCategoryFilter = true,
   qPlaceholder = 'Search id / title / tags…',
 }: FilterBarProps) {
   const [categories, setCategories] = useState<CategoryOut[]>([]);
@@ -112,26 +120,28 @@ export function FilterBar({
         onChange={(e) => setFilter('q', e.target.value)}
       />
 
-      <div data-testid="filter-categories" className="filter-chip-row">
-        <span className="filter-label">Category:</span>
-        {categories.map((cat) => (
-          <button
-            key={cat.name}
-            type="button"
-            data-testid={`filter-category-${cat.name}`}
-            className={
-              filters.category.includes(cat.name)
-                ? 'filter-chip filter-chip--active'
-                : 'filter-chip'
-            }
-            onClick={() =>
-              setFilter('category', toggleInList(filters.category, cat.name))
-            }
-          >
-            {cat.display_name}
-          </button>
-        ))}
-      </div>
+      {showCategoryFilter && (
+        <div data-testid="filter-categories" className="filter-chip-row">
+          <span className="filter-label">Category:</span>
+          {categories.map((cat) => (
+            <button
+              key={cat.name}
+              type="button"
+              data-testid={`filter-category-${cat.name}`}
+              className={
+                filters.category.includes(cat.name)
+                  ? 'filter-chip filter-chip--active'
+                  : 'filter-chip'
+              }
+              onClick={() =>
+                setFilter('category', toggleInList(filters.category, cat.name))
+              }
+            >
+              {cat.display_name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {computedStatusOptions.length > 0 && (
         <div data-testid="filter-statuses" className="filter-chip-row">
