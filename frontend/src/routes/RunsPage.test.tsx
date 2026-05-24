@@ -49,10 +49,28 @@ const FAKE_RUNS = [
   { id: 38, status: 'aborted', started_at: new Date(Date.now() - 100 * 3_600_000).toISOString(), finished_at: null, total: 0, passed: 0, failed: 0, skipped: 0, target_version: '4.5.0', triggered_by: null },
 ];
 
+const FAKE_CASES = [
+  { id: 'lg-bug-0001-hashjoin-right-table', category: 'bug_regression', title: 'hashjoin right table', status: 'fixed', destructive: false, tags: null, error: null },
+  { id: 'lg-bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const row order', status: 'open', destructive: false, tags: null, error: null },
+];
+
 function setupMocks(runs = FAKE_RUNS) {
-  apiFetchMock.mockImplementation(async (path: string) => {
-    if (path === '/runs') return runs;
+  apiFetchMock.mockImplementation(async (path: string, _method: string, init?: { query?: Record<string, string> }) => {
+    if (path === '/runs') {
+      // case_id filter is server-side: when present, only return runs
+      // that "touched" the filtered case. Tests below seed the fake
+      // backend to mirror this — return the FAKE_RUNS subset matching.
+      const cid = init?.query?.case_id;
+      if (cid === 'lg-bug-0009-union-all-const-distributed-row-order') {
+        return [runs[1], runs[2]]; // id=41, id=40
+      }
+      if (cid && !FAKE_CASES.find((c) => c.id === cid)) {
+        return [];
+      }
+      return runs;
+    }
     if (path === '/admin/categories') return FAKE_CATEGORIES;
+    if (path === '/cases') return FAKE_CASES;
     throw new Error(`unmocked: ${path}`);
   });
 }
@@ -143,36 +161,7 @@ describe('RunsPage', () => {
     expect(screen.queryByTestId('filter-status-done')).toBeNull();
   });
 
-  it('q-search "fail" matches rows with verdict=fail (not literal status text)', async () => {
-    setupMocks();
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId('filter-q')).toBeInTheDocument();
-    });
-    const input = screen.getByTestId('filter-q') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'fail' } });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('runs-page-row-41')).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
-    expect(screen.queryByTestId('runs-page-row-40')).toBeNull();
-  });
-
-  it('q-search "running" matches the running run via verdict', async () => {
-    setupMocks();
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId('filter-q')).toBeInTheDocument();
-    });
-    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: 'running' } });
-    await waitFor(() => {
-      expect(screen.getByTestId('runs-page-row-39')).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
-  });
-
-  it('q-search also still matches version / triggered_by', async () => {
+  it('q-search matches version (target_version)', async () => {
     setupMocks();
     renderPage();
     await waitFor(() => {
@@ -185,15 +174,115 @@ describe('RunsPage', () => {
     expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
   });
 
-  it('honest placeholder mentions verdict (not "status") + has examples', async () => {
+  it('q-search matches triggered_by', async () => {
     setupMocks();
     renderPage();
+    await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: 'alice' } });
     await waitFor(() => {
-      expect(screen.getByTestId('filter-q')).toBeInTheDocument();
+      expect(screen.getByTestId('runs-page-row-41')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
+  });
+
+  it('q-search NO LONGER matches verdict / id (scope reduced 2026-05-25)', async () => {
+    // Pre-2026-05-25 the hay was `id + verdict + version + triggered_by`.
+    // Now it's only `version + triggered_by` so:
+    //   - searching "fail" must NOT pick up verdict=fail rows (chip 用)
+    //   - searching a numeric id must NOT match by id
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: 'fail' } });
+    await waitFor(() => {
+      // empty state because no row's version/triggered_by contains "fail"
+      expect(screen.getByTestId('runs-page-empty')).toBeInTheDocument();
+    });
+
+    // Reset + try id=42 — should also not match any row (no version/by contains "42")
+    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: '42' } });
+    await waitFor(() => {
+      expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
+    });
+  });
+
+  it('placeholder reflects current search scope (version + triggered_by)', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
     const input = screen.getByTestId('filter-q') as HTMLInputElement;
-    expect(input.placeholder).toContain('verdict');
-    expect(input.placeholder).toContain('fail');
+    expect(input.placeholder).toContain('version');
+    expect(input.placeholder).toContain('triggered_by');
+    // Stale prompts removed
+    expect(input.placeholder).not.toContain('verdict');
+    expect(input.placeholder).not.toContain('id');
+  });
+
+  it('case-id picker triggers server-side filter via /runs?case_id=X', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+
+    // Initially all 5 runs render (no case_id filter)
+    expect(screen.getByTestId('runs-page-row-42')).toBeInTheDocument();
+    expect(screen.getByTestId('runs-page-row-41')).toBeInTheDocument();
+
+    // Open combobox + pick a case
+    fireEvent.click(screen.getByTestId('runs-page-case-picker-trigger'));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+    );
+
+    // Mock setup returns only runs 41 + 40 for that case_id
+    await waitFor(() => {
+      expect(screen.getByTestId('runs-page-row-41')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('runs-page-row-40')).toBeInTheDocument();
+    expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
+    expect(screen.queryByTestId('runs-page-row-39')).toBeNull();
+
+    // Clear button is now visible
+    expect(screen.getByTestId('runs-page-case-clear')).toBeInTheDocument();
+
+    // Verify the apiFetch call carried the case_id query
+    const fetchedWithCaseId = apiFetchMock.mock.calls.some(
+      (call) =>
+        call[0] === '/runs' &&
+        call[2]?.query?.case_id === 'lg-bug-0009-union-all-const-distributed-row-order',
+    );
+    expect(fetchedWithCaseId).toBe(true);
+  });
+
+  it('case-id Clear button removes filter + restores all runs', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('runs-page-case-picker-trigger'));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+    );
+    await waitFor(() => expect(screen.getByTestId('runs-page-case-clear')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('runs-page-case-clear'));
+    await waitFor(() => {
+      // All 5 rows back
+      expect(screen.getByTestId('runs-page-row-42')).toBeInTheDocument();
+      expect(screen.getByTestId('runs-page-row-38')).toBeInTheDocument();
+    });
+    // Clear button hidden again
+    expect(screen.queryByTestId('runs-page-case-clear')).toBeNull();
   });
 
   it('hides category chips (RunsPage has no category filter logic)', async () => {

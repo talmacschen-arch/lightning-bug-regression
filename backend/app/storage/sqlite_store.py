@@ -132,8 +132,24 @@ def get_run(session: Session, run_id: int) -> Run | None:
     return session.get(Run, run_id)
 
 
-def list_runs(session: Session, limit: int = 50) -> list[Run]:
+def list_runs(
+    session: Session,
+    limit: int = 50,
+    case_id: str | None = None,
+) -> list[Run]:
+    """Return recent runs (newest first), optionally filtered to runs
+    that touched a specific `case_id` (M6 post-sprint UX, 2026-05-25).
+
+    The case_id filter uses a subquery against `case_results` — runs
+    without any case_results row for the given case_id are excluded.
+    Match is exact, not LIKE; UI uses CaseIdCombobox so users pick from
+    existing cases (no partial / typo risk).
+    """
     stmt = select(Run).order_by(Run.id.desc()).limit(limit)
+    if case_id is not None and case_id != "":
+        stmt = stmt.where(
+            Run.id.in_(select(CaseResult.run_id).where(CaseResult.case_id == case_id))
+        )
     return list(session.scalars(stmt).all())
 
 
