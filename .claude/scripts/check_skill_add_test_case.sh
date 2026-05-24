@@ -107,10 +107,16 @@ check_banned_pattern() {
 }
 
 # ---- §14 R4b: no hardcoded category in conditional context -----------------
+# Each known category gets its own banned pattern; future categories (e.g.
+# added via Alembic seed migration like 0002) must also be added here.
+# This is intentional duplication — the lint guards against hardcoding,
+# so the guard list grows when categories grow.
 check_banned_pattern '§14 R4b'  'if[[:space:]]+category[[:space:]]*==[[:space:]]*["'"'"']bug_regression'
 check_banned_pattern '§14 R4b'  'if[[:space:]]+category[[:space:]]*==[[:space:]]*["'"'"']extension'
+check_banned_pattern '§14 R4b'  'if[[:space:]]+category[[:space:]]*==[[:space:]]*["'"'"']external_systems'
 check_banned_pattern '§14 R4b'  'category[[:space:]]*===[[:space:]]*["'"'"']bug_regression'
 check_banned_pattern '§14 R4b'  'category[[:space:]]*===[[:space:]]*["'"'"']extension'
+check_banned_pattern '§14 R4b'  'category[[:space:]]*===[[:space:]]*["'"'"']external_systems'
 
 # ---- §5.5.1 generator-only — banned side-effect tokens ---------------------
 check_banned_pattern '§5.5.1 gen-only'  'Write[[:space:]]+tool\b'
