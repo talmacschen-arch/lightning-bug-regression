@@ -85,7 +85,7 @@ export default function RunsPage() {
         clear={clear}
         statusOptions={RUN_STATUS_OPTIONS}
         showSinceFilter
-        qPlaceholder="Search id / status / version / triggered_by…"
+        qPlaceholder="搜索 id / status / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin"
       />
 
       {error && (
