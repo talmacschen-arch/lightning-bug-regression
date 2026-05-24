@@ -96,7 +96,7 @@ cd backend
 nohup env \
   CASES_ROOT="$(cd .. && pwd)/cases" \
   DATABASE_URL="sqlite:///$(pwd)/data/runs.db" \
-  PGHOST=127.0.0.1 PGPORT=5432 PGUSER=gpadmin PGDATABASE=postgres \
+  PGHOST=127.0.0.1 PGPORT=5432 PGUSER=gpadmin PGDATABASE=gpadmin \
   GH_TOKEN="$(sed -n 's|https://[^:]*:\([^@]*\)@github.com.*|\1|p' ~/.git-credentials | head -1)" \
   LBR_REPO_ROOT="$(cd .. && pwd)" \
   ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 \
@@ -113,7 +113,7 @@ env vars 说明:
 |---|---|---|
 | `CASES_ROOT` | `/cases` API 扫盘根目录 | **必须**（默认 `Path("cases")` 相对路径，cwd 偶然性大，§14 R27） |
 | `DATABASE_URL` | SQLite DB 路径 | **必须**（默认相对，同上） |
-| `PGHOST` / `PGPORT` / `PGUSER` / `PGDATABASE` | psycopg → 集群 PG 连接 | **必须**（默认 `127.0.0.1/gpadmin/postgres` 对齐 §3.1，pg_hba `trust` 不需密码） |
+| `PGHOST` / `PGPORT` / `PGUSER` / `PGDATABASE` | psycopg → 集群 PG 连接 | **必须**（默认 `127.0.0.1/gpadmin/gpadmin` 对齐 §3.1，pg_hba `trust` 不需密码；2026-05-24 起 PGDATABASE 默认改 `gpadmin` — 业务侧 BUG 习惯落 owner-home 库） |
 | `GH_TOKEN` | `/cases/submit` endpoint 内部 `gh pr create` / `gh pr merge --auto --squash` | **M3a-3 必须**（缺则 Save 在 gh 那步报 auth fail） |
 | `LBR_REPO_ROOT` | `/cases/submit` 的 `subprocess.run(cwd=...)` 显式 repo root | **M3a-3 必须**（默认通过 `__file__` 推 4 级父目录；显式 env 更可靠） |
 

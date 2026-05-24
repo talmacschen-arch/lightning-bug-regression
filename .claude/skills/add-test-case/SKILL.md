@@ -149,7 +149,7 @@ preconditions: {}                       # 命中 GUC 场景时填
 external_deps: []                       # 首版常为空
 
 defaults:
-  database: postgres
+  database: gpadmin                     # v1.8 起默认 gpadmin（Synxdb owner-home db；非 postgres）；如需别的库显式覆盖
 
 sessions: []                            # 命中并发场景时填 mapping `{s1: {driver: sql}, s2: {driver: sql}}`；空 list / 空 mapping / 省略 = loader 自动 derive default session（M3a-10 dogfood 后兼容）
 
@@ -334,7 +334,7 @@ preconditions: {}
 external_deps: []
 
 defaults:
-  database: postgres
+  database: gpadmin
 
 sessions: []
 
