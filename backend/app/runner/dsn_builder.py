@@ -24,7 +24,10 @@ from typing import Any
 _DEFAULT_PGHOST = "127.0.0.1"
 _DEFAULT_PGPORT = 5432
 _DEFAULT_PGUSER = "gpadmin"
-_DEFAULT_PGDATABASE = "postgres"
+# 2026-05-24 user decision: default DB = gpadmin (owner-home on Synxdb/
+# Cloudberry, not "postgres" PG-convention). See memory
+# default-database-gpadmin and README "起本机 dev 服务".
+_DEFAULT_PGDATABASE = "gpadmin"
 
 
 def build_dsn_map(
