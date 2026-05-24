@@ -38,12 +38,20 @@ def normalize_case(raw: dict[str, Any]) -> dict[str, Any]:
     defaults = raw.get("defaults") or {}
     default_db = defaults.get("database") or "postgres"
 
+    # external_deps preserved through normalization so M6-5
+    # external_deps_loader.collect_external_deps() can read it from the
+    # orchestrator-shaped dict.
+    external_deps = raw.get("external_deps") or []
+    if not isinstance(external_deps, list):
+        external_deps = []
+
     out: dict[str, Any] = {
         "id": raw.get("id"),
         "title": raw.get("title"),
         "category": raw.get("category"),
         "status": raw.get("status"),
         "destructive": bool(raw.get("destructive", False)),
+        "external_deps": external_deps,
         "setup": _normalize_setup_teardown(raw.get("setup"), default_db, "setup"),
         "teardown": _normalize_setup_teardown(raw.get("teardown"), default_db, "teardown"),
         "steps": _normalize_steps(raw.get("steps") or [], default_db),

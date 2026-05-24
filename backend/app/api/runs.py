@@ -44,6 +44,10 @@ from app.api.cases import _iter_case_files, _load_categories
 from app.runner import event_broker, orchestrator
 from app.runner.case_normalizer import normalize_case
 from app.runner.dsn_builder import dsn_map_from_env
+from app.runner.external_deps_loader import (
+    collect_external_deps,
+    load_external_context,
+)
 from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory, Run
@@ -206,6 +210,20 @@ async def _execute_run(
     2026-05-24 followup.
     """
     sql_pool = SqlSessionPool(dsn_map_from_env(cases))
+    # M6-5: load external/<svc>.yml for every svc referenced by these
+    # cases' external_deps, inject under jinja_context["external"]. Cases
+    # then template `{{ external.<svc>.host }}` etc.
+    svc_names = collect_external_deps(cases)
+    if svc_names:
+        external_ctx = load_external_context(svc_names)
+        # Merge but don't clobber: a user-supplied jinja_context.external
+        # takes precedence (lets dev override per-run via system_settings).
+        existing_external = jinja_context.get("external")
+        if isinstance(existing_external, dict):
+            merged_external = {**external_ctx, **existing_external}
+        else:
+            merged_external = external_ctx
+        jinja_context = {**jinja_context, "external": merged_external}
     try:
         summary = await orchestrator.run_suite(
             cases,
