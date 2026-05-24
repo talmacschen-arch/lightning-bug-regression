@@ -1,14 +1,14 @@
 id: lg-bug-0009-union-all-const-distributed-row-order
 title: UNION ALL (常量 SELECT) 与 (分布式表 SELECT) 拼接时常量行未稳定出现在结果集首行
 category: bug_regression
-status: open
+status: fixed
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "section-9.12-union-all-const-distributed-row-order"
   reported_at: "2026-05-24"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/800
 tags: [union_all, planner, row_order, distributed, optimizer_off]
@@ -154,3 +154,11 @@ notes: |
     二项均通过；保留 `kind: sql` 是正确选择。
 
   status: open 保留直到某个 build 上验证非复现，再迁 fixed + 填 fixed_version。
+
+  ---
+  **Verified upstream-fixed (M4a-3 dogfood, 2026-05-24)**: POST /cases/try on
+  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 4/4
+  main steps PASS (3 轮 UNION ALL LIMIT 1 全返常量 'column1' 1-2ms each,
+  count(*) 健康检查 1ms 返 3). PR #76 (case submit). fixed_version above
+  = verified-non-reproducing version, NOT necessarily the fix introduction
+  commit (not yet researched against 飞书 LG history / source).
