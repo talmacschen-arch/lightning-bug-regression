@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.exc import IntegrityError
@@ -34,6 +34,9 @@ __all__ = [
     "finish_run",
     "get_run",
     "get_session",
+    "add_skip_list_entry",
+    "delete_skip_list_entry",
+    "list_settings",
     "get_setting",
     "init_engine",
     "insert_case_result",
@@ -232,6 +235,44 @@ def list_recent_runs_for_case(
 def get_skip_list(session: Session) -> list[CaseSkipList]:
     """Return all skip-list rows (caller filters by until_date / version)."""
     stmt = select(CaseSkipList).order_by(CaseSkipList.id)
+    return list(session.scalars(stmt).all())
+
+
+def add_skip_list_entry(
+    session: Session,
+    *,
+    case_id: str,
+    reason: str,
+    applies_to_version: str | None = None,
+    upstream_issue: str | None = None,
+    until_date: date | None = None,
+) -> CaseSkipList:
+    """Insert a new skip-list row. Returns the row with id populated."""
+    row = CaseSkipList(
+        case_id=case_id,
+        reason=reason,
+        applies_to_version=applies_to_version,
+        upstream_issue=upstream_issue,
+        until_date=until_date,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def delete_skip_list_entry(session: Session, entry_id: int) -> bool:
+    """Delete by primary key; return True if a row was removed."""
+    row = session.get(CaseSkipList, entry_id)
+    if row is None:
+        return False
+    session.delete(row)
+    session.flush()
+    return True
+
+
+def list_settings(session: Session) -> list[SystemSetting]:
+    """Return all settings rows ordered by key."""
+    stmt = select(SystemSetting).order_by(SystemSetting.key)
     return list(session.scalars(stmt).all())
 
 

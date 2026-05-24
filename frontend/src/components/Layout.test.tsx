@@ -54,12 +54,12 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(runs).toHaveAttribute('href', '/runs');
     });
 
-    it('Admin nav item is disabled (not an anchor, aria-disabled=true)', () => {
+    it('Admin nav item is enabled (anchor with href=/admin) after M6-4', () => {
       renderAt('/cases');
       const admin = screen.getByTestId('sidebar-nav-admin');
-      expect(admin.tagName.toLowerCase()).toBe('span');
-      expect(admin).toHaveAttribute('aria-disabled', 'true');
-      expect(admin).not.toHaveAttribute('href');
+      expect(admin.tagName.toLowerCase()).toBe('a');
+      expect(admin).toHaveAttribute('href', '/admin');
+      expect(admin).not.toHaveAttribute('aria-disabled');
     });
 
     it('active-run pip shows static grey with "No recent runs" label', () => {
@@ -113,6 +113,21 @@ describe('Layout (M5-1 minimal sidebar)', () => {
     it('breadcrumb shows Runs / Diff at /runs/diff', () => {
       renderAt('/runs/diff?a=1&b=2');
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Runs / Diff');
+    });
+
+    it('breadcrumb shows Admin at /admin', () => {
+      renderAt('/admin');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin');
+    });
+
+    it('breadcrumb shows Admin / Skip list at /admin/skip-list', () => {
+      renderAt('/admin/skip-list');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Skip list');
+    });
+
+    it('breadcrumb shows Admin / Settings at /admin/settings', () => {
+      renderAt('/admin/settings');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Settings');
     });
   });
 
