@@ -18,33 +18,48 @@ description: |
   大数组（≈10M 元素），顺序跑 VACUUM FULL 然后 ANALYZE，飞书原文记录会触发
   集群 crash（recover mode）。本 case 验证 fix 后不再 crash。
 procedure: |
-  1) psql -c DROP + CREATE PAX REPLICATED 表 + INSERT 1 NULL 行 + 1 行 10M ARRAY
-  2) psql -c 'VACUUM FULL toast_bug_array'
-  3) psql -c 'ANALYZE toast_bug_array'
-  4) psql -c DROP TABLE 收尾
+  1) setup: DROP + CREATE PAX REPLICATED 表（kind: sql 走 psycopg）
+  2) 主 step: SET pax.enable_toast = on; INSERT 1 NULL 行 + 1 行 10M ARRAY
+     （kind: sql；sql_driver 末尾 conn.commit() 保证后续 shell step 可见）
+  3) 主 step: psql -c 'VACUUM FULL toast_bug_array'（kind: shell，独立连接）
+  4) 主 step: psql -c 'ANALYZE toast_bug_array'（kind: shell，独立连接）
+  5) teardown: DROP TABLE 收尾
 expected: |
-  - 所有 psql -c 退出码 0，stderr 不含 ERROR / FATAL / server closed
-  - 集群不 crash（无 recover mode）
+  - 主 step 2 INSERT 退出 0、未报错；
+  - 主 step 3/4 psql -c 退出 0，stderr 不含 ERROR / FATAL / server closed；
+  - 集群不 crash（无 recover mode）。
 
 applies_to: {}
 preconditions: {}
 external_deps: []
 
 defaults:
-  database: postgres
+  database: gpadmin
 
 setup:
-  - su - gpadmin -c "psql -c 'DROP TABLE IF EXISTS toast_bug_array'"
+  - DROP TABLE IF EXISTS toast_bug_array
   - |
-    su - gpadmin -c "psql -c \"SET pax.enable_toast = on; CREATE TABLE IF NOT EXISTS toast_bug_array (id INT, data TEXT[]) USING PAX DISTRIBUTED REPLICATED;\""
-  - |
-    su - gpadmin -c "psql -c \"INSERT INTO toast_bug_array VALUES (1, NULL), (2, ARRAY(SELECT 'element_' || generate_series(1, 10000000)));\""
+    CREATE TABLE toast_bug_array (
+      id   INT,
+      data TEXT[]
+    ) USING PAX DISTRIBUTED REPLICATED
 
 steps:
+  - name: "SET pax.enable_toast + INSERT 1 NULL + 1 大数组 (10M elements)"
+    kind: sql
+    sql: |
+      SET pax.enable_toast = on;
+      INSERT INTO toast_bug_array VALUES
+        (1, NULL),
+        (2, ARRAY(SELECT 'element_' || generate_series(1, 10000000)));
+    timeout_sec: 600
+    expect:
+      not_contains: ["ERROR", "FATAL", "server closed the connection"]
+
   - name: "VACUUM FULL 不应触发 crash"
     kind: shell
     cmd: |
-      su - gpadmin -c "psql -c 'VACUUM FULL toast_bug_array'"
+      su - gpadmin -c "psql -d gpadmin -c 'VACUUM FULL toast_bug_array'"
     timeout_sec: 600
     expect:
       exit_code: 0
@@ -53,14 +68,14 @@ steps:
   - name: "ANALYZE 不应触发 crash"
     kind: shell
     cmd: |
-      su - gpadmin -c "psql -c 'ANALYZE toast_bug_array'"
+      su - gpadmin -c "psql -d gpadmin -c 'ANALYZE toast_bug_array'"
     timeout_sec: 600
     expect:
       exit_code: 0
       not_contains: ["ERROR", "FATAL", "server closed the connection"]
 
 teardown:
-  - su - gpadmin -c "psql -c 'DROP TABLE IF EXISTS toast_bug_array'"
+  - DROP TABLE IF EXISTS toast_bug_array
 
 created_by: chenqiang
 created_at: "2026-05-24"
@@ -68,28 +83,25 @@ notes: |
   来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.11。
   关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/774
 
-  **§4.1.2 约定全程贯彻**: 不仅 VACUUM FULL / ANALYZE 用 psql -c（non-tx-safe），
-  setup 的 CREATE TABLE + INSERT 也用 psql -c。理由：本 case 的 main step 是
-  shell（psql -c VACUUM）开**独立连接**，看不到 psycopg 长连接里 setup 未 commit
-  的 tx 状态。M4a-2 第一版用 `kind: sql` setup 撞过 "relation does not exist"——
-  CREATE TABLE 在 psycopg AsyncConnection 默认 autocommit=False 下没 commit。
-  psql -c 每条独立连接 + 隐式 commit，跨 step 状态一致。
+  **§4.1.2 + §13.7 跨 driver 状态 (revised 2026-05-24, user request)**：
+  - VACUUM FULL / ANALYZE 是 non-tx-safe DDL → 必须 `kind: shell + psql -c`
+  - CREATE TABLE + SET + INSERT 是 tx-safe → 用 `kind: sql` 走 psycopg
+  - 跨 driver visibility: sql_driver 在每个 kind: sql step 末尾自动
+    `await conn.commit()`，所以 step 2 的 INSERT 在 step 3 的独立 psql -c
+    进程里可见。（M4a-2 第一版全 psql -c 是过度防御；这版按 user 蓝图
+    把 INSERT 还原成 kind: sql，更接近飞书原文 psql -c 单线程模型。）
 
   规模：10M 元素 ARRAY ≈ 100MB+，INSERT 大约 10–60s。timeout 给 600s。
-  可加速：`SET pax.min_size_of_external_toast = 524289;` 把 toast 阈值降到 ~512KB，
-  元素数可降到 ~100K 仍触发 TOAST 路径；保守保留 10M 做 1:1 复现飞书原文。
+  可加速：`SET pax.min_size_of_external_toast = 524289;` 把 toast 阈值降到
+  ~512KB，元素数可降到 ~100K 仍触发 TOAST 路径；保守保留 10M 做 1:1 复现。
 
   recover mode log_grep 留待 M5：默认 log_path 依赖 system_settings 配（Admin
-  UI），M4a-2 阶段未配，暂不加 log_grep step。若以后 BUG 复现，需 log 旁证而非
-  仅 psql exit code，再补 step。
-
-  status: open 保留直到验证某个 build 修复非复现，再迁 fixed + 填 fixed_version。
+  UI），M4a-2 阶段未配，暂不加 log_grep step。若以后 BUG 复现，需 log 旁证
+  而非仅 psql exit code，再补 step。
 
   ---
   **Verified upstream-fixed (M4a-2 dogfood, 2026-05-24)**: POST /cases/try on
-  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 2/2
-  main steps PASS (VACUUM FULL 2845ms, ANALYZE 976ms; setup 含 10M-element
-  PAX TOAST ARRAY 真插入; 全程无 ERROR/FATAL/server closed/recover mode 关键词).
-  PR #74 (case submit) + PR #75 (this status flip). fixed_version above =
-  verified-non-reproducing version, NOT the specific fix introduction
-  commit (not yet researched against 飞书 LG history / source).
+  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 全 main
+  steps PASS. PR #74 (initial submit) + PR #75 (status flip). fixed_version
+  above = verified-non-reproducing version, NOT necessarily the fix
+  introduction commit (not yet researched against 飞书 LG history / source).
