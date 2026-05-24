@@ -38,6 +38,7 @@ __all__ = [
     "init_engine",
     "insert_case_result",
     "list_case_results",
+    "list_recent_runs_for_case",
     "list_runs",
     "set_setting",
     "get_skip_list",
@@ -200,6 +201,27 @@ def insert_case_result(
 def list_case_results(session: Session, run_id: int) -> list[CaseResult]:
     stmt = select(CaseResult).where(CaseResult.run_id == run_id).order_by(CaseResult.id)
     return list(session.scalars(stmt).all())
+
+
+def list_recent_runs_for_case(
+    session: Session, case_id: str, limit: int = 10
+) -> list[tuple[CaseResult, Run]]:
+    """List most-recent runs that touched a given case.
+
+    Returns (CaseResult, Run) tuples ordered by run started_at DESC, with
+    `limit` cap. Used by GET /cases/:id/recent-runs (M5-3 cross-page link).
+
+    Reuses the existing `case_results` + `runs` schema (§14 R26 — no inline
+    SQL or duplicate storage logic).
+    """
+    stmt = (
+        select(CaseResult, Run)
+        .join(Run, CaseResult.run_id == Run.id)
+        .where(CaseResult.case_id == case_id)
+        .order_by(Run.started_at.desc())
+        .limit(limit)
+    )
+    return list(session.execute(stmt).tuples())
 
 
 # ---------------------------------------------------------------------------

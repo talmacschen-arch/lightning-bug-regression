@@ -84,6 +84,17 @@ class CaseDetail(BaseModel):
     error: str | None = None
 
 
+class CaseRecentRunOut(BaseModel):
+    """One row of `GET /cases/:id/recent-runs` (M5-3 cross-page link)."""
+
+    run_id: int
+    run_status: str  # "running" / "pass" / "fail" / etc. (per `runs.status`)
+    started_at: datetime
+    finished_at: datetime | None = None
+    case_status: str | None = None  # this case's result in that run
+    duration_ms: int | None = None
+
+
 class ValidateRequest(BaseModel):
     yaml: str
 
@@ -392,6 +403,43 @@ def get_case(case_id: str) -> CaseDetail:
                 error=str(e),
             )
     raise HTTPException(status_code=404, detail=f"case {case_id!r} not found")
+
+
+@router.get(
+    "/cases/{case_id}/recent-runs",
+    response_model=list[CaseRecentRunOut],
+)
+def get_case_recent_runs(case_id: str, limit: int = 10) -> list[CaseRecentRunOut]:
+    """List most recent runs that touched this case (M5-3 cross-page link).
+
+    Returns up to `limit` (default 10) `(case_result, run)` rows joined
+    on `case_results.run_id = runs.id`, ordered by `runs.started_at` DESC.
+    Empty list when the case has never appeared in any run — that's not
+    an error.
+
+    §14 R26: delegates to ``sqlite_store.list_recent_runs_for_case`` — no
+    inline SQL. Storage module is the single source of truth for the
+    `case_results` table queries.
+    """
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+    out: list[CaseRecentRunOut] = []
+    with sqlite_store.get_session() as sess:
+        rows = sqlite_store.list_recent_runs_for_case(sess, case_id, limit=limit)
+        for case_result, run in rows:
+            out.append(
+                CaseRecentRunOut(
+                    run_id=run.id,
+                    run_status=run.status,
+                    started_at=run.started_at,
+                    finished_at=run.finished_at,
+                    case_status=case_result.status,
+                    duration_ms=case_result.duration_ms,
+                )
+            )
+    return out
 
 
 def _validate_yaml_text(
