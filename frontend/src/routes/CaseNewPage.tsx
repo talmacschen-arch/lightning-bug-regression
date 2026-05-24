@@ -98,6 +98,7 @@ export default function CaseNewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [validating, setValidating] = useState(false);
   const [trying, setTrying] = useState(false);
+  const [tryElapsedMs, setTryElapsedMs] = useState<number>(0);
 
   // Panel display: holds generic error or success messages
   const [panelMsg, setPanelMsg] = useState<string | null>(null);
@@ -163,6 +164,9 @@ export default function CaseNewPage() {
 
   // M3a-7: Try handler
   async function handleTry() {
+    const t0 = Date.now();
+    setTryElapsedMs(0);
+    const interval = setInterval(() => setTryElapsedMs(Date.now() - t0), 250);
     setTrying(true);
     setTryStepResults([]);
     setPanelMsg(null);
@@ -178,6 +182,8 @@ export default function CaseNewPage() {
       setPanelMsg(err instanceof Error ? err.message : String(err));
       setTryOk(false);
     } finally {
+      clearInterval(interval);
+      setTryElapsedMs(0);
       setTrying(false);
     }
   }
@@ -321,6 +327,22 @@ export default function CaseNewPage() {
 
       {/* ---- Step results / status panel ---- */}
       <div data-testid="panel-step-results" className="space-y-2 border rounded p-3 min-h-[80px] bg-muted/30">
+        {/* Validate spinner */}
+        {validating && (
+          <div data-testid="validate-spinner" className="flex items-center gap-2">
+            <span className="inline-block animate-spin">⏳</span>
+            <span>Validating…</span>
+          </div>
+        )}
+
+        {/* Try spinner with elapsed counter */}
+        {trying && (
+          <div data-testid="try-spinner" className="flex items-center gap-2">
+            <span className="inline-block animate-spin">⏳</span>
+            <span data-testid="try-elapsed">Trying… {(tryElapsedMs / 1000).toFixed(1)}s</span>
+          </div>
+        )}
+
         {/* Generic error message */}
         {panelMsg !== null && (
           <p data-testid="error-msg" className="text-sm text-destructive">
