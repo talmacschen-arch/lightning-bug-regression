@@ -36,6 +36,14 @@ interface FilterBarProps {
    * Whether to show the time-range filter (relevant for /runs, not /cases).
    */
   showSinceFilter?: boolean;
+  /**
+   * Placeholder text for the search input. Must reflect what the consuming
+   * page ACTUALLY searches in its filter logic. Default is the case-page
+   * shape ("id / title / tags"); /runs which doesn't have title/tags
+   * should override (it searches id / status / version / triggered_by).
+   * Honest placeholder = no user confusion when typed terms don't match.
+   */
+  qPlaceholder?: string;
 }
 
 function toggleInList(list: string[], value: string): string[] {
@@ -48,6 +56,7 @@ export function FilterBar({
   clear,
   statusOptions,
   showSinceFilter = false,
+  qPlaceholder = 'Search id / title / tags…',
 }: FilterBarProps) {
   const [categories, setCategories] = useState<CategoryOut[]>([]);
 
@@ -98,7 +107,7 @@ export function FilterBar({
         type="text"
         data-testid="filter-q"
         className="filter-q-input"
-        placeholder="Search id / title / tags…"
+        placeholder={qPlaceholder}
         value={filters.q}
         onChange={(e) => setFilter('q', e.target.value)}
       />
