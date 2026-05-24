@@ -246,9 +246,16 @@ class SettingUpdate(BaseModel):
 # bookkeeping) are exposed as read-only via GET but PUT rejects them. This
 # avoids accidentally clobbering things like `jinja_context` shape that
 # the runner depends on without a guided schema.
+#
+# Only keys with a real runtime consumer are listed:
+#   - jinja_context     → runs.py::_load_jinja_context_and_dut_hosts
+#   - dut_hosts         → runs.py + jinja_render.decide_ssh_user (§5.3.2 / R13)
+#   - server_log_path   → runs.py::_execute_run (kind: log_grep default)
+#
+# `dev_db_url` / `cluster_topology` were reserved in the M6-4 design
+# (§13.12 plan) but never wired to a consumer. Removed 2026-05-25 per
+# user request — editing them did nothing and was confusing.
 ADMIN_EDITABLE_SETTINGS = {
-    "dev_db_url",
-    "cluster_topology",
     "jinja_context",
     "dut_hosts",
     "server_log_path",

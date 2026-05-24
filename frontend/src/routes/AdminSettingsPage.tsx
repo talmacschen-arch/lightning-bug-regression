@@ -14,11 +14,12 @@ const API_BASE =
     ?.VITE_API_BASE_URL) ??
   'http://127.0.0.1:8000';
 
+// Must mirror backend admin.py ADMIN_EDITABLE_SETTINGS — only keys
+// with a real runtime consumer. dev_db_url / cluster_topology were
+// removed 2026-05-25; they had no consumer.
 const EDITABLE_KEYS = [
   'jinja_context',
   'dut_hosts',
-  'dev_db_url',
-  'cluster_topology',
   'server_log_path',
 ] as const;
 
