@@ -1,12 +1,13 @@
 /**
  * M5-4 RunsPage — list of runs with global FilterBar (URL-persistent).
  *
- * Replaces the M2-8 placeholder. Lists /runs with simple filtering by
- * verdict + since (time range). Click a row → /runs/:id.
+ * Replaces the M2-8 placeholder. Lists /runs with filtering by
+ * verdict + since (time range) + free-text q. Click a row → /runs/:id.
  *
- * Category / tag / q filters live in the FilterBar UI but DON'T apply
- * to runs in this minimal version — runs don't carry tags or categories
- * directly. Verdict + since are the practical filters here.
+ * Category chips are hidden via showCategoryFilter={false} — runs
+ * don't carry a category directly, so chips would render interactively
+ * but never affect results (user reported the rendered-but-no-op chips
+ * after PR #108).
  *
  * The filter chip is labeled "Status:" in FilterBar (shared UI), but
  * the values are VERDICTS ('pass' / 'fail' / 'running' / 'aborted')
@@ -86,6 +87,7 @@ export default function RunsPage() {
         clear={clear}
         statusOptions={VERDICT_OPTIONS}
         showSinceFilter
+        showCategoryFilter={false}
         qPlaceholder="搜索 id / verdict / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin"
       />
 
