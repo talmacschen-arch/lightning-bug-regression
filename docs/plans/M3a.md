@@ -46,7 +46,7 @@ reviewer 必须按 §14 cross-reference + §6.4 8 条逐项核对（详 `.claude
 
 ### Sprint M3a-dogfood — 人类浏览器手动验
 
-- [ ] M3a-10 dogfood smoke：前后端起好（dev server），用户在浏览器 `/cases/new`：(1) 走 Tab B 入口，粘贴一份 stub YAML（例：`lg-bug-0006-test-m3a-flow` 简单 SQL `select 1` + expect.scalar=1）；(2) Validate → 通过；(3) Try → 通过；(4) Save → 真开 PR + auto-merge fired → 看到 PR URL；(5) 刷新 `/cases` → 看新 case 出现。产 `docs/m3a-dogfood-<ts>.md` 报告。**M3a-10 等用户手动**
+- [x] M3a-10 dogfood smoke：2026-05-24 12:00 (UTC+8) 用户浏览器跑完，UI 端到端 6/6 stage PASS，2 个 PR 真 merged 到 main（#58 `lg-bug-0006-m3a-dogfood-smoke` + #59 `lg-bug-0006-m3a-dogfood-smoke2`）；新 case 经 POST /runs run #9 真验也 pass。详 `docs/m3a-dogfood-2026-05-24-1200.md` 含 4 条暴露 spec gap (sessions:[] 拒绝 / frontend extractCaseId regex 严苛 #57 已修 / 粘贴 silent strip indent / uvicorn env 文档化)。配套 hotfix PR #56 `/api` 前缀修正 + #57 regex 容忍 leading whitespace
 
 ## 关键依赖图
 
