@@ -5,7 +5,8 @@
 # regressions can't quietly land in the skill. Specifically:
 #
 #   1. SKILL.md exists and is non-empty.
-#   2. frontmatter contains name / description / model: opus.
+#   2. frontmatter contains name / description / model: claude-opus-4-7
+#      (exact pin — 2026-05-24 user rule; sonnet/haiku/generic-opus all rejected).
 #   3. All required §5.5 sections present (设计原则 / 输入模式 / 工作流 /
 #      对齐 / 场景特化 / Canonical / cross-check / 输出格式).
 #   4. §14 R4b: no hardcoded category names in conditional-looking context
@@ -58,8 +59,8 @@ for key in 'name:' 'description:' 'model:'; do
     fail=1
   fi
 done
-if ! grep -qE "^model:[[:space:]]*opus\b" "$FILE"; then
-  echo "FAIL [frontmatter]: model must be 'opus' (§13.8) — sonnet drifts on canonical ordering"
+if ! grep -qE "^model:[[:space:]]*claude-opus-4-7[[:space:]]*$" "$FILE"; then
+  echo "FAIL [frontmatter]: model must be exactly 'claude-opus-4-7' (2026-05-24 user rule, permanent) — sonnet drifts on canonical ordering; haiku lacks reasoning depth; any opus-4-8+ upgrade needs explicit user approval"
   fail=1
 fi
 

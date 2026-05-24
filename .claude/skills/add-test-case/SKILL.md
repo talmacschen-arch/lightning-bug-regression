@@ -1,8 +1,17 @@
 ---
 name: add-test-case
 description: 生成历史 BUG 复现 / extension 集成测试用例 YAML，generator-only（终端入口，对应 M3a /cases/new 入口 B）
-model: opus
+model: claude-opus-4-7
 ---
+
+> **模型规则（2026-05-24 用户决策，永久生效）**：本 skill 文件**必须**钉死
+> `model: claude-opus-4-7`。**禁止**临时降级到 `claude-sonnet-4-6` 或其他
+> sonnet/haiku 版本——理由：skill 输出需要严谨结构 + canonical 顺序 + 11
+> 项 cross-check 一次过；sonnet 实战漂移多（M1-followup 暴露过 §14 R4b
+> 杜撰 4 个 category），haiku 推理深度不足。任何未来升级（opus-4-8+）
+> 必须经用户显式授权，不在 dispatch 时由 agent 自决。
+> `.claude/scripts/check_skill_add_test_case.sh` 在 CI 强制此项，绕过
+> lint = block PR。
 
 ## 设计原则（铁律）
 
