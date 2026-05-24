@@ -244,15 +244,21 @@ def load_case(path: Path, categories: Mapping[str, CategoryMeta]) -> Case:
         )
 
     # --- sessions: optional dict[str, dict] ---
-    # When absent, derive a default session so steps can route to "default".
+    # When absent (or written as empty list / empty mapping per the §5.5.6
+    # canonical default shape `sessions: []`), derive a default session so
+    # steps can route to "default". M3a-10 dogfood revealed that empty list
+    # was rejected even though it's the spec's documented default — accepting
+    # both empty list and empty mapping closes that spec-vs-loader gap.
     sessions_raw = data.get("sessions")
     sessions_derived = False
-    if sessions_raw is None:
+    is_empty_list = isinstance(sessions_raw, list) and len(sessions_raw) == 0
+    is_empty_mapping = isinstance(sessions_raw, dict) and not sessions_raw
+    if sessions_raw is None or is_empty_list or is_empty_mapping:
         sessions = {"default": {"driver": "sql"}}
         sessions_derived = True
     else:
-        if not isinstance(sessions_raw, dict) or not sessions_raw:
-            raise _err(path, "sessions", "sessions must be a non-empty mapping")
+        if not isinstance(sessions_raw, dict):
+            raise _err(path, "sessions", "sessions must be a mapping")
         for s_name, s_cfg in sessions_raw.items():
             if not isinstance(s_name, str) or not s_name:
                 raise _err(

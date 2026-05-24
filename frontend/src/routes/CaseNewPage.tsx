@@ -298,6 +298,29 @@ export default function CaseNewPage() {
         />
       </div>
 
+      {/* ---- Save preview ---- */}
+      {/*
+        M3a-10 dogfood revealed "粘什么 ≠ 存什么" footgun: a leading
+        2-space indent applied uniformly to every line passed Validate
+        and Try (yaml.safe_load is whitespace-tolerant for consistent
+        base indent) but the user couldn't tell what would actually be
+        committed until checking git after Save. This preview block
+        makes the on-disk content explicit before the user commits.
+      */}
+      {yamlText.length > 0 && (
+        <div className="space-y-1">
+          <label className="text-sm font-medium">
+            📋 Save 预览（这是 `cases/&lt;category&gt;/&lt;id&gt;.yaml` 真正会落盘的内容）
+          </label>
+          <pre
+            data-testid="save-preview"
+            className="w-full max-h-48 overflow-auto border rounded p-2 text-xs font-mono bg-muted/30 whitespace-pre"
+          >
+            {yamlText}
+          </pre>
+        </div>
+      )}
+
       {/* ---- Three-gate action buttons ---- */}
       <div className="flex gap-3 flex-wrap">
         <Button

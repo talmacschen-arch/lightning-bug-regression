@@ -86,6 +86,46 @@
 
 ---
 
+## 起本机 dev 服务（M3a `/cases/new` dogfood 用）
+
+backend + frontend 一起跑通 web 录入闭环（Validate → Try → Save 真开 PR + auto-merge）需要以下 env 显式注入 uvicorn process。**裸 `uvicorn app.main:app` 起不来 / 起来不能 Save**——M3a-10 dogfood 教训（design.md §14 R27 余波 + §13.7 M3a-3 spec）。
+
+```bash
+# 终端 1: backend (从 repo root)
+cd backend
+nohup env \
+  CASES_ROOT="$(cd .. && pwd)/cases" \
+  DATABASE_URL="sqlite:///$(pwd)/data/runs.db" \
+  PGHOST=127.0.0.1 PGPORT=5432 PGUSER=gpadmin PGDATABASE=postgres \
+  GH_TOKEN="$(sed -n 's|https://[^:]*:\([^@]*\)@github.com.*|\1|p' ~/.git-credentials | head -1)" \
+  LBR_REPO_ROOT="$(cd .. && pwd)" \
+  ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+  > /tmp/uvicorn.log 2>&1 &
+
+# 终端 2: frontend vite dev (从 repo root)
+cd frontend
+nohup npm run dev -- --host 127.0.0.1 --port 5173 > /tmp/vite.log 2>&1 &
+```
+
+env vars 说明:
+
+| env | 作用 | 必需性 |
+|---|---|---|
+| `CASES_ROOT` | `/cases` API 扫盘根目录 | **必须**（默认 `Path("cases")` 相对路径，cwd 偶然性大，§14 R27） |
+| `DATABASE_URL` | SQLite DB 路径 | **必须**（默认相对，同上） |
+| `PGHOST` / `PGPORT` / `PGUSER` / `PGDATABASE` | psycopg → 集群 PG 连接 | **必须**（默认 `127.0.0.1/gpadmin/postgres` 对齐 §3.1，pg_hba `trust` 不需密码） |
+| `GH_TOKEN` | `/cases/submit` endpoint 内部 `gh pr create` / `gh pr merge --auto --squash` | **M3a-3 必须**（缺则 Save 在 gh 那步报 auth fail） |
+| `LBR_REPO_ROOT` | `/cases/submit` 的 `subprocess.run(cwd=...)` 显式 repo root | **M3a-3 必须**（默认通过 `__file__` 推 4 级父目录；显式 env 更可靠） |
+
+**笔记本访问**（VM 无 GUI / 浏览器）:
+
+```bash
+ssh -L 5173:127.0.0.1:5173 -L 8000:127.0.0.1:8000 root@<vm-ip>
+# 留隧道开着，浏览器开 http://localhost:5173/
+```
+
+---
+
 ## License
 
 Apache License 2.0 — 见 [LICENSE](./LICENSE)。
