@@ -1,0 +1,162 @@
+id: lg-bug-0007-orca-sort-pathkey
+title: 默认 ORCA + enable_sort(on) 时 DISTINCT/GROUP BY/ORDER BY 嵌套查询报 "could not find pathkey item to sort"
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-9.7-orca-enable-sort-pathkey"
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/738
+tags: [optimizer, orca, sort, pathkey, planner]
+
+description: |
+  ORCA 开启（默认）+ enable_sort=on 时，对 AO + zstd 表跑
+  "内层 SELECT DISTINCT + 外层 GROUP BY + ORDER BY" 形态的查询，
+  ORCA 在生成排序计划时抛 "could not find pathkey item to sort"，
+  查询无法执行。set optimizer=off 可临时绕开（但本 case 关注 ORCA 路径修复）。
+procedure: |
+  1) 建 schema COMMON 和 AO+zstd 表 TB_MPDAB_QT_PRDN_IFO_PRAM_N，
+     DISTRIBUTED BY (proc_id, lang_id)；
+  2) 插入 lang_id='ko-KR' / 覆盖 10 个 proc_id 桶（A5000..P9000）的若干行；
+  3) ANALYZE 表；
+  4) 在同一会话内 SET optimizer=on; SET enable_sort=on；
+  5) 跑 "SELECT para, max(para_name) FROM (SELECT DISTINCT ... WHERE lang_id='ko-KR'
+     AND proc_id IN (...)) z GROUP BY para ORDER BY para;"；
+  6) 期望：查询不报错；输出不含 "could not find pathkey item to sort"；
+     行数 >= 1（≈ DISTINCT 后 para 的基数）。
+expected: |
+  - 步骤 5 的查询执行成功，无 ERROR；
+  - 输出 / NOTICE 流中不出现 "could not find pathkey item to sort" 子串；
+  - 包裹同一查询的 count(*) >= 1。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+sessions: []
+
+setup:
+  - DROP SCHEMA IF EXISTS COMMON CASCADE
+  - CREATE SCHEMA IF NOT EXISTS COMMON
+  - |
+    CREATE TABLE IF NOT EXISTS COMMON.TB_MPDAB_QT_PRDN_IFO_PRAM_N (
+      pram_tp_nm     VARCHAR(128) NOT NULL,
+      proc_nm        VARCHAR(128) NOT NULL,
+      isp_gr_key_id  VARCHAR(64)  NOT NULL,
+      isp_atc_nm     VARCHAR(512),
+      lang_id        VARCHAR(32)  NOT NULL,
+      proc_id        VARCHAR(64)  NOT NULL,
+      create_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      update_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    WITH (appendonly=TRUE, compresstype=zstd, compresslevel=7)
+    DISTRIBUTED BY (proc_id, lang_id)
+  - |
+    INSERT INTO COMMON.TB_MPDAB_QT_PRDN_IFO_PRAM_N
+      (pram_tp_nm, proc_nm, isp_gr_key_id, isp_atc_nm, lang_id, proc_id)
+    VALUES
+      ('PARA_LAM', 'LAM', 'A4A01$FDCLM00060', 'lower heater 5 SV',  'ko-KR', 'A5000'),
+      ('PARA_LAM', 'LAM', 'A4A02$FDCLM00061', 'upper heater 6 SV',  'ko-KR', 'A5000'),
+      ('TOT_LAM',  'LAM', 'M6L55$EQPLM00061', 'Lower TP1 CaAn Min', 'ko-KR', 'A5000'),
+      ('PARA_LAM', 'LAM', 'A7B01$FDCLM00070', 'curing temp 1',      'ko-KR', 'A7000'),
+      ('TOT_LAM',  'LAM', 'M7L01$EQPLM00070', 'Curing Oven Z1',     'ko-KR', 'A7000'),
+      ('PARA_LAM', 'LAM', 'A8C01$FDCLM00080', 'press pressure',     'ko-KR', 'A8000'),
+      ('TOT_LAM',  'LAM', 'M8H08$FPCLM00153', 'Lower TP2 AnSepa Avg','ko-KR', 'A8000'),
+      ('PARA_LAM', 'LAM', 'A9AP5$EQPLM00041', 'Module1_RightMotor', 'ko-KR', 'A9000'),
+      ('TOT_LAM',  'LAM', 'M9L01$EQPLM00090', 'Module Cycle Time',  'ko-KR', 'A9000'),
+      ('PARA_FO',  'FO',  'F4D01$FDCFO00040', 'charge current 1',   'ko-KR', 'F4000'),
+      ('TOT_FO',   'FO',  'M4L01$EQPFO00040', 'Formation Charge',   'ko-KR', 'F4000'),
+      ('QUAL_PKG', 'PKG', 'S16L16$EQPK00060', 'cup-pouch minus',    'ko-KR', 'P1000'),
+      ('PARA_PKG', 'PKG', 'P1E01$FDCPK00010', 'pkg pressure',       'ko-KR', 'P1000'),
+      ('QUAL_PKG', 'PKG', 'M6L16$EQPK00061', 'LEAD GAP1 5 2#',      'ko-KR', 'P2000'),
+      ('PARA_PKG', 'PKG', 'P2E01$FDCPK00020', 'threshold 1',        'ko-KR', 'P2000'),
+      ('QUAL_VIS', 'VIS', 'P5F01$FDCVI00050', 'visual std 1',       'ko-KR', 'P5000'),
+      ('TOT_VIS',  'VIS', 'M5L01$EQPVI00050', 'Visual Pass Rate',   'ko-KR', 'P5000'),
+      ('PARA_OCV', 'OCV', 'P6G01$FDCOC00060', 'OCV voltage 1',      'ko-KR', 'P6000'),
+      ('TOT_OCV',  'OCV', 'M6L01$EQPOC00060', 'OCV Lower',          'ko-KR', 'P6000'),
+      ('QUAL_FIN', 'FIN', 'P9H01$FDCFI00090', 'final std 1',        'ko-KR', 'P9000'),
+      ('TOT_FIN',  'FIN', 'M9L01$EQPFI00090', 'Final Pass Rate',    'ko-KR', 'P9000')
+  - ANALYZE COMMON.TB_MPDAB_QT_PRDN_IFO_PRAM_N
+
+steps:
+  - name: "默认 ORCA + enable_sort(on)：DISTINCT+GROUP BY+ORDER BY 不应抛 pathkey 错"
+    kind: sql
+    sql: |
+      SET optimizer TO on;
+      SET enable_sort TO on;
+      SELECT para, max(para_name) AS para_name
+      FROM (
+        SELECT DISTINCT
+          pram_tp_nm || '' || proc_nm || '' || isp_gr_key_id AS para,
+          '[' || proc_nm || '] ' || isp_atc_nm              AS para_name
+        FROM COMMON.TB_MPDAB_QT_PRDN_IFO_PRAM_N
+        WHERE lang_id = 'ko-KR'
+          AND proc_id IN (
+            'A5000', 'A7000', 'A8000', 'A9000',
+            'F4000', 'P1000', 'P2000', 'P5000', 'P6000', 'P9000'
+          )
+      ) z
+      GROUP BY para
+      ORDER BY para
+    timeout_sec: 60
+    expect:
+      not_contains: ["could not find pathkey item to sort", "ERROR"]
+
+  - name: "ORCA 路径下同样查询的行数 >= 1（确认查询真正落地，未走错误路径）"
+    kind: sql
+    sql: |
+      SET optimizer TO on;
+      SET enable_sort TO on;
+      SELECT count(*) FROM (
+        SELECT para, max(para_name) AS para_name
+        FROM (
+          SELECT DISTINCT
+            pram_tp_nm || '' || proc_nm || '' || isp_gr_key_id AS para,
+            '[' || proc_nm || '] ' || isp_atc_nm              AS para_name
+          FROM COMMON.TB_MPDAB_QT_PRDN_IFO_PRAM_N
+          WHERE lang_id = 'ko-KR'
+            AND proc_id IN (
+              'A5000', 'A7000', 'A8000', 'A9000',
+              'F4000', 'P1000', 'P2000', 'P5000', 'P6000', 'P9000'
+            )
+        ) z
+        GROUP BY para
+        ORDER BY para
+      ) w
+    expect:
+      scalar_ge: 1
+      not_contains: "could not find pathkey item to sort"
+
+teardown:
+  - DROP SCHEMA IF EXISTS COMMON CASCADE
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录》§9.7。
+  关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/738
+
+  修复前预期：步骤 1 以 "could not find pathkey item to sort" 报错，case fail；
+  修复后预期：查询返回 ≥1 行，case pass。status 保留 open 直到验证某个 build
+  上修复非复现，再迁到 fixed + 填 fixed_version。
+
+  飞书原文 SQL 含两个 typo，本 case 已修正：
+    - `drop table if exits` → `DROP TABLE IF EXISTS`；
+    - `set optimize to on`  → `SET optimizer TO on`。
+
+  规模：原文 INSERT 约 60+ 行（多为韩文 isp_atc_nm），本 case 收敛到 21 行
+  ASCII 描述，覆盖全部 10 个 proc_id 桶。DISTINCT 后 para 的基数足以触发
+  ORCA 在外层 ORDER BY 推导 pathkey 的代码路径。若复现不稳定，可恢复原文
+  完整 INSERT；isp_atc_nm 改回韩文不影响 BUG（pathkey 推导只走列引用，与
+  字符串内容无关）。
+
+  断言策略：第 1 步直接 not_contains 错误字符串 + 不出现 ERROR；第 2 步
+  外包 count(*) 用 scalar_ge 兜底验证查询真正生成了结果集（而非 0 行的
+  "成功"——若 ORCA fallback 到 planner 静默返回 0 行也会被这步抓住）。
