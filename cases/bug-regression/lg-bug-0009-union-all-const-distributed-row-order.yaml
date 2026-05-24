@@ -1,33 +1,33 @@
 id: lg-bug-0009-union-all-const-distributed-row-order
 title: UNION ALL (常量 SELECT) 与 (分布式表 SELECT) 拼接时常量行未稳定出现在结果集首行
 category: bug_regression
-status: fixed
+status: open
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "section-9.12-union-all-const-distributed-row-order"
   reported_at: "2026-05-24"
-  fixed_version: "SynxDB-4.5.0-build130"
+  fixed_version: ""
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/800
 tags: [union_all, planner, row_order, distributed, optimizer_off]
 
 description: |
   飞书 §9.12：把 (常量 4 列 SELECT) 与 (分布式表 4 列 SELECT) 用 UNION ALL 拼起来，
-  关闭 ORCA（optimizer=off）下连跑 3 次，期望每次返回的 3 行顺序一致，且常量
+  关闭 ORCA（optimizer=off）下连跑 10 次，期望每次返回的 3 行顺序一致，且常量
   "标题行"（'column1','column2','column3','seg34'）出现在结果集第 1 行。飞书
   原文记录顺序乱——常量行有时不在首行，跨多次执行顺序也不一致。
 procedure: |
   1) 建普通表 tmp_data_union (column1/column2/column3/seg34 TEXT)；
   2) INSERT 2 行 ('no1','no2','no3'), ('no4','no5','no6')（seg34 留 NULL）；
-  3) 连续 3 次执行同一 UNION ALL 查询（每次先 SET optimizer TO off）；
+  3) 连续 10 次执行同一 UNION ALL 查询（每次先 SET optimizer TO off）；
      每次断言：UNION ALL 结果 LIMIT 1 取到的 column1 = 'column1'，即常量
      "标题行"出现在 server-returned 行序的首行；
   4) 健康检查：UNION ALL 总行数 = 3；
   5) 收尾 DROP TABLE。
 expected: |
-  - 3 个 UNION ALL 单行断言 step 的 scalar = 'column1'（常量行稳定居首）；
+  - 10 个 UNION ALL 单行断言 step 的 scalar = 'column1'（常量行稳定居首）；
   - 健康检查 step scalar = 3（拼接行数完整）；
   - 全程无 ERROR / FATAL。
 
@@ -100,6 +100,111 @@ steps:
       scalar: "column1"
       not_contains: ["ERROR", "FATAL"]
 
+  - name: "第 4 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 5 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 6 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 7 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 8 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 9 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "第 10 轮：UNION ALL 首行应为常量 'column1'"
+    kind: sql
+    sql: |
+      SET optimizer TO off;
+      SELECT column1 FROM (
+        SELECT 'column1' AS column1, 'column2' AS column2, 'column3' AS column3, 'seg34' AS seg34
+        UNION ALL
+        SELECT column1::TEXT, column2::TEXT, column3::TEXT, 'seg34' AS seg34 FROM tmp_data_union
+      ) t
+      LIMIT 1
+    timeout_sec: 60
+    expect:
+      scalar: "column1"
+      not_contains: ["ERROR", "FATAL"]
+
   - name: "健康检查：UNION ALL 总行数 = 3"
     kind: sql
     sql: |
@@ -130,8 +235,9 @@ notes: |
   scalar = 'column1'。LIMIT 1 直接截取 server-returned 行序的首行（不加 ORDER BY），
   正是本 BUG 直接关注的属性；不是用 ORDER BY 强排（那会把 BUG 掩盖掉）。
   - 修复前 BUG 复现：scalar 可能随机取到 'no1' / 'no4'，断言失败；
-  - 修复后期望：常量行稳定居首，3 轮 scalar 均为 'column1'。
-  3 轮重复 = 验证跨执行稳定性，对应飞书原文"连跑3次顺序一致"人工验证。
+  - 修复后期望：常量行稳定居首，10 轮 scalar 均为 'column1'。
+  10 轮重复 = 验证跨执行稳定性（用户 2026-05-24 反馈：3 轮太少容易误判，BUG
+  是间歇性的，至少 10 轮才有足够采样数；对应飞书原文"连跑多次顺序一致"人工验证）。
   末尾一个 count(*)=3 健康检查 = 兜底确认 UNION ALL 行数完整、未被错误折叠或截断。
 
   **表名规范**：飞书原文用 `CREATE TEMP TABLE TMP_DATA`，本 case 改为常规表
@@ -156,9 +262,13 @@ notes: |
   status: open 保留直到某个 build 上验证非复现，再迁 fixed + 填 fixed_version。
 
   ---
-  **Verified upstream-fixed (M4a-3 dogfood, 2026-05-24)**: POST /cases/try on
-  synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 4/4
-  main steps PASS (3 轮 UNION ALL LIMIT 1 全返常量 'column1' 1-2ms each,
-  count(*) 健康检查 1ms 返 3). PR #76 (case submit). fixed_version above
-  = verified-non-reproducing version, NOT necessarily the fix introduction
-  commit (not yet researched against 飞书 LG history / source).
+  **Status reverted fixed → open (2026-05-24)**: 初版 3 轮 Try 4/4 PASS 给出
+  upstream-fixed 错觉（PR #76 / #77）。用户反馈 "3 次会误判" → 改 10 轮重测，
+  **第 1 轮即 fail** on synxdb-0001 / SynxDB-4.5.0-build130（POST /cases/try
+  scalar 不是 'column1'，正是 BUG 9.12 描述的"常量行未稳定居首"现象）。BUG
+  实际**仍可复现**，未 upstream-fix。fixed_version 清空。等真有 build
+  能稳定通过 10/10 + 健康检查再升 fixed。
+
+  **教训**：间歇性 BUG 的 dogfood Try 必须 ≥10 次重复采样，3 次不够；3 次
+  PASS 不是 fixed 证据。candidate §14 R 反模式："间歇性 BUG 用低重复次数
+  验证 = 假阳性 fixed flip 风险高"。
