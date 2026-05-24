@@ -42,6 +42,7 @@ jobs:
             agents:
               - '.claude/agents/**'
               - '.claude/scripts/**'
+              - '.claude/skills/**'
               - '.github/workflows/ci-gate.yml'
 
       # ─────────────────────────────────────────────────────────────────
@@ -222,6 +223,35 @@ jobs:
       - if: steps.changes.outputs.agents == 'true'
         name: agents / lint script is executable
         run: test -x .claude/scripts/check_agent_dispatch.sh
+
+      # ─────────────────────────────────────────────────────────────────
+      # skill: add-test-case SKILL.md lint (M3b-9)
+      # check_skill_add_test_case.sh enforces §5.5 sections + §14 R4b
+      # (no hardcoded category) + §5.5.1 generator-only 铁律 (no Write
+      # tool / git / submit / subprocess in skill source).
+      # ─────────────────────────────────────────────────────────────────
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: skill / lint pass — real SKILL.md
+        run: .claude/scripts/check_skill_add_test_case.sh
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: skill / lint fail — bad SKILL.md missing frontmatter (must exit 1)
+        run: |
+          set +e
+          tmp=$(mktemp)
+          printf 'no frontmatter\nno sections\n' > "$tmp"
+          .claude/scripts/check_skill_add_test_case.sh "$tmp"
+          rc=$?
+          rm -f "$tmp"
+          if [ "$rc" -ne 1 ]; then
+            echo "expected exit 1, got $rc"
+            exit 1
+          fi
+
+      - if: steps.changes.outputs.agents == 'true'
+        name: skill / lint script is executable
+        run: test -x .claude/scripts/check_skill_add_test_case.sh
 
       # ─────────────────────────────────────────────────────────────────
       # final gate verdict
