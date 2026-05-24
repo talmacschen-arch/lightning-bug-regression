@@ -31,6 +31,18 @@ export default function AdminPage() {
             Mark a case as "do not run" with a reason (e.g. intermittent BUG, env issue)
           </span>
         </li>
+        <li>
+          <Link
+            to="/admin/external-services"
+            data-testid="admin-link-external-services"
+            className="text-blue-700 hover:underline"
+          >
+            External services →
+          </Link>
+          <span className="ml-2 text-xs text-muted-foreground">
+            Read-only browser for <code>external/&lt;svc&gt;.yml</code> (DUT + ES + ... edit via filesystem)
+          </span>
+        </li>
       </ul>
     </div>
   );

@@ -19,9 +19,11 @@ user 单人模式".
 from __future__ import annotations
 
 import json
+import logging
 import os
-from datetime import date
+from datetime import date, datetime
 
+import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -29,6 +31,8 @@ from sqlalchemy import select
 from app.runner.step_kinds import STEP_KINDS
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -235,3 +239,77 @@ def delete_skip_list_entry(entry_id: int) -> None:
 #   - server_log_path: cases write `server_log_path:` per-case in YAML
 # The system_settings table + storage helpers (sqlite_store.get_setting /
 # set_setting / list_settings) remain for future use but have no callers.
+
+
+# ---------------------------------------------------------------------------
+# Read-only external/<svc>.yml browser (v1.15+ post-Settings refactor)
+# ---------------------------------------------------------------------------
+
+
+class ExternalServiceOut(BaseModel):
+    """One row in the /admin/external-services response.
+
+    `content` is the raw YAML text — not parsed — so the UI can render
+    it verbatim (preserves comments, blank lines, etc.). Frontend does
+    not edit; if a user wants to change a value, they edit the file
+    directly + commit (single source of truth = `external/<svc>.yml`
+    on disk, git-tracked).
+    """
+
+    name: str  # svc name = filename stem (e.g. `elasticsearch`)
+    filename: str  # `<svc>.yml`
+    size_bytes: int
+    modified_at: datetime
+    content: str  # raw YAML
+    parse_error: str | None = None  # set if YAML is malformed
+
+
+@router.get("/external-services", response_model=list[ExternalServiceOut])
+def list_external_services() -> list[ExternalServiceOut]:
+    """List all `external/<svc>.yml` files with their raw YAML content.
+
+    Read-only on purpose: the file is the source of truth, edits go via
+    `vi external/<svc>.yml` + git commit. Web UI is just a discovery /
+    sanity-check view (e.g. "what does ES URL look like right now?").
+
+    Honors `EXTERNAL_DEPS_DIR` env var like the loader. Missing dir →
+    empty list (no error; first-time setup is OK).
+    """
+    # Reuse the loader's resolver so this endpoint + runner runtime
+    # always look at the same directory (§14 R26 dual-code-path).
+    from app.runner import external_deps_loader
+
+    base_dir = external_deps_loader._resolve_dir()
+    if not base_dir.is_dir():
+        return []
+
+    out: list[ExternalServiceOut] = []
+    for child in sorted(base_dir.iterdir()):
+        if not child.is_file() or child.suffix not in (".yml", ".yaml"):
+            continue
+        try:
+            stat = child.stat()
+            content = child.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.warning("external-services: failed to read %s: %s", child, e)
+            continue
+        # Validate parse — surface as `parse_error` not as endpoint error,
+        # so a malformed file doesn't hide the others.
+        parse_error: str | None = None
+        try:
+            parsed = yaml.safe_load(content)
+            if not isinstance(parsed, dict):
+                parse_error = f"top-level must be a YAML mapping; got {type(parsed).__name__}"
+        except yaml.YAMLError as e:
+            parse_error = f"YAML parse error: {e}"
+        out.append(
+            ExternalServiceOut(
+                name=child.stem,
+                filename=child.name,
+                size_bytes=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime),
+                content=content,
+                parse_error=parse_error,
+            )
+        )
+    return out
