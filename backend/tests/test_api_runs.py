@@ -224,6 +224,40 @@ def test_list_runs_returns_recent_runs_newest_first(client: TestClient) -> None:
     assert set(ids) == {id1, id2}
 
 
+def test_list_runs_filter_by_case_id(client: TestClient) -> None:
+    """GET /runs?case_id=X returns only runs that touched case X.
+
+    Fake orchestrator inserts `lg-bug-fake-0001` for every run, so it
+    should match all runs; a non-existent case_id should match none.
+    """
+    r1 = client.post("/runs", json={})
+    id1 = r1.json()["run_id"]
+    _wait_for_run_terminal(client, id1)
+    r2 = client.post("/runs", json={})
+    id2 = r2.json()["run_id"]
+    _wait_for_run_terminal(client, id2)
+
+    # case_id 命中 → 2 个 run
+    resp = client.get("/runs?case_id=lg-bug-fake-0001")
+    assert resp.status_code == 200
+    assert {r["id"] for r in resp.json()} == {id1, id2}
+
+    # case_id 不存在 → 空
+    resp = client.get("/runs?case_id=nonexistent-case")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    # 不传 case_id → 全部 (sanity)
+    resp = client.get("/runs")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+
+    # 显式传 empty string → 视为不过滤 (sqlite_store.list_runs 的合同)
+    resp = client.get("/runs?case_id=")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+
+
 # ---------------------------------------------------------------------------
 # GET /runs/{id}
 # ---------------------------------------------------------------------------
