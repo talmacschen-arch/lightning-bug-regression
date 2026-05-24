@@ -287,8 +287,9 @@ describe('DashboardPage (M5-2)', () => {
       expect(screen.getByTestId('dashboard-quick-action-bug_regression-open')).toBeInTheDocument();
       expect(screen.getByTestId('dashboard-quick-action-extension-stable')).toBeInTheDocument();
       expect(screen.getByTestId('dashboard-quick-action-external_systems-awaiting_env')).toBeInTheDocument();
-      // New case is always available
-      expect(screen.getByTestId('dashboard-quick-action-new-case')).toBeInTheDocument();
+      // "+ New case" was removed in favor of the Cases page header CTA
+      // (PR #111). Dashboard quick-actions should NOT have it.
+      expect(screen.queryByTestId('dashboard-quick-action-new-case')).toBeNull();
     });
   });
 
