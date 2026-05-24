@@ -168,20 +168,29 @@ async def execute_sql_step(
                 ):
                     # EXPLAIN output: each row is typically (plan_line,) — 1-column text.
                     plan_text = "\n".join(str(r[0]) for r in last_rows)
-                return StepResult(
-                    status=StepStatus.PASS,
-                    step_id=step_id,
-                    driver="sql",
-                    started_at=started,
-                    ended_at=ended,
-                    duration_ms=duration_ms,
-                    stdout=stdout,
-                    stderr="\n".join(notices),
-                    scalar=scalar,
-                    row_count=row_count,
-                    rows_affected=rows_affected,
-                    plan_text=plan_text,
-                )
+            # Commit the step's tx so subsequent steps — especially cross-driver
+            # shell+psql steps — see this step's CREATE TABLE / INSERT data.
+            # Without this commit: psycopg long-lived AsyncConnection holds an
+            # uncommitted tx; a separate `psql -c` subprocess can't see those
+            # writes. M4a-2/-3 lg-bug-0008 exposed this when the case mixed
+            # kind: sql (setup INSERT) with kind: shell (VACUUM FULL via psql).
+            # For all-sql cases the commit doesn't change intra-case visibility
+            # (same-tx already saw own writes); teardown DROP still cleans up.
+            await conn.commit()
+            return StepResult(
+                status=StepStatus.PASS,
+                step_id=step_id,
+                driver="sql",
+                started_at=started,
+                ended_at=ended,
+                duration_ms=duration_ms,
+                stdout=stdout,
+                stderr="\n".join(notices),
+                scalar=scalar,
+                row_count=row_count,
+                rows_affected=rows_affected,
+                plan_text=plan_text,
+            )
         except Exception as exc:
             # Roll back any open tx so the connection is usable for the next
             # step. Per §4.1.2 we no longer try to handle non-tx-safe DDL
