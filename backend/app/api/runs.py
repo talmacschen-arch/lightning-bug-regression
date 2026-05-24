@@ -368,10 +368,19 @@ def create_run(
 
 
 @router.get("", response_model=list[RunSummary])
-def list_runs(limit: int = 50) -> list[RunSummary]:
-    """Return the most recent runs (newest first), capped at `limit`."""
+def list_runs(
+    limit: int = 50,
+    case_id: str | None = None,
+) -> list[RunSummary]:
+    """Return the most recent runs (newest first), capped at `limit`.
+
+    Optional `case_id` query param filters to runs that touched the
+    given case (post-M6 UX, 2026-05-25). Example:
+    `GET /runs?case_id=lg-bug-0009-union-all-const-distributed-row-order`
+    returns only runs whose case_results array contains that case.
+    """
     with sqlite_store.get_session() as sess:
-        rows = sqlite_store.list_runs(sess, limit=limit)
+        rows = sqlite_store.list_runs(sess, limit=limit, case_id=case_id)
         return [
             RunSummary(
                 id=r.id,

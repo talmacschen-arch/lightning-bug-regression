@@ -41,6 +41,7 @@ const EMPTY_FILTERS: FilterState = {
   status: [],
   tag: [],
   since: 'all',
+  case_id: '',
 };
 
 beforeEach(() => {

@@ -31,6 +31,16 @@ describe('useFilters (M5-4)', () => {
       expect(result.current.filters.status).toEqual([]);
       expect(result.current.filters.tag).toEqual([]);
       expect(result.current.filters.since).toBe('all');
+      expect(result.current.filters.case_id).toBe('');
+    });
+
+    it('parses case_id (post-M6 UX for /runs?case_id=X)', () => {
+      const { result } = renderHook(() => useFilters(), {
+        wrapper: withRouter('/?case_id=lg-bug-0001-hashjoin-right-table'),
+      });
+      expect(result.current.filters.case_id).toBe(
+        'lg-bug-0001-hashjoin-right-table',
+      );
     });
 
     it('parses comma-joined category list', () => {
@@ -113,6 +123,20 @@ describe('useFilters (M5-4)', () => {
         result.current.setFilter('since', 'all');
       });
       expect(result.current.filters.since).toBe('all');
+    });
+
+    it('sets case_id then clearing it removes the key', () => {
+      const { result } = renderHook(() => useFilters(), {
+        wrapper: withRouter('/'),
+      });
+      act(() => {
+        result.current.setFilter('case_id', 'lg-bug-0001-hashjoin-right-table');
+      });
+      expect(result.current.filters.case_id).toBe('lg-bug-0001-hashjoin-right-table');
+      act(() => {
+        result.current.setFilter('case_id', '');
+      });
+      expect(result.current.filters.case_id).toBe('');
     });
   });
 

@@ -2,7 +2,8 @@
  * M5-4 RunsPage — list of runs with global FilterBar (URL-persistent).
  *
  * Replaces the M2-8 placeholder. Lists /runs with filtering by
- * verdict + since (time range) + free-text q. Click a row → /runs/:id.
+ * verdict + since (time range) + free-text q + **case_id** (post-M6
+ * UX, 2026-05-25 — "which runs touched a specific case").
  *
  * Category chips are hidden via showCategoryFilter={false} — runs
  * don't carry a category directly, so chips would render interactively
@@ -14,12 +15,17 @@
  * derived from backend lifecycle status + failed count — see
  * @/lib/runVerdict. URL key remains `status` for filter-state continuity
  * via useFilters() — semantics is "what the user wants to filter on".
+ *
+ * The case_id filter is server-side (`GET /runs?case_id=X`): the
+ * backend JOINs case_results so we don't have to load the full case
+ * graph client-side. UI = CaseIdCombobox (reused from Skip List).
  */
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 import { FilterBar } from '@/components/FilterBar';
+import { CaseIdCombobox } from '@/components/CaseIdCombobox';
 import { useFilters } from '@/lib/useFilters';
 import { runVerdict, verdictToBadgeClass, VERDICT_OPTIONS } from '@/lib/runVerdict';
 
@@ -47,9 +53,15 @@ export default function RunsPage() {
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Re-fetch when case_id filter changes (server-side filter via query
+  // param; other filters are client-side over the fetched list).
   useEffect(() => {
     let cancelled = false;
-    apiFetch('/runs', 'get')
+    setRuns(null);
+    setError(null);
+    const query: Record<string, string | number> = {};
+    if (filters.case_id) query.case_id = filters.case_id;
+    apiFetch('/runs', 'get', Object.keys(query).length > 0 ? { query } : undefined)
       .then((data) => {
         if (!cancelled) setRuns(data as RunSummary[]);
       })
@@ -59,7 +71,7 @@ export default function RunsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [filters.case_id]);
 
   const cutoffMs = sinceToCutoffMs(filters.since);
   const filtered = (runs ?? []).filter((r) => {
@@ -70,8 +82,11 @@ export default function RunsPage() {
       return false;
     }
     if (filters.q) {
+      // Search hay = version + triggered_by only (post-2026-05-25).
+      // Run id and verdict were removed: id is visible on each row +
+      // doesn't help discovery; verdict already has dedicated chip.
       const q = filters.q.toLowerCase();
-      const hay = `${r.id} ${runVerdict(r)} ${r.target_version ?? ''} ${r.triggered_by ?? ''}`.toLowerCase();
+      const hay = `${r.target_version ?? ''} ${r.triggered_by ?? ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -88,8 +103,33 @@ export default function RunsPage() {
         statusOptions={VERDICT_OPTIONS}
         showSinceFilter
         showCategoryFilter={false}
-        qPlaceholder="搜索 id / verdict / version / triggered_by — e.g. 42, fail, 4.5.0, gpadmin"
+        qPlaceholder="搜索 version / triggered_by — e.g. 4.5.0, gpadmin"
       />
+
+      <div
+        data-testid="runs-page-case-filter"
+        className="runs-page-case-filter flex items-center gap-2"
+      >
+        <span className="text-sm text-gray-600 shrink-0">Includes case:</span>
+        <div className="flex-1 max-w-[640px]">
+          <CaseIdCombobox
+            value={filters.case_id}
+            onChange={(v) => setFilter('case_id', v)}
+            placeholder="所有 run (点击选 case 过滤)"
+            testid="runs-page-case-picker"
+          />
+        </div>
+        {filters.case_id && (
+          <button
+            type="button"
+            data-testid="runs-page-case-clear"
+            onClick={() => setFilter('case_id', '')}
+            className="text-xs text-blue-700 hover:underline"
+          >
+            Clear
+          </button>
+        )}
+      </div>
 
       {error && (
         <div data-testid="runs-page-error" className="runs-page-empty">

@@ -13,6 +13,7 @@
  *   - status: string[] (multi-select status names)
  *   - tag: string[] (multi-select tags)
  *   - since: string ('7d' / '30d' / '90d' / 'all'; default 'all')
+ *   - case_id: string ("which runs touched this case", RunsPage post-M6 UX)
  *
  * URL encoding: each list is comma-joined (e.g. `?category=bug_regression,extension`).
  * Empty list / empty string means "not filtered" and is omitted from URL.
@@ -30,6 +31,7 @@ export interface FilterState {
   status: string[];
   tag: string[];
   since: string; // '7d' | '30d' | '90d' | 'all'
+  case_id: string;
 }
 
 const EMPTY: FilterState = {
@@ -38,6 +40,7 @@ const EMPTY: FilterState = {
   status: [],
   tag: [],
   since: 'all',
+  case_id: '',
 };
 
 function readList(params: URLSearchParams, key: string): string[] {
@@ -79,6 +82,7 @@ export function useFilters(): UseFiltersResult {
       status: readList(params, 'status'),
       tag: readList(params, 'tag'),
       since: readSince(params),
+      case_id: params.get('case_id') ?? '',
     }),
     [params],
   );
@@ -86,10 +90,10 @@ export function useFilters(): UseFiltersResult {
   const setFilter = useCallback(
     <K extends keyof FilterState>(key: K, value: FilterState[K]) => {
       const next = new URLSearchParams(params);
-      if (key === 'q') {
+      if (key === 'q' || key === 'case_id') {
         const v = value as string;
-        if (v) next.set('q', v);
-        else next.delete('q');
+        if (v) next.set(key, v);
+        else next.delete(key);
       } else if (key === 'since') {
         const v = value as string;
         if (v && v !== 'all') next.set('since', v);
