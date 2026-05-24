@@ -80,8 +80,8 @@
 | bug_regression category | §16.2 | §4.1.1 BUG schema 特化 |
 | extension category | §16.3 | §4.1.1 ext schema 特化 |
 | external_systems category | §16.4 | §0 v1.10 / §13.10 M4c plan / §14 R4b |
-| add-test-case skill 设计 | §5.5（**待 PR-A2 迁 §17**）| §13.8 M3b plan / §13.9.4 skill 硬化 |
-| skill 模型规则 (opus 4.7) | §17.8（**PR-A2 落地**） | SKILL.md model rule block + memory `feedback_model_override_2026-05-24` §B |
+| add-test-case skill 设计 | **§17**（v1.11 PR-A2）| §5.5（stub→§17）/ §13.8 M3b plan / §13.9.4 skill 硬化 |
+| skill 模型规则 (opus 4.7) | **§17.8**（v1.11 PR-A2）| SKILL.md model rule block + memory `feedback_model_override_2026-05-24` §B |
 | Milestones (M0-M6) plan + retro | §13.x（**待 PR-A3 整理**） | §0 changelog rows / §12 Roadmap |
 | 风险预警与反模式 R1-R28 | §14（**不动**，memory 大量引用）| §0 changelog 中 R 入档记录 |
 | 多 Agent 协作 (dev workflow) | §8 / §15 | §13.4 M1 retro 中 dispatch 教训 |
@@ -751,6 +751,8 @@ step 上写 `host: '{{ ... }}'` 时，runner 决定 ssh 用哪个用户登录：
 - 前端展示草稿后**必须人工确认**，确认后才进入"Validate → Try → Save → PR"流程，绝不直接落盘。
 
 ### 5.5 Claude Code Skill — `add-test-case`（v0.6 新增；借鉴 preflight `add-test-case`；v0.7 支持双 category）
+
+> **v1.11 (PR-A2 reorg)**：本节是 v0.6-v0.9 设计快照（保留作历史 anchor）；**canonical = §17**（含双源同步约定 + 当前 6 题对齐 + 12 项 cross-check + 3 场景特化追问组 + 模型规则 + 硬化历程）。新编辑请到 §17。
 
 **定位**：第二条录入路径，面向**在终端里用 Claude Code 写录入的开发者**（不开浏览器、不离开命令行）。和 web 路径（§5.4）**并列**，最终都把 YAML paste 到前端编辑器，**汇入同一个 Validate → Try → Save 闸门**。
 
@@ -2794,5 +2796,245 @@ CREATE TABLE case_categories (
 - 实施（migration + dir + skill prefix + fixture + ci-gate run）：~30 min
 - PR review + merge：~5 min
 - 合计 ~70 min（user-on-loop 全程响应）。比"改业务代码"省至少 10x
+
+---
+
+## 17. add-test-case Skill（v1.11 PR-A2，canonical）
+
+> **本章是 skill 设计的 canonical reference**——汇总原 §5.5 (v0.6-v0.9 设计快照)、§13.8 (M3b plan)、§13.9.4 (硬化 PR 链)、SKILL.md 模型规则块。原 §5.5 stub 指向这里。
+
+### 17.0 概述 + design vs runtime 双源同步
+
+**两个文件，不同角色**：
+- **`.claude/skills/add-test-case/SKILL.md`**（runtime markdown）：用户 `claude --print --agent /add-test-case ...` 时实际加载执行的脚本；含 example transcripts / Common mistakes 反例清单等运行时材料
+- **本章 §17**（design canonical）：设计意图 + 不变量 + 演化历史 + 跨章节关联
+
+**双源同步约定**（v1.11 起）：
+- SKILL.md 改 → §17 必须同步更新（同 PR 内）
+- §17 改 → 同步 SKILL.md
+- `.claude/scripts/check_skill_add_test_case.sh` CI lint 守 SKILL.md 关键字段（model / sections / banned patterns）
+- 若两者出现 drift，**SKILL.md 为准**（runtime 真消费的版本），§17 跟改
+
+### 17.1 设计原则（6 条铁律）
+
+借鉴 preflight `SKILL.md`，本 skill 严格遵守：
+
+1. **Generator-only，无副作用**：
+   - ❌ 不用 Write 工具
+   - ❌ 不 `git add` / `git commit` / `git push`
+   - ❌ 不调 `POST /cases/submit`
+   - ❌ 不跑 case（用户在 UI 上点 Try 跑）
+   - ✅ 唯一输出 = stdout 上一段 YAML，用 `─── BEGIN YAML ───` / `─── END YAML ───` 包裹（无围栏、无注释混在内部），方便人复制粘贴
+2. **Live grounding**：生成前必须 fetch **三个** backend 端点（PR #86 起从 4 个削减——`/admin/settings` 不存在故剔除）。失败时显式提示用户，**不**编造字段。
+   - `GET /admin/categories` — 当前活跃测试门类清单（**禁止**编造 category 名）
+   - `GET /cases?q=<topic>&category=<name>` — 按 category 查重
+   - `GET /admin/step-kinds` — executor 自描述（**禁止**编造 step kind）
+3. **House-style 学习**：开工前 Read 2-3 个最相似的已有 case YAML（按 tags / 关键词匹配），匹配字段顺序、注释风格
+4. **不嵌入凭据**：DB 密码走 runner（PGPASSWORD 环境变量或 .pgpass），**不**写进 YAML 字面值
+5. **6 题对齐 + 场景特化追问**（PR #86 起从"5 题"升级到"6 题"，category 题为首；详 §17.4 / §17.5）
+6. **canonical field 顺序**：生成 YAML 必须按 §17.6 的字段顺序，与 catalog 一致
+
+### 17.2 输入模式（四选一）
+
+```
+/add-test-case <feishu-url>             模式 A：飞书 LG 历史 BUG 文档锚点（多用于 bug_regression）
+/add-test-case <local-sql-file>         模式 B：本地 SQL 复现脚本
+/add-test-case ext:<extname> [<doc-url>] 模式 D：v0.7 新增——extension 用例（如 ext:pgvector）
+/add-test-case                          模式 C：自然语言（skill 反问要做什么）
+```
+
+输入歧义时一问澄清（"这是飞书 URL 还是本地路径？是 BUG 回归还是 extension 集成？"），不要凭猜。
+
+- 模式 A 用 **WebFetch**（MCP 不可达时复用 `feishu_client.py`，详 memory `feishu_client_access.md`）；category 默认 = `bug_regression`
+- 模式 B 用 **Read** 读本地文件；category 从脚本内容/路径推断
+- 模式 C 直接问用户，category 作为首题
+- 模式 D 锁定 category = `extension`，extname 进入 tags 与 id slug
+
+### 17.3 工作流（7 步）
+
+| 步骤 | 动作 |
+|------|------|
+| 1 | Read 2-3 个最相似已有 case YAML（从 `cases/<dir_path>/` 下，按 tags 匹配）|
+| 2 | Fetch **三个** grounding 端点（§17.1 规则 2）|
+| 3 | 分析输入，从输入推导默认值 + 检测场景关键词 |
+| 4 | 按 §17.4 顺序提 **6 题**，每题展示默认值；空回车 = 接受默认 |
+| 5 | 按 §17.5 追问场景特化问题（只问检测到的；按 category 选组） |
+| 6 | 按 §17.6 canonical 顺序起草 YAML；做 **12 项** cross-check（§17.7）|
+| 7 | 打印 `─── BEGIN YAML ───` … `─── END YAML ───` + 3 行 footer |
+
+### 17.4 6 个对齐问题（v0.7：category 加为首题；v0.8：选项从 API 拉）
+
+```
+1) category    [<auto-推断, default by 模式>]:  # 选项从 GET /admin/categories 拉
+                                                # 模式 D 直接锁 extension，仍展示题让用户确认
+2) id          [<auto-slug, 按 category.id_prefix + 推 slug>]:
+3) title       [<从飞书锚点/脚本注释/extname 提取>]:
+4) applies_to.versions  [全适用]:               # 例：">=1.6,<2.0"
+5) status      [<category.default_status>]:    # bug=open, ext=stable, external_systems=awaiting_env
+6) severity    [medium]:                       # high | medium | low
+```
+
+skill 题 1 拿到答案后，把对应 category 的 `id_prefix` / `default_status` / `status_whitelist` 缓存下来，后续 2~6 题都用这份数据。**禁止** skill 代码里出现 `if category == "bug_regression"` 字面分支（§14 R4b 反模式，lint 强校）。
+
+### 17.5 场景特化追问
+
+按输入关键词检测，每命中一类追加 1 题，不命中跳过。**3 组**：
+
+**通用组**（任何 category 都可能命中）：
+- 多会话 / VACUUM 同时 / two session → `sessions:` mapping
+- crash / FATAL / recover mode → 加 `kind: log_grep` step
+- 自建 db / lc_ctype → step 级 `database:` override + setup createdb
+- GUC / ORCA / enable_X → `preconditions:` 段
+- explain / hashjoin → `expect.plan_contains`
+- 性能 / 慢查询 → `expect.duration_lt_ms`
+
+**Category-tagged extension 组**（仅 category=extension 时生效）：
+- CREATE EXTENSION / shared_preload (pg_search / pgaudit) → `kind: restart_db` step；标 `destructive: true`
+- pgvector vector/IVFFlat/HNSW → `expect.plan_contains: ["IVFFlat" ...]`
+- postgis ST_*/GEOMETRY/SRID → GIST 索引 + ST_DWithin 等
+- pgcrypto crypt/digest/gen_random_* → 确定性算法 → `expect.scalar`；随机 → 仅校非空
+- plpython/plperl 过程语言 → 部分需 `shared_preload_libraries` + `kind: restart_db`
+- 版本断言 → 一 step `SELECT extversion FROM pg_extension WHERE extname=...`
+
+**Category-tagged external_systems 组**（仅 category=external_systems 时生效；PR #89 从原 extension 组迁出）：
+- CREATE FOREIGN TABLE / FDW / dblink / datalake_fdw / hive_connector / PXF / zombodb → 补 `external_deps: [<svc>]`；status 默认 `awaiting_env` 直到环境就绪
+- gphdfs.conf / krb5.conf 服务端配置文件 → cli step `cat >> ... grep -q guard`（**不**覆盖）
+- kinit / keytab / principal Kerberos → `{{ external.<svc>.extras.client_principal }}` Jinja
+- beeline / sqlplus / mysql 远端 CLI → `host: '{{ external.<svc>.host }}'` + cmd 开头 `source profile.d`
+- fresh pool / 服务刚起来 warmup → seed step 包 retry 循环
+
+> **注**：表里 `{{ external.<svc>.* }}` Jinja 占位**当前 runner 不解析**（external_deps 字段是文档性质，runtime injection 待 M6-5）；case 作者按目标语义写。
+
+未命中任何关键词 → 跳过本步，进入草拟。
+
+### 17.6 canonical 字段顺序（v1.8 起 `defaults.database: gpadmin`）
+
+skill 输出的 YAML **必须**按这个顺序：
+
+```yaml
+id: lg-bug-NNNN-<slug>                  # 或 lg-ext-<extname>-<slug> 或 lg-xs-<svc>-<slug>
+title: <中文 OK>
+category: bug_regression                # / extension / external_systems
+status: open                            # 按 category whitelist
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-X.Y"          # bug 模式 A 必填
+  reported_at: "YYYY-MM-DD"
+  fixed_version: ""                     # bug + status=fixed 时填
+  ext_doc_url: ""                       # ext / external_systems 用
+issue_url: ""
+tags: [<语义 tag>]
+
+description: |                          # 4-tuple 叙事：本 case 验证什么
+procedure: |                            # 4-tuple 叙事：编号步骤
+expected: |                             # 4-tuple 叙事：预期一句话清单
+
+applies_to: {}
+preconditions: {}
+external_deps: []                       # external_systems 必填；bug/ext 通常 []
+
+defaults:
+  database: gpadmin                     # v1.8 起默认 gpadmin（旧 5 例显式写 postgres 不受影响）
+
+sessions: {}                            # 命中并发场景填 mapping {s1: {driver: sql}, ...}；空/省略 = loader 自动 derive default
+
+setup:
+  - sql: |
+      <DROP IF EXISTS + CREATE + INSERT, 幂等>
+
+steps:
+  - name: <短描述>
+    kind: <sql|shell|log_grep|restart_db>
+    on: default
+    sql: |
+      ...
+    timeout_sec: 60
+    expect:
+      <按 §4.1 expect 字段菜单挑>
+
+teardown:
+  - sql: |
+      <DROP IF EXISTS 收尾；不 DROP EXTENSION>
+
+created_by: chenqiang                   # 从 git config user.email 推断
+created_at: "YYYY-MM-DD"
+notes: |
+  <workaround / 触发条件 / 已知信息>
+```
+
+### 17.7 打印前 cross-check（12 项；PR #86 起从 13 项合并）
+
+1. **step kind 在 `/admin/step-kinds` 列表里** — 禁止 `kind: bash` / `kind: psql`
+2. **expect 字段与 step kind 匹配** — `plan_contains` 只 sql / `exit_code` 只 shell / `scalar` 只单行单列 SQL
+3. **setup/teardown 幂等守卫** — DROP 必带 IF EXISTS / CREATE 必带 IF NOT EXISTS（除非测 CREATE 本身）
+4. **不嵌入凭据** — grep YAML 无 `password=` / `PGPASSWORD=` 字面值
+5. **status × category 一致性** — bug/ext/external_systems 各自 whitelist；status=stub 时 steps 必为空
+6. **id 前缀 × category 一致性** — bug→`lg-bug-*`、ext→`lg-ext-*`、external_systems→`lg-xs-*`
+7. **destructive 一致性** — steps 含 gpstop/gpstart/gpconfig -c shared_preload/restart_db/rm -rf data → 必 destructive=true
+8. **Jinja typo 检查** — `{{ external.<svc>.* }}` 的 `<svc>` 必须出现在 external_deps
+9. **远端 cli step profile.d source** — 带 `host: '{{ external.* }}'` 的 cli step cmd 开头必须 `source /etc/profile.d/<x>.sh`
+10. **服务端配置文件用追加 + grep guard** — `cat > $DD/...conf` 覆盖写式 → 改 `cat >> + grep -q '^<key>:' guard`
+11. **non-tx-safe DDL 必须走 psql -c** — VACUUM / 顶层 ANALYZE / CREATE DATABASE / REINDEX CONCURRENTLY / ALTER SYSTEM / CLUSTER 等关键词出现 → 绝禁 `kind: sql`，必 `kind: shell + cmd: psql -c '...'`（§4.1.2 约定）
+12. **跨 driver 数据可见性** — kind: sql + kind: shell 混搭时：sql_driver 自动 commit-after-step（PR #80 起）所以前序 sql 的 CREATE/INSERT 对后续 psql -c 子进程自动可见；保守仍可全 psql -c
+
+**任一项未过 → 修正后重试，不打印 BEGIN/END。**
+
+### 17.8 模型规则（v1.11 新增，PR #85 落地，**永久生效**）
+
+**规则**：`.claude/skills/*/SKILL.md` 文件**必须**钉 `model: claude-opus-4-7`（exact 字符串，不写 generic `opus`）。
+
+**Why**：
+- skill 输出需要严谨结构 + canonical 顺序 + 多项 cross-check 一次过
+- sonnet 实战漂移多（M1-followup yaml_loader 杜撰 4 个 category 是 §14 R4b 真实震慑案例）
+- haiku 推理深度不足
+
+**CI 守门**：`.claude/scripts/check_skill_add_test_case.sh` line ~61 收紧到精确匹配 `^model:[[:space:]]*claude-opus-4-7[[:space:]]*$`。绕过 lint 修 sonnet/haiku/generic-opus 都会被 PR 卡住。Reverse-test 验过：注入 `model: opus` / `model: sonnet` 都 exit 1。
+
+**与 §A agent override 互不冲突**：memory `feedback_model_override_2026-05-24` 拆 §A (agent 一次性 override 仅 2026-05-24 那次例外) + §B (skill 文件永久钉 opus 4.7)。**agent quota fallback 不适用于 skill 文件**（静态文档，无 fallback 概念）。
+
+**例外**：`.claude/skills/report-status/SKILL.md` 无 `model:` frontmatter——reporter agent 设计就是 haiku（§8.1），新规则不强制 report-status 改 opus；只限制"如果 skill 写 model:，必须是 claude-opus-4-7"。
+
+**升级路径**：未来 opus 4.8+ 上线，仍需用户**显式**授权才能升版本；agent 自决禁止。
+
+### 17.9 实施回顾（M3b sprint + 硬化 3 PR 链）
+
+**M3b sprint**（详 §13.8 plan，已 done）：10 子步骤完成 + 1 bug 修补（assertions list-form fix, PR #67 dogfood 暴露）+ M3b-10 web flow dogfood 闭环（PR #68 lg-ext-pgvector via skill 路径真 merge 进 main）。SKILL.md 588 行 bundle 在 PR #65 内交付。
+
+**skill 硬化 3 PR 链**（v1.10/v1.11，2026-05-24 PM）：
+
+| PR | 改动 | 触发 |
+|---|---|---|
+| **#85** | frontmatter `model: opus` (generic) → `model: claude-opus-4-7` (exact)；lint 收紧 | user "skill 坚持改用 opus 4.7，不再使用 sonnet" |
+| **#86** | opus self-review 7 spec fixes：/admin/settings 404 删 grounding / sessions list→mapping (backend 真接受 shape) / 5题→6题三处统一 / cross-check #3+#8 合并 (13→12) / DROP EXTENSION 反例 + 通用规则 / created_by example 修对 / Fetch 端点数同步 | user "用 opus review skill 及周边" |
+| **#89** | SKILL.md 5 行外部服务追问 extension 组 → external_systems 组；lint 加 external_systems banned pattern | user "迁追问到 external_systems 组" |
+
+**M3b 与 skill 硬化的关系**：M3b 把 skill 从 design 概念落到可运行的 markdown；硬化 3 PR 把 dogfood 暴露的 spec gap 闭合 + 引入永久模型规则。这是 "spec → 落地 → dogfood → 硬化" 完整循环的典型范例。
+
+### 17.10 输出格式 + 不做的事
+
+**输出格式**（footer 不可缺）：
+
+```
+─── BEGIN YAML ───
+id: lg-bug-NNNN-<slug>
+...
+─── END YAML ───
+
+下一步：
+1) 打开 http://localhost:5173/cases/new → 选「粘贴 YAML」入口
+2) 粘贴上方 YAML 块，点 Validate（schema 校验通过）
+3) 点 Try（在你已就绪的集群上试跑一次），全绿后 Save → 自动提 PR
+```
+
+**不做的事**（明示）：
+- ❌ 写 `.yaml` 到磁盘
+- ❌ `git add` / `commit` / `push`
+- ❌ `POST /cases/submit`
+- ❌ 触发集群上的真实运行（那是 `/cases/try` 干的）
+- ❌ 修改 skip_list / settings / 任何 admin 资源
+
+skill 是 **YAML 编辑器的打字助手**，不是 deployer，不是 reviewer。前端的 Validate + Try + Save 才是 source of truth。
 
 ---
