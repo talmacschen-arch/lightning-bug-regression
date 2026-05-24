@@ -213,6 +213,48 @@ def test_missing_sessions_is_valid(tmp_path: Path) -> None:
     assert case.sessions == {"default": {"driver": "sql"}}
 
 
+def test_empty_list_sessions_is_valid(tmp_path: Path) -> None:
+    """Per §5.5.6 canonical default shape `sessions: []`, an empty list is
+    equivalent to omitting the field (auto-derive default). M3a-10 dogfood
+    spec gap fix — previously this raised 'sessions must be a non-empty mapping'."""
+    yaml_src = (
+        "id: lg-bug-0001-demo\n"
+        "category: bug-regression\n"
+        "title: demo case\n"
+        "description: |\n  verify.\n"
+        "procedure: |\n  1.\n"
+        "expected: |\n  ok.\n"
+        "sessions: []\n"
+        "steps:\n"
+        "  - id: q1\n"
+        "    driver: sql\n"
+        "    run: SELECT 1\n"
+    )
+    path = _write(tmp_path, yaml_src)
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.sessions == {"default": {"driver": "sql"}}
+
+
+def test_empty_mapping_sessions_is_valid(tmp_path: Path) -> None:
+    """Symmetric with empty list: empty mapping `sessions: {}` also derives default."""
+    yaml_src = (
+        "id: lg-bug-0001-demo\n"
+        "category: bug-regression\n"
+        "title: demo case\n"
+        "description: |\n  verify.\n"
+        "procedure: |\n  1.\n"
+        "expected: |\n  ok.\n"
+        "sessions: {}\n"
+        "steps:\n"
+        "  - id: q1\n"
+        "    driver: sql\n"
+        "    run: SELECT 1\n"
+    )
+    path = _write(tmp_path, yaml_src)
+    case = load_case(path, DEFAULT_WHITELIST)
+    assert case.sessions == {"default": {"driver": "sql"}}
+
+
 # ---------------------------------------------------------------------------
 # category whitelist
 # ---------------------------------------------------------------------------
