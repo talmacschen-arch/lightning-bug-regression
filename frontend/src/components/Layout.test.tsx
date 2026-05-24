@@ -125,6 +125,11 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Skip list');
     });
 
+    it('breadcrumb shows Admin / External services at /admin/external-services', () => {
+      renderAt('/admin/external-services');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / External services');
+    });
+
   });
 
   describe('navigation contract', () => {

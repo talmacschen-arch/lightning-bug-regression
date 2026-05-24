@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -287,3 +288,85 @@ def test_get_endpoints_remain_open_with_admin_password(
     monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
     assert client.get("/admin/skip-list").status_code == 200
     assert client.get("/admin/categories").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /admin/external-services — read-only browser (v1.15+)
+# ---------------------------------------------------------------------------
+
+
+def test_external_services_empty_when_dir_missing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing EXTERNAL_DEPS_DIR → empty list, no error."""
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(tmp_path / "does-not-exist"))
+    resp = client.get("/admin/external-services")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_external_services_lists_yml_files_with_content(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each .yml file in the dir appears with name/filename/size/mtime/content."""
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    (ext_dir / "elasticsearch.yml").write_text(
+        "host: 192.168.195.203\nport: 9200\n", encoding="utf-8"
+    )
+    (ext_dir / "dut.yml").write_text(
+        "host: 127.0.0.1\nport: 5432\nuser: gpadmin\ndatabase: gpadmin\n",
+        encoding="utf-8",
+    )
+    # non-YAML file should be ignored
+    (ext_dir / "README.md").write_text("# external services", encoding="utf-8")
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+
+    resp = client.get("/admin/external-services")
+    assert resp.status_code == 200
+    items = resp.json()
+    names = {i["name"] for i in items}
+    assert names == {"dut", "elasticsearch"}
+
+    by_name = {i["name"]: i for i in items}
+    es = by_name["elasticsearch"]
+    assert es["filename"] == "elasticsearch.yml"
+    assert es["size_bytes"] > 0
+    assert "host: 192.168.195.203" in es["content"]
+    assert "modified_at" in es
+    assert es["parse_error"] is None
+
+
+def test_external_services_surfaces_parse_error_in_body(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A malformed YAML must not 500 — surface error in row's `parse_error`."""
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    (ext_dir / "broken.yml").write_text("- a\n- b\n", encoding="utf-8")  # list, not dict
+    (ext_dir / "invalid.yml").write_text("this: [unclosed", encoding="utf-8")
+    (ext_dir / "ok.yml").write_text("host: 10.0.0.1\n", encoding="utf-8")
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+
+    resp = client.get("/admin/external-services")
+    assert resp.status_code == 200
+    items = {i["name"]: i for i in resp.json()}
+
+    assert items["broken"]["parse_error"] is not None
+    assert "mapping" in items["broken"]["parse_error"]
+    assert items["invalid"]["parse_error"] is not None
+    assert "parse error" in items["invalid"]["parse_error"].lower()
+    assert items["ok"]["parse_error"] is None
+
+
+def test_external_services_accepts_both_yml_and_yaml_extensions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    (ext_dir / "a.yml").write_text("host: x\n", encoding="utf-8")
+    (ext_dir / "b.yaml").write_text("host: y\n", encoding="utf-8")
+    monkeypatch.setenv("EXTERNAL_DEPS_DIR", str(ext_dir))
+    items = client.get("/admin/external-services").json()
+    names = {i["name"] for i in items}
+    assert names == {"a", "b"}

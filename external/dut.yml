@@ -27,8 +27,14 @@ database: gpadmin
 
 # DUT cluster host list — ssh to these as `gpadmin` (su - gpadmin -c '...');
 # any other host name → ssh as `root` (build / CI boxes). §5.3.2 / §14 R13.
+#
+# Topology:
+#   mdw  = coordinator (master, primary)
+#   std  = standby coordinator (mirror of mdw)
+#   sdw1 = segment host 1
+#   sdw2 = segment host 2
 hosts:
   - mdw
-  - synxdb-0001
+  - std
   - sdw1
   - sdw2

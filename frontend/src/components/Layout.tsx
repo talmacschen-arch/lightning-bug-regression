@@ -65,6 +65,7 @@ function pathToBreadcrumb(pathname: string): string {
   if (pathname === '/runs') return 'Runs';
   if (pathname === '/admin') return 'Admin';
   if (pathname.startsWith('/admin/skip-list')) return 'Admin / Skip list';
+  if (pathname.startsWith('/admin/external-services')) return 'Admin / External services';
   return pathname;
 }
 
