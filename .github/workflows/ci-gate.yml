@@ -127,6 +127,22 @@ jobs:
           npx playwright install --with-deps chromium
           npx playwright test
 
+      # M5-1 PR #94 lesson (§14 R32, 2026-05-24): on e2e failure, log alone
+      # can't diagnose layout / responsive / mount-race issues. Upload
+      # playwright trace + screenshots + videos so PR author + reviewer
+      # can download artifacts and inspect actual DOM state at fail time.
+      # `if: failure()` only runs when a previous step in this job failed.
+      - if: failure() && steps.changes.outputs.frontend == 'true' && steps.frontend_init.outputs.ready == 'true'
+        name: frontend / upload playwright artifacts on failure
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
       # ─────────────────────────────────────────────────────────────────
       # agents block (only runs if .claude/agents|scripts or this workflow changed)
       # check_agent_dispatch.sh self-test (6 cases) + frontmatter sanity
