@@ -88,33 +88,39 @@ def client_with_real_cases(
 def test_list_returns_all_five_bug_regression_cases(
     client_with_real_cases: TestClient,
 ) -> None:
-    """The 5 real fixtures under `cases/bug-regression/` must all show up
-    in the list (even though strict §4.1 validation rejects their richer
-    schema; per spec we include them with status='invalid')."""
+    """The 5 real M1-original fixtures under `cases/bug-regression/` must
+    all show up in the list (even though strict §4.1 validation rejects
+    their richer schema; per spec we include them with status='invalid').
+
+    M3a-10 dogfood added 2 more cases (`lg-bug-0006-m3a-dogfood-smoke{,2}`),
+    so the test asserts the 5 originals are a **subset** rather than an
+    equality — new cases (added via M3a `/cases/submit` web flow or future
+    M4a feishu imports) must not break this test."""
     resp = client_with_real_cases.get("/cases")
     assert resp.status_code == 200
     body = resp.json()
-    ids = sorted(c["id"] for c in body)
-    bug_ids = [i for i in ids if i.startswith("lg-bug-")]
-    assert len(bug_ids) == 5
-    expected = [
+    ids = {c["id"] for c in body}
+    expected_subset = {
         "lg-bug-0001-hashjoin-right-table",
         "lg-bug-0002-array-unnest-crash",
         "lg-bug-0003-count-no-statistics",
         "lg-bug-0004-ctas-rowcount-zero",
         "lg-bug-0005-lc-ctype-upper",
-    ]
-    assert bug_ids == expected
+    }
+    assert expected_subset.issubset(ids), f"missing original cases: {expected_subset - ids}"
 
 
 def test_list_filtered_by_category_bug_regression(
     client_with_real_cases: TestClient,
 ) -> None:
-    """`?category=bug_regression` narrows the scan to just that dir."""
+    """`?category=bug_regression` narrows the scan to just that dir.
+
+    The 5 M1 originals must be present; any extras from M3a-10 dogfood /
+    future M4a imports under the same dir are also allowed."""
     resp = client_with_real_cases.get("/cases?category=bug_regression")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body) == 5
+    assert len(body) >= 5
     for c in body:
         assert c["id"].startswith("lg-bug-")
 
