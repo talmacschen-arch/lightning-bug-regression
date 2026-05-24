@@ -1,0 +1,230 @@
+id: lg-ext-anon-dynamic-masking-role-based
+title: anon extension 基于 role 的 dynamic masking（脱敏用户看到 random_string + partial）
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: "https://gitlab.com/dalibo/postgresql_anonymizer"
+issue_url: ""
+tags: [extension, anon, masking, security-label, role-based, pgcrypto]
+
+description: |
+  PostgreSQL Anonymizer (anon) extension 提供 dynamic data masking。本 case 验证
+  lightning 集群上 anon 的核心使用路径：
+  (1) ALTER DATABASE 启用 anon.transparent_dynamic_masking GUC；
+  (2) 给指定列定义 SECURITY LABEL FOR anon ON COLUMN ... IS 'MASKED WITH FUNCTION ...'；
+  (3) 创建 SECURITY LABEL FOR anon ON ROLE ... IS 'MASKED' 的角色；
+  (4) SET ROLE 到脱敏用户后查询，应该看到 random_string / partial 脱敏值；非脱敏
+      用户（gpadmin）查询仍看到原值。
+procedure: |
+  1) precondition: shared_preload_libraries 含 'anon'
+  2) setup: psql -c DROP/CREATE DATABASE testdb + ALTER DATABASE 启用 TDM GUC
+  3) 在 testdb 装 pgcrypto + anon + anon.init()
+  4) 建 schema/table + 插入测试数据 ('T1', 'Sarah', 'Conor', '0609110911')
+  5) 定义 SECURITY LABEL：lastname → random_string(4)；phone → partial(phone,2,'******',2)
+  6) start_dynamic_masking() + 建脱敏 role user_anon + GRANT 权限
+  7) SET ROLE user_anon → SELECT phone 应等 '06******11'
+  8) SET ROLE user_anon → SELECT lastname 长度 = 4（random_string(4)）
+  9) SET ROLE user_anon → SELECT lastname != 'Conor'（masking 真生效）
+  10) teardown: 显式清 SECURITY LABEL → pg_terminate testdb 连接 → DROP DB → DROP ROLE
+expected: |
+  - shared_preload_libraries 含 anon（precondition）
+  - phone 脱敏后 = '06******11'（partial(_,2,'******',2) 确定算法）
+  - lastname 脱敏后 char_length = 4，且 != 'Conor'（random_string(4) 非确定算法，只断属性）
+  - 全程无 ERROR / FATAL
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+setup:
+  # 清掉历史残留：mydb (lg-bug-0005 用过) + 本 case 自身的 testdb；先 pg_terminate
+  # 避免残留连接阻挠 DROP DATABASE。CREATE/DROP DATABASE 是 non-tx-safe DDL →
+  # §4.1.2 必须 psql -c 走 shell。
+  - su - gpadmin -c "psql -d gpadmin -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('mydb', 'testdb') AND pid != pg_backend_pid()\""
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS mydb'"
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS testdb'"
+  - su - gpadmin -c "psql -d gpadmin -c 'CREATE DATABASE testdb'"
+  # ALTER DATABASE SET anon.transparent_dynamic_masking 只对新 session 生效；
+  # 必须在 step 连进 testdb 之前 set。
+  - su - gpadmin -c "psql -d gpadmin -c 'ALTER DATABASE testdb SET anon.transparent_dynamic_masking TO true'"
+
+steps:
+  - name: "precondition: shared_preload_libraries 含 'anon'"
+    kind: sql
+    sql: |
+      SELECT current_setting('shared_preload_libraries') ~ 'anon'
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "在 testdb 装 pgcrypto + anon extension + anon.init()"
+    kind: sql
+    database: testdb
+    sql: |
+      CREATE EXTENSION IF NOT EXISTS pgcrypto;
+      CREATE EXTENSION IF NOT EXISTS anon;
+      SELECT anon.init();
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "建 schema/table + 插入测试数据 (T1, Sarah, Conor, 0609110911)"
+    kind: sql
+    database: testdb
+    sql: |
+      CREATE SCHEMA IF NOT EXISTS mysche;
+      SET search_path = 'mysche', 'public';
+      DROP TABLE IF EXISTS mysche.people;
+      CREATE TABLE mysche.people (id TEXT, firstname TEXT, lastname TEXT, phone TEXT);
+      INSERT INTO mysche.people VALUES ('T1', 'Sarah', 'Conor', '0609110911');
+    timeout_sec: 30
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "定义脱敏规则：lastname → random_string(4)；phone → partial(...,'******',2)"
+    kind: sql
+    database: testdb
+    sql: |
+      SECURITY LABEL FOR anon ON COLUMN mysche.people.lastname
+        IS 'MASKED WITH FUNCTION anon.random_string(4)';
+      SECURITY LABEL FOR anon ON COLUMN mysche.people.phone
+        IS 'MASKED WITH FUNCTION anon.partial(phone,2,$$******$$,2)';
+      SELECT anon.start_dynamic_masking();
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "建脱敏 role user_anon + SECURITY LABEL MASKED + GRANT 访问"
+    kind: sql
+    database: testdb
+    sql: |
+      DROP ROLE IF EXISTS user_anon;
+      CREATE ROLE user_anon WITH LOGIN PASSWORD 'pwd_123456';
+      SECURITY LABEL FOR anon ON ROLE user_anon IS 'MASKED';
+      GRANT USAGE ON SCHEMA mysche TO user_anon;
+      GRANT SELECT ON TABLE mysche.people TO user_anon;
+    timeout_sec: 30
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "脱敏断言 1: phone 应等于确定值 '06******11'（partial 算法可预测）"
+    kind: sql
+    database: testdb
+    sql: |
+      SET ROLE user_anon;
+      SELECT phone FROM mysche.people WHERE id = 'T1';
+    timeout_sec: 30
+    expect:
+      scalar: "06******11"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "脱敏断言 2: lastname 长度应为 4（random_string(4)）"
+    kind: sql
+    database: testdb
+    sql: |
+      SET ROLE user_anon;
+      SELECT char_length(lastname) FROM mysche.people WHERE id = 'T1';
+    timeout_sec: 30
+    expect:
+      scalar: 4
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "脱敏断言 3: lastname 不等于原值 'Conor'（masking 确实生效）"
+    kind: sql
+    database: testdb
+    sql: |
+      SET ROLE user_anon;
+      SELECT lastname != 'Conor' FROM mysche.people WHERE id = 'T1';
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  # 1. 清 column 脱敏规则（mysche.people.phone + lastname IS NULL）
+  - su - gpadmin -c "psql -d testdb -c \"SECURITY LABEL FOR anon ON COLUMN mysche.people.phone IS NULL\""
+  - su - gpadmin -c "psql -d testdb -c \"SECURITY LABEL FOR anon ON COLUMN mysche.people.lastname IS NULL\""
+  # 2. 关掉 role 脱敏（必须 testdb 内做，因为 SECURITY LABEL 是 db-local catalog）
+  - su - gpadmin -c "psql -d testdb -c 'SECURITY LABEL FOR anon ON ROLE user_anon IS NULL'"
+  # 3. 踢掉所有连到 testdb 的 session（SqlSessionPool 长连未释，否则 DROP DATABASE 会失败）
+  - su - gpadmin -c "psql -d gpadmin -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'testdb' AND pid != pg_backend_pid()\""
+  # 4. DROP DATABASE（non-tx-safe DDL → psql -c）
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS testdb'"
+  # 5. DROP ROLE（cluster 级；testdb 没了 role 仍在）
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP ROLE IF EXISTS user_anon'"
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  PostgreSQL Anonymizer (anon) 是周边 extension，提供 GDPR / 隐私合规相关的
+  动态数据脱敏。lightning / SynxDB 升级后必须验证 anon 的 dynamic masking
+  路径仍可用。
+
+  **shared_preload_libraries 前置**：anon 需要 `anon` background worker
+  加载（与 pg_partman_bgw 类似的 preload extension 模式）。本 case 第 1
+  步用 `current_setting('shared_preload_libraries') ~ 'anon'` 软检查；
+  缺则 fail 提示用户按 §3.1 deployment 路径加进 gpconfig 后重启集群。
+
+  **跨 database 模式**（参考 lg-bug-0005）：
+    - defaults.database: gpadmin（admin db，setup / teardown 跑这里）
+    - main steps 的 `database: testdb` 字段 override，runner 自动开
+      到 testdb 的 psycopg AsyncConnection（SqlSessionPool 缓存为
+      session 名 default:testdb）
+    - non-tx-safe DDL (CREATE/DROP DATABASE) 走 §4.1.2 psql -c → shell driver
+
+  **TDM GUC 启用时机**：`ALTER DATABASE testdb SET anon.transparent_dynamic_masking TO true`
+  只对新 session 生效。所以 setup 顺序必须：CREATE DATABASE → ALTER
+  DATABASE → 然后 main step 才连进去（连进去时 GUC 已 set）。
+
+  **SET ROLE 持久化**：sql_driver post-PR #80 commit-after-step 不影响
+  session-level SET ROLE 持久（commit 是 tx-level，role 是 session-level）。
+  但为防 SqlSessionPool 重建连接导致 SET ROLE 丢失，每个 masked-query
+  step 显式 SET ROLE user_anon 重设，更鲁棒。
+
+  **断言策略（适配确定 vs 随机 masking）**：
+    - phone 用 anon.partial(phone,2,'******',2) 是**确定**算法 → 断言 scalar="06******11"
+    - lastname 用 anon.random_string(4) 是**随机**算法 → 不能断言具体值，
+      改断 char_length=4 + != 'Conor'（验证 mask 确实应用了）
+
+  **setup 注意**：
+    - DROP DATABASE IF EXISTS mydb 是历史残留清理（lg-bug-0005 case 在
+      mydb 跑过 LC_CTYPE 验证，本机有可能残留；防止 mydb 冲突或资源占用
+      影响 testdb 创建）。这是 user 2026-05-24 反馈加的。
+    - DROP testdb 之前先 pg_terminate_backend，防 SqlSessionPool 上次 case
+      run 残留连接。
+
+  **teardown 注意**（user 2026-05-24 反馈强调的明确清理顺序）：
+    1. SECURITY LABEL ON COLUMN ... IS NULL（清 column 脱敏规则；user 指定
+       phone 必清，本 case 同时清 lastname 一并）
+    2. SECURITY LABEL ON ROLE ... IS NULL（关 role 脱敏；db-local catalog，
+       必须在 testdb 连接做）
+    3. pg_terminate_backend testdb 连接（SqlSessionPool 长连未释）
+    4. DROP DATABASE testdb（non-tx-safe → psql -c）
+    5. DROP ROLE user_anon（cluster 级；DROP DATABASE 后必须显式 drop role
+       否则下次 CREATE ROLE 同名会冲突）
+    - 严格来说 1/2 是冗余（DROP DATABASE 会删掉 testdb 内所有 pg_seclabel
+      条目），但 user 显式要求逐项清，更可读 + 防 DROP DATABASE 万一失败
+      时 role label 残留在 testdb（虽然 testdb 本身可能也没被清，但至少
+      catalog 整洁）。teardown 是 best-effort，任一步失败不影响后续。
+
+  **§5.5.7 cross-check 13 项 self-check**：
+    - #12 non-tx-safe DDL：CREATE/DROP DATABASE 走 psql -c ✓
+    - #13 跨 driver visibility：teardown 的 shell psql -c 需要看到 main step 的
+      schema 状态（SECURITY LABEL 等），但 SECURITY LABEL ON COLUMN/ROLE 是
+      session-commit 过的 catalog 条目（sql_driver post-PR #80 每 step 自动
+      commit），所以 teardown psql 子进程能看到 ✓
+    - 其它（#1-#11）：step kind 都合规；setup/teardown 幂等守卫（IF EXISTS /
+      IF NOT EXISTS）齐全；status=stable 对 extension 合规；id 前缀 lg-ext-*
+      对；destructive 不含 gpstop。
+
+  status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 extension 可用"。
