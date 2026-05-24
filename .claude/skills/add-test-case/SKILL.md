@@ -6,8 +6,8 @@ model: claude-opus-4-7
 
 > **模型规则（2026-05-24 用户决策，永久生效）**：本 skill 文件**必须**钉死
 > `model: claude-opus-4-7`。**禁止**临时降级到 `claude-sonnet-4-6` 或其他
-> sonnet/haiku 版本——理由：skill 输出需要严谨结构 + canonical 顺序 + 11
-> 项 cross-check 一次过；sonnet 实战漂移多（M1-followup 暴露过 §14 R4b
+> sonnet/haiku 版本——理由：skill 输出需要严谨结构 + canonical 顺序 +
+> 多项 cross-check 一次过；sonnet 实战漂移多（M1-followup 暴露过 §14 R4b
 > 杜撰 4 个 category），haiku 推理深度不足。任何未来升级（opus-4-8+）
 > 必须经用户显式授权，不在 dispatch 时由 agent 自决。
 > `.claude/scripts/check_skill_add_test_case.sh` 在 CI 强制此项，绕过
@@ -23,14 +23,13 @@ model: claude-opus-4-7
    - ❌ 不调 `POST /cases/submit`
    - ❌ 不跑 case（用户在 UI 上点 Try 跑）
    - ✅ 唯一输出 = stdout 上一段 YAML，用 `─── BEGIN YAML ───` / `─── END YAML ───` 包裹（无围栏、无注释混在内部），方便人复制粘贴。
-2. **Live grounding**：生成前必须 fetch 四个 backend 端点（v0.8 加 categories）。失败时显式提示用户，**不**编造字段。
+2. **Live grounding**：生成前必须 fetch 三个 backend 端点。失败时显式提示用户，**不**编造字段。
    - `GET /admin/categories` — 当前活跃测试门类清单（**禁止**编造 category 名）。skill 首题选项从这里取，default_status / id_prefix / status_whitelist 也来自这里
    - `GET /cases?q=<topic>&category=<name>` — 按 category 查重（避免做重复 case；已有则建议扩展）
    - `GET /admin/step-kinds` — executor 自描述（**禁止**编造 step kind）
-   - `GET /admin/settings` — 当前默认 db / 默认 log path 等 Tier B 值（避免与系统不一致）
 3. **House-style 学习**：开工前 Read 2-3 个最相似的已有 case YAML（按 tags / 关键词匹配），匹配字段顺序、注释风格。
 4. **不嵌入凭据**：DB 密码走 runner（PGPASSWORD 环境变量或 .pgpass），**不**写进 YAML 字面值。
-5. **5 题对齐 + 场景特化追问**：详 §5.5.4 / §5.5.5。
+5. **6 题对齐 + 场景特化追问**：详 §5.5.4 / §5.5.5。
 6. **canonical field 顺序**：生成 YAML 必须按 §5.5.6 的字段顺序，与 catalog 一致。
 
 ## 输入模式（四选一）
@@ -56,9 +55,9 @@ model: claude-opus-4-7
 | 1 | Read 2-3 个最相似已有 case YAML（按 tags 匹配；优先看与目标 BUG 同类型的） |
 | 2 | Fetch 三个 grounding 端点（§5.5.1 规则 2） |
 | 3 | 分析输入，从输入推导 5 个默认值 + 检测场景关键词 |
-| 4 | 按 §5.5.4 顺序提 5 题，每题展示默认值；空回车 = 接受默认 |
+| 4 | 按 §5.5.4 顺序提 6 题，每题展示默认值；空回车 = 接受默认 |
 | 5 | 按 §5.5.5 追问场景特化问题（只问检测到的） |
-| 6 | 按 §5.5.6 canonical 顺序起草 YAML；做 13 项 cross-check（§5.5.7） |
+| 6 | 按 §5.5.6 canonical 顺序起草 YAML；做 12 项 cross-check（§5.5.7） |
 | 7 | 打印 `─── BEGIN YAML ───` … `─── END YAML ───` + 3 行 footer |
 
 **自动推导规则**：
@@ -93,7 +92,7 @@ model: claude-opus-4-7
 6) severity    [medium]:             # high | medium | low
 ```
 
-skill 在题 1 拿到答案后，把对应 category 的 `id_prefix` / `default_status` / `status_whitelist` 缓存下来，后续 2~5 题的默认值和校验都用这份数据，**不**在 skill 代码里枚举 `if category == "bug_regression": ...`。
+skill 在题 1 拿到答案后，把对应 category 的 `id_prefix` / `default_status` / `status_whitelist` 缓存下来，后续 2~6 题的默认值和校验都用这份数据，**不**在 skill 代码里枚举 `if category == "bug_regression": ...`。
 
 ## 场景特化追问
 
@@ -103,7 +102,7 @@ skill 在题 1 拿到答案后，把对应 category 的 `id_prefix` / `default_s
 
 | 检测关键词 | 追问 | 影响 |
 |-----------|------|------|
-| `concurrent` / 并发 / VACUUM 同时 / 两个会话 / two session | "需要多会话吗？默认设 `sessions: [s1, s2]`？[yes]" | 加 `sessions:` 段；后续相关 step 加 `on: s1/s2` |
+| `concurrent` / 并发 / VACUUM 同时 / 两个会话 / two session | "需要多会话吗？默认设 `sessions: {s1: {driver: sql}, s2: {driver: sql}}`？[yes]" | 加 `sessions:` mapping 段（**必须** dict shape；backend `yaml_loader.py` 拒绝 list-of-strings——dogfood 2026-05-24 已踩过 `TypeError: 'in <string>' requires string as left operand, not list`）；后续相关 step 加 `on: s1/s2` |
 | `crash` / `panic` / `FATAL` / `recover mode` / 集群挂 | "会让集群进入 recover mode 吗？默认末尾加 `kind: log_grep` step 兜底？[yes]" | 末尾加 log_grep step，`pattern: "FATAL: the database system is in recover mode"`，`expect.matches: 0` |
 | `mydb` / `createdb` / 自建库 / `lc_ctype` / `lc_collate` | "本 case 需要在非 postgres db 上跑吗？" | 提示用户填 step 级 `database: <名称>`；setup 加 createdb（idempotent） |
 | `set <guc> to` / 优化器 / ORCA / `enable_<feature>` | "本 case 依赖特定 GUC 状态吗？要不要加 `preconditions: {options.<guc>: [<allowed>]}`？[no]" | 加 `preconditions:` 段做运行前 gate |
@@ -186,29 +185,28 @@ notes: |
   <workaround / 触发条件 / 已知信息>
 ```
 
-## 打印前 cross-check（13 项）
+## 打印前 cross-check（12 项）
 
 skill 在打印 BEGIN/END 之前必须自查：
 
 1. **step kind 在 `/admin/step-kinds` 列表里**——禁止编造 `kind: bash` / `kind: psql`。
 2. **`expect.plan_contains` 只用在 `kind: sql` step**；`expect.exit_code` 只用在 shell；`expect.scalar` 只用在返回单行单列的 SQL。
-3. **`setup` / `teardown` 幂等**：所有 `DROP` 必带 `IF EXISTS`，所有 `CREATE TABLE` / `CREATE EXTENSION` 必带 `IF NOT EXISTS`（除非测的就是 CREATE 本身的语义）。
+3. **`setup` / `teardown` 幂等守卫**：grep 每条 SQL — 所有 `DROP` 必带 `IF EXISTS`、所有 `CREATE TABLE` / `CREATE EXTENSION` 必带 `IF NOT EXISTS`（除非测的就是 CREATE 本身的语义），或包 `DO $$ BEGIN IF NOT EXISTS ... END $$`；缺一律自动加上。
 4. **不嵌入凭据**：grep YAML 里有没有 `password=` / `PGPASSWORD=` 字面值。
-5. **status 与字段一致性**（v0.7：按 category 检查白名单）：
+5. **status 与字段一致性**（按 category 检查白名单）：
    - `category=bug_regression` → status ∈ {open, fixed, wontfix, stub}；`status=fixed` 时 `source.fixed_version` 必填。
    - `category=extension` → status ∈ {stable, experimental, deprecated, stub}。
    - 两类都满足：`status=stub` 时 `steps:` 必须为空（与 §4.1 stub 语义一致）。
 6. **id 前缀与 category 匹配**：`bug_regression` 必须 `lg-bug-*`；`extension` 必须 `lg-ext-*`。前缀错 = skill bug，立即修正。
-7. **v0.9：destructive 一致性**：steps 里出现 `gpstop` / `gpstart` / `gpconfig -c shared_preload_libraries` / `restart_db` step / `rm -rf .../data` 任一关键词，则 `destructive` 必须为 `true`。漏标 = case 在 suite 中前置跑，污染后续。
-8. **v0.9：setup/teardown 幂等守卫**：grep 每条 SQL，`DROP` 必带 `IF EXISTS`、`CREATE TABLE` / `CREATE EXTENSION` 必带 `IF NOT EXISTS` 或包 `DO $$ BEGIN IF NOT EXISTS ... END $$`；缺一律自动加上。
-9. **v0.9：Jinja typo 检查**：所有 `{{ external.<svc>.<field> }}` 的 `<svc>` 必须出现在 case 的 `external_deps` 里；不在则 skill 静默修正（把缺的服务名加进 external_deps）或反问用户"这是 typo 还是新依赖？"。
-10. **v0.9：远端 cli step profile.d 显式 source**：所有带 `host: '{{ external.* }}'` 的 cli step，cmd 开头**必须**有 `[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true` 这种模式；缺则插入（按 svc 名推测 `<x>` 是 hadoop / hive / oracle / mysql / kafka 等）。
-11. **v0.9：服务端配置文件用追加 + grep guard**：cli step 里 `cat > $DD/gphdfs.conf` 这种**覆盖写**模式 → 强制改成 `cat >> + grep -q '^<key>:' guard` 模式（preflight Run 112 教训）。
-12. **v1.8：non-tx-safe DDL 必须走 psql -c**（design.md §4.1.2，M4a-2 BUG 9.11 实战暴露）：steps / setup / teardown 里出现 `VACUUM` / `VACUUM FULL` / 顶层裸跑的 `ANALYZE` / `CREATE DATABASE` / `DROP DATABASE` / `REINDEX CONCURRENTLY` / `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` / `CREATE TABLESPACE` / `DROP TABLESPACE` / `ALTER SYSTEM` / `CLUSTER` 任一关键词时，**绝禁** `kind: sql` 走 psycopg，**必须**改写为 `kind: shell` + `cmd: su - gpadmin -c "psql -c '<DDL>'"`（如果 setup 是 list[str] 字符串，写成 `su - gpadmin -c "psql -c '<DDL>'"` 字符串项，case_normalizer 自动识别 `psql ` 前缀转 shell driver）。理由：sql_driver post-M4a-2 已移除 autocommit 分支；non-tx-safe DDL 走 psycopg 必报 PG 错或撞 AsyncConnection autocommit 状态机怪圈。
-13. **v1.8（M4a-2 BUG 9.11 暴露；v1.9 软化）：跨 driver 数据可见性**：当主 `steps:` 含 `kind: shell` step（特别 `psql -c` 形式），且某前序 `kind: sql` step（或 setup）创建了持久化 schema（CREATE TABLE / INSERT 等需被后续 shell step 看见的数据）时——
-    - **v1.9 (PR #80) 之后**：sql_driver 在每个 `kind: sql` step 末尾自动 `await conn.commit()`，所以前序 `kind: sql` 的 CREATE TABLE / INSERT 对后续独立 psql -c 子进程**自动可见**。不强制改 setup 为 psql -c。
-    - **保守可选**：若不确定 sql_driver commit 语义（或 case 跑在老版本 sql_driver 上），把 setup 改成 `kind: shell + cmd: su - gpadmin -c "psql -c '...'"` 仍是安全选择（每次独立连接 + 隐式 commit；与 sql 长连接 commit 等效）。lg-bug-0008 v1 用全 psql -c，v2 (PR #80 user 决策) 改回 kind: sql + 依赖 sql_driver commit；两种写法都通 Try gate。
-    - **何时仍必须 psql -c**：cross-driver 情况下，**non-tx-safe DDL**（#12 列的关键词集合）依然必须 psql -c（这是 #12 的硬约束，与 #13 无关）；仅 tx-safe schema 操作可以 kind: sql。
+7. **destructive 一致性**：steps 里出现 `gpstop` / `gpstart` / `gpconfig -c shared_preload_libraries` / `restart_db` step / `rm -rf .../data` 任一关键词，则 `destructive` 必须为 `true`。漏标 = case 在 suite 中前置跑，污染后续。
+8. **Jinja typo 检查**：所有 `{{ external.<svc>.<field> }}` 的 `<svc>` 必须出现在 case 的 `external_deps` 里；不在则 skill 静默修正（把缺的服务名加进 external_deps）或反问用户"这是 typo 还是新依赖？"。
+9. **远端 cli step profile.d 显式 source**：所有带 `host: '{{ external.* }}'` 的 cli step，cmd 开头**必须**有 `[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true` 这种模式；缺则插入（按 svc 名推测 `<x>` 是 hadoop / hive / oracle / mysql / kafka 等）。
+10. **服务端配置文件用追加 + grep guard**：cli step 里 `cat > $DD/gphdfs.conf` 这种**覆盖写**模式 → 强制改成 `cat >> + grep -q '^<key>:' guard` 模式（preflight Run 112 教训）。
+11. **non-tx-safe DDL 必须走 psql -c**（design.md §4.1.2，M4a-2 BUG 9.11 实战暴露）：steps / setup / teardown 里出现 `VACUUM` / `VACUUM FULL` / 顶层裸跑的 `ANALYZE` / `CREATE DATABASE` / `DROP DATABASE` / `REINDEX CONCURRENTLY` / `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY` / `CREATE TABLESPACE` / `DROP TABLESPACE` / `ALTER SYSTEM` / `CLUSTER` 任一关键词时，**绝禁** `kind: sql` 走 psycopg，**必须**改写为 `kind: shell` + `cmd: su - gpadmin -c "psql -c '<DDL>'"`（如果 setup 是 list[str] 字符串，写成 `su - gpadmin -c "psql -c '<DDL>'"` 字符串项，case_normalizer 自动识别 `psql ` 前缀转 shell driver）。理由：sql_driver 已移除 autocommit 分支；non-tx-safe DDL 走 psycopg 必报 PG 错或撞 AsyncConnection autocommit 状态机怪圈。
+12. **跨 driver 数据可见性**：当主 `steps:` 含 `kind: shell` step（特别 `psql -c` 形式），且某前序 `kind: sql` step（或 setup）创建了持久化 schema（CREATE TABLE / INSERT 等需被后续 shell step 看见的数据）时——
+    - **当前实现**：sql_driver 在每个 `kind: sql` step 末尾自动 `await conn.commit()`，所以前序 `kind: sql` 的 CREATE TABLE / INSERT 对后续独立 psql -c 子进程**自动可见**。不强制改 setup 为 psql -c。
+    - **保守可选**：若不确定 sql_driver commit 语义（或 case 跑在老版本 sql_driver 上），把 setup 改成 `kind: shell + cmd: su - gpadmin -c "psql -c '...'"` 仍是安全选择（每次独立连接 + 隐式 commit；与 sql 长连接 commit 等效）。lg-bug-0008 用 kind: sql + 依赖 sql_driver commit 通 Try gate。
+    - **何时仍必须 psql -c**：cross-driver 情况下，**non-tx-safe DDL**（#11 列的关键词集合）依然必须 psql -c（这是 #11 的硬约束，与 #12 无关）；仅 tx-safe schema 操作可以 kind: sql。
 
 **任一项未过 → 修正后重试，不打印 BEGIN/END。**
 
@@ -390,19 +388,25 @@ steps:
 teardown:
   - sql: |
       DROP TABLE IF EXISTS vectors_demo;
-      DROP EXTENSION IF EXISTS pgvector;
 
-created_by: skill:add-test-case
+created_by: chenqiang
 created_at: "2026-05-24"
 notes: |
   pgvector 的 IVFFlat 索引是最常见的近似相似度搜索实现。本 case 验证 lightning 环境下
   从扩展安装、向量数据类型、索引创建到查询执行的完整流程。
-  
+
   关键点：
   - IVFFlat 是 nearest neighbor search 的快速索引（HNSW 是另一类）
   - lists 参数影响精度 vs 性能权衡；通常 lists = sqrt(rows/probes)
   - 必须指定 operator class (vector_l2_ops / vector_ip_ops / vector_cosine_ops)
   - EXPLAIN ANALYZE 确认使用了索引，否则可能走全表扫描
+
+  **teardown 不 DROP EXTENSION pgvector**：extension 是**共享资源**，case 跑完不应
+  卸载——其他 case / 业务可能依赖；`DROP EXTENSION ... CASCADE` 还会牵连 schema
+  中其他用了 `vector` 列的表。通用规则：**case teardown 只清自己 setup 时建的
+  TABLE / SCHEMA / FUNCTION**，**不**碰 EXTENSION（pgvector / pg_partman /
+  plpython3u / anon / postgis 等同理）。例外：destructive=true 的 case 显式测试
+  "加载 + 卸载"全周期时才 DROP EXTENSION。
 ─── END YAML ───
 
 下一步：
