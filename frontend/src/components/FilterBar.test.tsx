@@ -179,4 +179,18 @@ describe('FilterBar (M5-4)', () => {
     fireEvent.change(input, { target: { value: 'hashjoin' } });
     expect(setFilter).toHaveBeenCalledWith('q', 'hashjoin');
   });
+
+  it('uses default placeholder "Search id / title / tags…" when qPlaceholder omitted', async () => {
+    renderBar();
+    const input = screen.getByTestId('filter-q') as HTMLInputElement;
+    expect(input.placeholder).toBe('Search id / title / tags…');
+  });
+
+  it('honors qPlaceholder prop override (RunsPage shape)', async () => {
+    renderBar({
+      qPlaceholder: 'Search id / status / version / triggered_by…',
+    });
+    const input = screen.getByTestId('filter-q') as HTMLInputElement;
+    expect(input.placeholder).toBe('Search id / status / version / triggered_by…');
+  });
 });
