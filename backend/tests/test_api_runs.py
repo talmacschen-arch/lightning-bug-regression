@@ -637,6 +637,63 @@ def test_execute_run_injects_external_context_from_yaml(
     engine.dispose()
 
 
+def test_execute_run_passes_skip_list_to_orchestrator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """M6-6 dogfood regression — _execute_run must load case_skip_list
+    from DB and pass to orchestrator.run_suite. Without this, the M6-4
+    admin endpoints would land but adding a skip entry wouldn't actually
+    affect runs (which is what happened in the live dogfood)."""
+    from app.api import runs as runs_api
+    from app.runner.orchestrator import SuiteSummary
+
+    captured: dict[str, Any] = {}
+
+    async def fake_run_suite(cases, *, skip_list=None, **kwargs):
+        captured["skip_list"] = skip_list
+        return SuiteSummary(total=0, passed=0, failed=0, errored=0, skipped=0)
+
+    monkeypatch.setattr(runs_api.orchestrator, "run_suite", fake_run_suite)
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(
+        bind=engine, autoflush=False, expire_on_commit=False, class_=Session
+    )
+    monkeypatch.setattr(sqlite_store, "_engine", engine, raising=False)
+    monkeypatch.setattr(sqlite_store, "_SessionLocal", SessionLocal, raising=False)
+
+    with SessionLocal() as sess:
+        # Seed one skip-list entry
+        sqlite_store.add_skip_list_entry(sess, case_id="lg-bug-flaky-X", reason="intermittent")
+        sess.commit()
+        run = sqlite_store.create_run(sess, started_at=datetime.utcnow())
+        run_id = run.id
+
+    import asyncio
+
+    asyncio.run(
+        runs_api._execute_run(
+            run_id=run_id,
+            cases=[{"id": "anything"}],
+            artifacts_root=tmp_path / "artifacts",
+            jinja_context={},
+            dut_hosts=set(),
+        )
+    )
+
+    skip_list_arg = captured.get("skip_list")
+    assert skip_list_arg is not None and len(skip_list_arg) == 1
+    assert skip_list_arg[0]["case_id"] == "lg-bug-flaky-X"
+    assert skip_list_arg[0]["reason"] == "intermittent"
+    engine.dispose()
+
+
 def test_execute_run_external_override_via_user_context_wins(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
