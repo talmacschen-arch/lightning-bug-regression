@@ -75,8 +75,8 @@ const fakeRunDone = {
   target_version: '5.1.0',
   triggered_by: null,
   case_results: [
-    { case_id: 'bug-001', status: 'pass', duration_ms: 1000, skip_reason: null, expect_detail: null, artifacts_path: null },
-    { case_id: 'bug-002', status: 'pass', duration_ms: 1100, skip_reason: null, expect_detail: null, artifacts_path: null },
+    { case_id: 'bug-001', status: 'pass', duration_ms: 1000, skip_reason: null, expect_detail: null, artifacts_path: '/tmp/art/99/bug-001' },
+    { case_id: 'bug-002', status: 'pass', duration_ms: 1100, skip_reason: null, expect_detail: null, artifacts_path: '/tmp/art/99/bug-002' },
     { case_id: 'bug-003', status: 'pass', duration_ms: 1050, skip_reason: null, expect_detail: null, artifacts_path: null },
   ],
 };
@@ -212,5 +212,91 @@ describe('RunDetailPage', () => {
       expect(screen.getByTestId('run-detail-error')).toBeInTheDocument();
     });
     expect(esInstances.length).toBe(0);
+  });
+
+  // ---- M6-2 artifacts -----------------------------------------------------
+
+  it('artifacts toggle is hidden for cases without artifacts_path', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunDone));
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-case-row-bug-003')).toBeInTheDocument();
+    });
+    // bug-001 + bug-002 have artifacts_path; bug-003 doesn't
+    expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    expect(screen.getByTestId('artifacts-toggle-bug-002')).toBeInTheDocument();
+    expect(screen.queryByTestId('artifacts-toggle-bug-003')).toBeNull();
+  });
+
+  it('clicking artifacts toggle lazy-fetches + shows file list', async () => {
+    // First call: initial GET for run. Second call: artifacts list for bug-001.
+    const FAKE_ARTIFACTS = [
+      { filename: 'step-00-setup.stdout.txt', size_bytes: 1024, kind: 'stdout', step_idx: 0, step_id: 'setup' },
+      { filename: 'step-01-main.stderr.txt', size_bytes: 32, kind: 'stderr', step_idx: 1, step_id: 'main' },
+      { filename: 'summary.json', size_bytes: 50, kind: 'other', step_idx: null, step_id: null },
+    ];
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone))
+      .mockResolvedValueOnce(mockJsonResponse(FAKE_ARTIFACTS));
+
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+
+    // Pre-toggle: no panel
+    expect(screen.queryByTestId('artifacts-panel-bug-001')).toBeNull();
+
+    act(() => {
+      screen.getByTestId('artifacts-toggle-bug-001').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-list-bug-001')).toBeInTheDocument();
+    });
+
+    // All 3 files render
+    expect(screen.getByTestId('artifact-item-bug-001-step-00-setup.stdout.txt')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-item-bug-001-step-01-main.stderr.txt')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-item-bug-001-summary.json')).toBeInTheDocument();
+
+    // Download links point to backend endpoint
+    const dl = screen.getByTestId('artifact-download-bug-001-step-00-setup.stdout.txt');
+    expect(dl.tagName).toBe('A');
+    expect(dl.getAttribute('href')).toContain('/runs/99/cases/bug-001/artifacts/step-00-setup.stdout.txt');
+    expect(dl.getAttribute('download')).toBe('step-00-setup.stdout.txt');
+  });
+
+  it('empty artifacts list renders the empty hint', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone))
+      .mockResolvedValueOnce(mockJsonResponse([]));
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+    act(() => screen.getByTestId('artifacts-toggle-bug-001').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-empty-bug-001')).toBeInTheDocument();
+    });
+  });
+
+  it('artifacts fetch error shows inline error', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone))
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: 'Server Error',
+        json: () => Promise.resolve({}),
+      });
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+    act(() => screen.getByTestId('artifacts-toggle-bug-001').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-error-bug-001')).toBeInTheDocument();
+    });
   });
 });
