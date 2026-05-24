@@ -224,6 +224,29 @@ async def _execute_run(
         else:
             merged_external = external_ctx
         jinja_context = {**jinja_context, "external": merged_external}
+
+    # M6-6 wiring fix: load case_skip_list from DB and pass to orchestrator.
+    # The M6-4 PR added CRUD endpoints for the table but the runner side
+    # was never wired — discovered during dogfood when adding a skip via
+    # /admin/skip-list did not actually skip the case. orchestrator's
+    # run_suite already supports skip_list param; just plumb it in.
+    try:
+        with sqlite_store.get_session() as sess:
+            skip_rows = sqlite_store.get_skip_list(sess)
+            skip_list = [
+                {
+                    "case_id": r.case_id,
+                    "applies_to_version": r.applies_to_version,
+                    "reason": r.reason,
+                    "until_date": r.until_date,
+                    "upstream_issue": r.upstream_issue,
+                }
+                for r in skip_rows
+            ]
+    except Exception as e:  # noqa: BLE001 — startup-style, log + continue
+        logger.warning("could not load skip_list, proceeding without: %s", e)
+        skip_list = []
+
     try:
         summary = await orchestrator.run_suite(
             cases,
@@ -233,6 +256,7 @@ async def _execute_run(
             dut_hosts=dut_hosts,
             session_factory=sqlite_store.get_session,
             sql_pool=sql_pool,
+            skip_list=skip_list,
         )
         with sqlite_store.get_session() as sess:
             sqlite_store.finish_run(
