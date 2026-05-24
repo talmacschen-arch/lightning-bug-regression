@@ -57,6 +57,9 @@
 | v1.4 | 2026-05-23 ~ 2026-05-24 早 | pm-designer (Claude) | **M1 后端 MVP 完整交付 + spec 第一轮硬化。** v1.3 末 (h) 后整盘 M1 chain 收尾。(a) **M1 main sprint 11 + 1 prep item**（PR #2~#10 / #12 / #13 / #14~#16）—— `pyproject.toml` deps + runner shared types (`StepResult/StepStatus/StepError`) + `yaml_loader` + `sqlite_store` + 19 expect-clause `assertions.py` + `sql_driver`（psycopg3 + NOTICE 捕获 + statement_timeout 双保险 + autocommit 路径处理 non-tx-safe DDL）+ `shell_driver`（asyncio subprocess + R9 异常折叠 + Phase 2 kill+wait fix）+ `log_grep_driver` + `jinja_render`（StrictUndefined + decide_ssh_user）+ `orchestrator`（顺序 + on: session 并发 + teardown best-effort + destructive 排末 + cluster_crashed 检测）+ FastAPI app（POST/GET /runs / GET /cases / GET /admin/categories + OpenAPI 自动生成）+ M1 dogfood CLI（`scripts/run_m1_dogfood.py` 加 inline normalizer 后真集群跑 5/5 PASS）。foreman 单 session 干完，**首次 hard rule 8 final JSON 正常返**（后面 R25 出现）。(b) **M1-followup 3 dogfood 修**（PR #17/#18/#19）—— F-1 yaml_loader §4.1 align / F-2 plan_text + stdout fallback for plan_contains / F-3 sql_driver `_NON_TX_DDL_RE` + autocommit 安全包装。**§4.1.2 psql -c 约定**（DDL 不能 tx 时 YAML 写 `psql -c '<DDL>'` 走 shell driver，非 try regex 穷举）落地。foreman 用 sonnet 一次例外（用户授权，opus 临时缺额）。(c) **opus review 10 finding 分 P0/P1/P2 分批清**：P0 3 项（R-1 杜撰 status `closed`、R-2 杜撰 4 个 category + 漏 `extension`、R-3 漏 `restart_db` driver）—— PR #20/#21/#22 + CategoryMeta 重构 yaml_loader §4.5 align；P1 4 项（R-4 dead code、R-5 silent list[dict]、R-6 alias 优先级反、R-7 autocommit 分支无 timeout）—— PR #23/#24；P2 3 项（R-8 `_NON_TX_DDL_RE` 不完整 + docstring 标已知漏覆盖 + 指 §4.1.2、R-9 magic string YAML bool tag 抽常量、R-10 autocommit 路径 rollback no-op 加 `if not conn.autocommit` 守卫）—— PR #25。每轮后 dogfood 5/5 PASS 维持不退化。**§14 R4b "category 不硬编码"实战首次 enforce**（opus review 抓到 sonnet 杜撰）。(d) **CI gate 架构 phase 3 完成**：M1 9 个 PR 全部"先合后跑 CI"暴露 §14 R22；branch protection 加 required = `gate`（修正为 job name 不是 `ci-gate / gate`，§14 R23）；repo 切 public 解锁 rulesets。(e) **§14 R24/R25 spec 硬化**：R24 = specialist agent commit + push 不开 PR / 不跑本地 ci-gate 等价（M1 / M1-followup / M1-cleanup 反复栽 `ruff format --check`），fix = `.claude/agents/backend-fixer.md` step 1 明列本地 ci-gate triplet（`ruff check + ruff format --check + pytest -q`）+ 6→7-step PR contract（step 0 加 `git checkout -b`）。R25 = foreman session 不返 final JSON 就 exit，spec 硬化 5 min 后下一 session 仍犯（连续 3 次）。**用户决策 option A 包装层**落地 `scripts/dispatch-foreman.sh`：调度前 snapshot SHA + ISO ts → 跑 foreman 捕 stdout 到 `docs/foreman-runs/<sprint>-<ts>.log` → 调度后 gh / git 独立 reconstruct → 写 reconciled JSON 到 `.json` 含 `r25_violation: bool` + `verified_merged_prs_in_window` + `new_commits_on_main_in_window` + `foreman_self_report`。caller 直接 parse wrapper JSON，foreman 自律失败不影响。**3 次 R25 后 wrapper 实战零事故**。bash heredoc gotcha 教训：unquoted `<<PYEOF` 让 bash 解析 Python 里的 backtick 为命令替换，必须用 `<<'PYEOF'` quoted + export DF_* env 传 context。(f) **design.md §13.4 M1 实战回顾 + §13.5 M2 子步骤计划补完**（PR #26）。(g) **5 例 BUG dogfood 通过 CLI 路径**（M1 dogfood script，`scripts/run_m1_dogfood.py`）—— 5/5 PASS 但走的是 CLI normalizer 路径，API 路径分叉问题埋伏到 M2 dogfood 才暴露（见 v1.5 (f)）。(h) **整盘 M1 chain 收尾**：25 PR merged + 3 direct commit + ci-gate 全绿 + dogfood 5/5 PASS 维持过 4 个 sprint refactor。 |
 | v1.5 | 2026-05-24 | pm-designer (Claude) | **M2 前端 MVP 完整交付 + dual-code-path 暴露并修复 + §14 R26/R27 入档。** 改动量按 v0.5 起约定本应至少 +0.1，前期 (v1.3 + v1.4) 攒成"catch-all 行"是反 pattern，本行起恢复"一次重大交付 = +0.1"节奏。M2 主体（10 子步骤 / 5 sprint）：(a) **M2-1 ~ M2-4 横向 infra**（PR #28/#33/#32/#31）—— Vite + React + TS strict skeleton / Tailwind + shadcn/ui / openapi-typescript codegen + client.ts / ErrorBoundary + react-router layout；ci-gate frontend block 首次触发，npm + tsc + lint + vitest 全绿。(b) **M2-5 ~ M2-8 四页面**（PR #37/#34/#35—M2-7 specialist 顺手把 M2-8 RunsPage 也带做）—— `/cases` 按 `GET /admin/categories` 拉 tab（**§14 R4b 不硬编码 bug_regression/extension**，所有 category 渲染拉 API）+ status 徽章 + skip_list 标记；`/cases/:id` YAML 高亮 + 4-tuple 叙事 Card；`/runs/new` 多选 checkbox + 全选反选 + target_version + POST /runs + **§6.4 R2 Playwright contract test**（`page.route(...) + postDataJSON()` 断言 body shape）+ 409 模态；`/runs` 按 started_at desc 列 + load more；`/runs/:id` 3s polling 直到 terminal。(c) **M2-9 Playwright E2E**（PR #39）—— `e2e/case-to-run-flow.spec.ts` 完整 happy path（`/cases` → 选 tab → `/runs/new` → 全选 → 提交 → `/runs/99` → 看 PASS）+ `_helpers.ts` 抽 `chromiumCanLaunch()` (§14 R8 declaration-level skip 正确范式)；ci-gate.yml 加 `npx playwright install --with-deps chromium + npx playwright test` step，实际跑过且绿。(d) **§13.4 M1 实战回顾 + §13.5 M2 子步骤计划补完**（PR #26）—— design.md 把 M1 4 sprint chain 25 PR + 3 direct commit 时间线、deliverable file 级 map、opus review 10 finding P0/P1/P2 三级 fix 对照、5 例 dogfood 5/5 PASS 终态、§14 R 实战教训沉淀全部正式入档；M2 10 子步骤 + 依赖图 + §14 R 预付清单（R2/R4b/R6/R7/R8/R24/R25）+ 完成定义 + 不做的事一次性写完。(e) **M2-10 dogfood 浏览器手动验**（人类驱动，2026-05-24 04:50-05:10）—— 笔记本 ssh -L 5173+8000 → 浏览器 `http://localhost:5173/`，按 §13.5 完成定义 6 路径走查全 PASS（`/cases` 5 例 BUG + 空 extension tab / case detail YAML+4tuple / `/runs/new` 表单全选反选 / `/runs` 空态 / POST 跳转 / polling 工作），报告 `docs/m2-dogfood-2026-05-24-0535.md`。(f) **dual-code-path divergence 连续暴露 2 次** —— M2-10 提交真 run 时所有 case 报 `'str' object has no attribute 'get'` 0ms 假性 error。挖出 root cause = `_load_cases_from_disk` 漏 `normalize_case` 一步（**M1 dogfood script 跑 5/5 PASS 是因为走 CLI 路径有 inline normalizer，API 路径绕过整个 normalizer**）。**PR #42** 抽 `backend/app/runner/case_normalizer.py` 共享模块，两条路径强制 import 同一份。修完再跑 → duration_ms=1 不再 0ms，但仍 error。第二次挖出 `_execute_run` 调 `run_suite(...)` 漏 `sql_pool=` 参数，orchestrator 显式吐 "sql step requires sql_pool to be configured"。**PR #43** 抽 `backend/app/runner/dsn_builder.py` 共享 + `build_dsn_map / dsn_map_from_env`（用户偏 libpq env 风格 PGHOST/PGPORT/PGUSER/PGDATABASE，默认 127.0.0.1/gpadmin/postgres 对齐 §3.1）+ API path `SqlSessionPool(dsn_map_from_env(cases))` + `close_all()` finally。**真集群 5/5 PASS**：synxdb-0001 上 POST /runs run #6 → 全 5 例 pass，duration 104~5467ms 真实 SQL 跑过。**§14 R26 (dual-code-path) + §14 R27 (relative-path env defaults，相关：`DEFAULT_CASES_ROOT = Path("cases")` + `DEFAULT_DATABASE_URL` 两个相对路径互斥 cwd，dogfood 30 min trial-and-error 才搞通) 入档**（PR #44）—— 严重级，未来 reviewer 在 PR review 时按 R26/R27 cross-reference。(g) **5 例 BUG 实测 upstream-fixed 客观证据**：5 例 status 全 `open` → API 跑 5/5 PASS = lg-bug-0001 hashjoin 选对小表 / 0002 unnest 不 crash / 0003 ANALYZE 后无 NOTICE / 0004 CTAS rowcount>0 / 0005 LC_CTYPE upper 不报错。**M5 review 阶段统改 `status: fixed`**（保留客观证据链）。 |
 | v1.6 | 2026-05-24 | pm-designer (Claude) | **§13.6 M2 实战回顾 + §13.7 M3a 计划 + §13.8 M3b 计划入档（M3 sprint kick-off prep）**。本行起恢复 "每个 milestone 收尾 = 主动 +0.1 写新行" 节奏（PR #45 retroactive bump 后的第一个新交付）。(a) **§13.6 M2 实战回顾**：5 sprint round + 2 followup hotfix + 2 docs PR 时间线（PR #26~#45 横跨 20 个），文件级 deliverable map（frontend/* 全树 + backend 后期加 case_normalizer/dsn_builder + docs），4 条非 R 级 dispatch 教训（同期 parallel PR 改共享文件冲突 / specialist scope creep / specialist deletion blindness on stale base / ci-gate trigger race），5 例 BUG 状态变更证据表（M2 API dogfood 加进 CLI dogfood 之上成双证据链）。(b) **§13.7 M3a Web 录入计划**：10 个子步骤（M3a-1~M3a-3 backend endpoints `/cases/validate` `/cases/try` `/cases/submit` 三路并行 → M3a-4 editor page skeleton → M3a-5/6/7 双入口 + 三段闸门状态机 → M3a-8 contract test (§6.4 R2) + M3a-9 polling Try → M3a-10 dogfood），§14 R 预付清单（R2/R6/R7/R26/R27），依赖图，完成定义，明示不做（LLM 真接入 stub / monaco 推后 / 闸门绕过永不做）。**关键约束**：M3a-1/2 必须复用 `yaml_loader + case_normalizer` 模块（§14 R26）；M3a-3 `git push` cwd 显式（§14 R27）；M3a-5 LLM 入口先做 stub 不阻塞主流程。(c) **§13.8 M3b Skill 录入计划**：10 个子步骤（M3b-1 `/admin/step-kinds` + M3b-2 cases?q= 查重增强 backend → M3b-3 SKILL.md 骨架 + 6 个铁律 → M3b-4 6 题对齐（§14 R4b 不硬编码 category）→ M3b-5 通用追问 6 类 + M3b-6 extension 追问 13 类 → M3b-7 canonical 顺序 + 11 项 cross-check → M3b-8 输出格式 + footer → M3b-9 skill 单测 → M3b-10 dogfood with M3a 闭环）。skill 严格 generator-only（§5.5.1 铁律）：禁止 Write / git / submit，所有副作用走 frontend；模型选 opus（实战漂移少）。M3a/M3b 完成后 §13.x 全配齐，可开 M4a 飞书 BUG 批量补录与 M4b extension 首批 3~5 例。 |
+| v1.10 | 2026-05-24 | pm-designer (Claude) | **§13.9 M4 实战回顾入档 + external_systems category 落地 + §12 Roadmap 重构 (M5 = 前端 UX / M6 = 运行体验 / M4c = external_systems 首批 case) + §14 R28 入档 + skill 硬化 PR #85/#86/#89 整合。** 用户决策 2026-05-24 下午："前端页面使用不方便、没有统一面板" → M5 原 catch-all (SSE + Admin UI + diff + 看板按 category) 拆为 **M5 前端 UX 统一面板 (单列 milestone，先做)** + **M6 运行体验深化 (SSE + Admin UI + history diff + artifacts download + external_deps runtime injection)**；**M4c external_systems 首批 case** 单独列，可与 M5 parallel (依赖外部环境就绪节奏)。(a) **§13.9 M4 实战回顾**：M4a 3 例飞书 BUG（lg-bug-0007 §9.7 orca-sort-pathkey / 0008 §9.11 pax-toast-vacuum-analyze-crash V1+V2 / 0009 §9.12 union-all-const-distributed-row-order）+ sql_driver chain refactor (PR #73 autocommit→set_autocommit / #75 删 autocommit 整支 / #80 commit-after-step) + M4b 5 例 extension（#68 pgvector / #82 pg_partman / #83 anon / #84 plpython3u+numpy / #87 postgis）+ §14 R28 候选（intermittent BUG sampling ≥10 rounds，lg-bug-0009 暴露：3 rounds 假阳性 PASS / 10 rounds 真 fail）+ skill 硬化 3 PR (#85 model pin claude-opus-4-7 + lint 拦 sonnet / #86 opus self-review 7 spec fixes / #89 5 行追问从 extension 组迁 external_systems 组)。(b) **external_systems category 落地** (PR #88，详 §13.10)：第三类 case，覆盖外部组件依赖 (datalake_fdw / hive_connector / PXF / zombodb)；id_prefix=`lg-xs-`、dir=`cases/external-systems/`、status_whitelist=[stable, awaiting_env, deprecated, stub]、default=awaiting_env、display_order=30；§4.5 plug-and-play 设计实战印证（业务代码零行改动，纯 Alembic seed migration + 空目录 + 1 行 skill prefix）。(c) **§14 R28 intermittent BUG 采样不足**：低重复次数 (≤3 rounds) 跑随机性 BUG 复现脚本 statistically 看不到 fail；fix = ≥10 rounds，必要时 binary search 找稳定触发的最低 N。lg-bug-0009 status 因此从 fixed 反转回 open（**铁律 1 "失败要说出来" 实战，user 主动喊 "3 次会误判"**）。(d) **§12 Roadmap 重构** (§13.10/11/12 三个子节细化)：M4 done → M4c (1~3 例 external_systems case 蓝图) ∥ M5 (前端 UX 统一面板 6 子步骤) → M6 (运行体验深化 6 子步骤)。Q33 落账。 |
+| v1.9 | 2026-05-24 | pm-designer (Claude) | **M4b extension 首批 5 例完成 + skill 硬化 3 PR 链** (retroactively bumped 2026-05-24 PM)。M4b：#68 lg-ext-pgvector-ivfflat-basic (M3b dogfood 副产) + #82 lg-ext-pg-partman-range-month-retention (RANGE 分区 + retention) + #83 lg-ext-anon-dynamic-masking-role-based (TDM GUC + SECURITY LABEL 跨 db) + #84 lg-ext-plpython3u-numpy-array-distance-matmul (PL/Python3u + numpy 1.25.2 三典型) + #87 lg-ext-postgis-st-dwithin-gist-index (PostGIS 2.5.4 USE_GEOS+USE_PROJ+USE_STATS 全栈)。**§12 M4b 首批 3~5 例底线达成上限**。skill 硬化：#85 model pin `claude-opus-4-7` (CI lint 收紧到精确版本拦 sonnet/haiku/generic-opus) + #86 opus self-review 7 spec fixes (/admin/settings 404 删 grounding / sessions list→mapping / 5题→6题统一 / cross-check 13→12 合并 / DROP EXTENSION 反例 / created_by 修对 / "Fetch 三个 vs 四个"端点数同步)；memory `feedback_model_override_2026-05-24.md` 拆 §A (agent 一次性 override) + §B (skill 永久钉 opus 4.7)。Q32 落账。 |
+| v1.8 | 2026-05-24 | pm-designer (Claude) | **§4.1.2 psql -c 约定硬化 + default DB gpadmin + sql_driver autocommit 分支移除 + M4a 飞书 BUG 3 例首录** (retroactively bumped 2026-05-24 PM)。M4a：#70 lg-bug-0007 §9.7 orca-sort-pathkey (fixed) + #74/#80 lg-bug-0008 §9.11 pax-toast-vacuum-analyze-crash V1+V2 + #79 lg-bug-0009 §9.12 union-all-const-distributed-row-order (open，10 轮 intermittent)。**§4.1.2 psql -c convention** (memory `section_4_1_2_psql_c_convention.md`)：non-tx-safe DDL (VACUUM / 顶层 ANALYZE / CREATE DATABASE / REINDEX CONCURRENTLY / ALTER SYSTEM / CLUSTER 等) **绝禁** `kind: sql` 走 psycopg，必须 `kind: shell + cmd: psql -c '...'`。**sql_driver chain refactor**：PR #73 `conn.autocommit = True` → `await conn.set_autocommit(True)`（AsyncConnection autocommit read-only 修法 1）→ PR #75 整支 autocommit 分支删除（强制 YAML 作者按 §4.1.2 走 psql -c，sql_driver 简化）→ PR #80 sql_driver 每个 kind: sql step 末尾自动 `conn.commit()`（跨 driver visibility：前序 kind: sql 的 CREATE TABLE/INSERT 对后续独立 psql -c 子进程自动可见）。**default DB = gpadmin** (memory `default_database_gpadmin.md`)：`dsn_builder._DEFAULT_PGDATABASE` 从 `postgres` 改 `gpadmin`（Synxdb owner-home db）；旧 5 例 BUG case 显式写 `database: postgres` 不受影响。lg-bug-0006-m3a-dogfood-smoke2 删 (PR #81，与 smoke.yaml 重复)。Q32 落账。 |
 | v1.7 | 2026-05-24 | pm-designer (Claude) | **M3a sprint 完整收尾 + M3a-10 dogfood 4 条 spec gap follow-up 修补。** M3a 主体 (PR #49~#55, 9 子步骤) + 2 hotfix (#56 `/api` 前缀 drop, #57 extractCaseId regex 容忍 leading whitespace/BOM) + 浏览器 dogfood 2 产物 (#58 / #59 真 web flow merge) + 收尾 docs (#60)。**M3a-10 dogfood 暴露 4 spec gap，本行配套 PR 修补**：(a) **§5.5.6 canonical 标 `sessions: []` 但 yaml_loader 拒绝空 list**——loader 改为接受空 list / 空 mapping / 省略三态等价 derive default session；§5.5.6 注释更新；test `test_empty_list_sessions_is_valid` + `test_empty_mapping_sessions_is_valid` 入库。(b) **frontend regex vs backend parser 容忍度不一致**——PR #57 已修 extractCaseId 容忍 leading whitespace + BOM；**§14 R26 加轻量变体段落**：闸门顺序（validate → try → save）必须前层比后层更严，否则"早过晚挡"用户体验差。建议 follow-up：抽 "input weirdness fixture" (leading whitespace / BOM / trailing newline / mixed indent) 共享给前后端 reference test，verdict 不一致 CI fail。(c) **粘什么 ≠ 存什么 footgun**——`CaseNewPage.tsx` 加 `<pre data-testid="save-preview">` 块在主编辑器与按钮之间显示 yamlText 实际内容（leading indent / 隐形字符尽收眼底），label "📋 Save 预览（这是 cases/&lt;cat&gt;/&lt;id&gt;.yaml 真正会落盘的内容）"。(d) **uvicorn env 未文档化**（§14 R27 余波）——`README.md` 加新章节 "起本机 dev 服务（M3a `/cases/new` dogfood 用）"，列 `CASES_ROOT` / `DATABASE_URL` / `PG*` / `GH_TOKEN` / `LBR_REPO_ROOT` 5 个必需 env vars + 完整 backend + frontend 起命令模板 + 笔记本 SSH 隧道指南。 |
 
 > 迭代约定：每次重要修订 +0.1，发布前定稿为 v1.0。修订时新增一行，**简述本轮关键决策**（不要只写"修改若干处"）。讨论点在 §11 同步收敛/新增。
@@ -561,6 +564,22 @@ INSERT INTO case_categories (name, display_name, description, id_prefix, dir_pat
    'stable',
    20,
    'seed:0001');
+-- v1.10 (Alembic migration 0002, 2026-05-24): third category for cases
+-- depending on external service components (datalake_fdw / hive_connector /
+-- PXF / zombodb). Distinct from `extension` which is self-contained
+-- CREATE EXTENSION; external_systems needs the external service process
+-- + credentials + profile.d wired through before the case is runnable —
+-- hence the `awaiting_env` default status.
+INSERT INTO case_categories (name, display_name, description, id_prefix, dir_path, status_whitelist, default_status, display_order, created_by) VALUES
+  ('external_systems',
+   '外部系统集成测试',
+   '依赖外部组件（datalake_fdw / hive_connector / PXF / zombodb 等）的集成测试用例。与 extension 不同：外部服务进程必须可达 + 凭据/网络/profile.d 已就绪，case 才能跑；环境未就绪时 status 应为 awaiting_env。',
+   'lg-xs-',
+   'external-systems',
+   '["stable","awaiting_env","deprecated","stub"]',
+   'awaiting_env',
+   30,
+   'seed:0002');
 ```
 
 **消费点**（所有"知道 category 长什么样"的地方都从这张表读，不写死）：
@@ -1246,14 +1265,27 @@ lightning-bug-regression/
 
 ## 12. Roadmap / 里程碑
 
+> **v1.10 重构 (2026-05-24)**：M4 拆 M4a + M4b + **M4c** (new, external_systems 首批 case)；原 M5 "体验打磨" catch-all 拆 **M5 (前端 UX 统一面板，先做)** + **M6 (运行体验深化)**——理由：用户 2026-05-24 反馈"前端使用不方便、没有统一面板"，UX 痛点优先于 SSE/diff 等锦上添花。
+
+**已完成**：
+
 - **M0 项目骨架** ✅（design.md 定稿 + agent 配置 + skill 占位 + 仓库创建 + CI 框架）—— 完成细节见 §13.1
-- **M1 后端 MVP** ✅（load YAML / run / sql_driver + shell_driver + log_grep / SQLite + 5 张表（runs / case_results / case_skip_list / system_settings / case_categories）/ 基本 API / 5 例 dogfood 5/5 PASS）—— 完成细节 + 4 sprint chain 实战回顾见 §13.4
-- **M2 前端 MVP**（/cases（按 category 分 tab）、/runs/new、/runs/:id，能完整跑通"看 case → 触发 run → 看结果"）—— 详细子步骤计划见 §13.5
-- **M3a Web 录入**：/cases/new 双入口编辑器 + Validate/Try/Save 三段闸门 + LLM 描述路径 + `/cases/submit` PR 流程
-- **M3b Skill 录入**：`.claude/skills/add-test-case/SKILL.md` 落地（generator-only，双 category 支持）+ backend grounding 端点（`/admin/step-kinds`、`/cases?q=&category=`）
-- **M4a bug_regression 用例填充**：从飞书文档导入历史 BUG 5 例（你提供原文，优先用 skill 路径 dogfood）
-- **M4b extension 用例填充**（v0.7 新增）：首批 extension 集成测试 3~5 例（pgvector / postgis / pgcrypto / pg_hint_plan / fuzzystrmatch 中先选 3 个），用 skill 模式 D `ext:<extname>` 路径录入
-- **M5 体验打磨**：SSE 进度条、artifacts 下载、tag 筛选、运行历史 diff、Admin UI（skip_list / settings）、看板按 category 分组统计
+- **M1 后端 MVP** ✅（load YAML / run / sql_driver + shell_driver + log_grep / SQLite + 5 张表 / 基本 API / 5 例 dogfood 5/5 PASS）—— 完成细节 + 4 sprint chain 实战回顾见 §13.4
+- **M2 前端 MVP** ✅（/cases tab / /runs/new / /runs/:id 完整路径 + Playwright E2E）—— 详细 §13.5 plan / §13.6 retro
+- **M3a Web 录入** ✅（/cases/new 双入口编辑器 + Validate/Try/Save 三段闸门 + `/cases/submit` PR 流程；LLM 接入仍是 stub）—— §13.7 plan + dogfood 报告 `docs/m3a-dogfood-2026-05-24-1200.md`
+- **M3b Skill 录入** ✅（`.claude/skills/add-test-case/SKILL.md` 落地 + 2 grounding 端点 + skill lint CI）—— §13.8 plan + dogfood 报告 `docs/m3b-dogfood-2026-05-24-1340.md`
+- **M4a bug_regression 飞书 BUG 补录** ✅（3 新案 §9.7 / §9.11 / §9.12 + sql_driver chain refactor）—— 详 §13.9
+- **M4b extension 首批用例** ✅（5 例：pgvector / pg_partman / anon / plpython3u+numpy / postgis；首批 3~5 例上限达成）—— 详 §13.9
+- **M4 附加**：external_systems category 落地 (PR #88，§4.5 + §13.10) + skill 硬化 3 PR (#85/#86/#89，详 §13.9.4)
+
+**待做**（按 v1.10 决策排序）：
+
+- **M4c external_systems 首批 case**（1~3 例蓝图）—— 用户后续根据环境就绪节奏添加，case 蓝图可先写 `status: awaiting_env`；详 §13.10。可与 M5 / M6 parallel
+- **M5 前端 UX 统一面板**（6 子步骤：sidebar layout / Dashboard `/` / 跨页关联 / 全局筛选 URL 持久化 / Quick Actions / dogfood）—— 详 §13.11
+- **M6 运行体验深化**（6 子步骤：SSE 进度条 / artifacts download / history diff / Admin UI / external_deps runtime injection / dogfood）—— 详 §13.12
+
+**未来 candidate**（不进 milestone）：
+- **design.md 整体重排**（v1.10 用户反馈"零散关联翻起来烦"）：把跨章节关联设计 (e.g. external_systems 在 §4.5/§12/§13.10/§14 R4b 都有) 按主题 cluster 重排——大工程（§4-§13 互引 anchor 全要改），调并重设一个 mini-milestone 专门做；本 PR 范围内**不动现有结构**。
 
 每个里程碑结束都跑一次 smoke-runner 端到端验收（在你预先准备好的 lightning 集群上跑几个金标用例）。
 
@@ -1759,7 +1791,244 @@ M3b-9 (skill 单测) → M3b-10 (dogfood, 需 M3a 已 done)
 
 ---
 
-## 14. 风险预警与反模式（v0.5 新增）
+### 13.9 M4 实战回顾（v1.10 内追加，2026-05-24 写入）
+
+M4 实际跑了 **3 个子轨道并行**（不是顺序 sprint）：M4a 飞书 BUG 补录 / M4b extension 首批 / 附加 skill 硬化 + external_systems category 落地。共 17 PR (#68/#70/#73/#74/#75/#79/#80/#81/#82/#83/#84/#85/#86/#87/#88/#89) + 1 docs PR (本 v1.10)，跨 2 天 (2026-05-23~05-24)。
+
+#### 13.9.1 M4a 飞书 BUG 补录（3 例新 case + sql_driver chain refactor）
+
+| case | PR | 飞书 § | status |
+|---|---|---|---|
+| **lg-bug-0007-orca-sort-pathkey** | #70 | §9.7 | fixed（SynxDB-4.5.0-build130 验不复现）|
+| **lg-bug-0008-pax-toast-vacuum-analyze-crash** | #74 (V1) + #80 (V2 重构) | §9.11 | fixed |
+| **lg-bug-0009-union-all-const-distributed-row-order** | #79 | §9.12 | **open**（10 轮 intermittent fail，反转 fixed→open，铁律 1 实战）|
+
+**sql_driver chain refactor**（M4a-2 lg-bug-0008 真集群 dogfood 暴露驱动）：
+
+```
+PR #73 (修法 1)   conn.autocommit = True → await conn.set_autocommit(True)
+                  ↓ AsyncConnection autocommit 是 read-only property，赋值 = AttributeError
+PR #75 (修法 2)   整支 autocommit 分支删除 → 强制 YAML 作者按 §4.1.2 走 psql -c
+                  ↓ 后果：lg-bug-0008 setup 用 kind: sql CREATE TABLE 后，
+                          step 用 kind: shell + psql -c VACUUM 看不到 table（visibility gap）
+PR #80 (修法 3)   sql_driver 每个 kind: sql step 末尾自动 await conn.commit()
+                  ↓ 跨 driver visibility 自动恢复：前序 kind: sql CREATE TABLE 对
+                    后续独立 psql -c 子进程自动可见
+```
+
+附加：lg-bug-0008 user 决策 V1→V2 重构（"step 2 别用 psql -c"）= setup 改 sql + commit-after-step；删除 lg-bug-0006-m3a-dogfood-smoke2 (PR #81，与 smoke.yaml 重复)；SKILL.md cross-check #13 软化承认两种写法都通 Try gate。
+
+#### 13.9.2 M4b extension 首批 5 例（首批 3~5 例上限达成）
+
+| # | case | PR | 核心算子覆盖 |
+|---|---|---|---|
+| 1 | **lg-ext-pgvector-ivfflat-basic** | #68 | M3b dogfood 副产 / IVFFlat 索引 + L2 距离 + EXPLAIN Index Scan |
+| 2 | **lg-ext-pg-partman-range-month-retention** | #82 | RANGE 分区 (1 month) + retention='2 months' + run_maintenance |
+| 3 | **lg-ext-anon-dynamic-masking-role-based** | #83 | TDM GUC + SECURITY LABEL + SET ROLE 动态脱敏 / **跨 db** (defaults.database=gpadmin, main step database=testdb) |
+| 4 | **lg-ext-plpython3u-numpy-array-distance-matmul** | #84 | PL/Python3u + numpy 1.25.2 三典型 (np.sum / np.linalg.norm / np.matmul) |
+| 5 | **lg-ext-postgis-st-dwithin-gist-index** | #87 | PostGIS 2.5.4 USE_GEOS+USE_PROJ+USE_STATS 全栈 + ST_DWithin (geography 球面/geometry 平面) + GIST 索引 + EXPLAIN Index Scan |
+
+**共通约定**（M4b 5 例确立的 case 作者 best practices）：
+- 浮点断言用 `abs(actual - expected) < 1e-9` 单 bool（避 IEEE 754 末位 jitter 误判）
+- 每 step `expect.not_contains: ["ERROR", "FATAL"]` 兜底（半透明失败防御）
+- teardown **不 DROP EXTENSION**（共享资源；DROP CASCADE 牵连其他业务）—— 已写入 SKILL.md cross-check #7 example + notes
+- 跨 db case `pg_terminate_backend(...)` 强解 SqlSessionPool 长连后再 DROP DATABASE
+
+#### 13.9.3 external_systems category 落地（PR #88，§4.5 + §13.10）
+
+第三 case 门类 `external_systems`，覆盖外部组件依赖测试（datalake_fdw / hive_connector / PXF / zombodb）。**§4.5 plug-and-play 设计实战印证**：业务代码**零行改动**（cases.py `for cat in categories: cat_dir = root / cat.dir_path` 自动扫；CasesPage.tsx 数据驱动；CategoryOut.name=string 不是 enum，前端 codegen 无需 regenerate）；整条改动 = Alembic seed migration (0002) + 空目录 (`cases/external-systems/.gitkeep`) + 1 行 skill prefix + fixture 数字 2→3 = 75 行净增。
+
+5 项设计决策（PR #88 设计文档 `docs/plans/external-systems-category.md`，用户 2026-05-24 拍板）：
+- `dir_path = external-systems`（kebab，与 bug-regression 一致）
+- `id_prefix = lg-xs-`（4 char 无 startswith 冲突；`lg-ext-sys-` 与 `lg-ext-` startswith 重叠故否决）
+- `status_whitelist = [stable, awaiting_env, deprecated, stub]`，`default = awaiting_env`（外部环境未必就绪的 lifecycle）
+- `display_order = 30`
+- `external_deps` 字段**本 sprint 仅文档性质**，runtime injection (Jinja `{{ external.<svc>.host }}` 渲染 + `external/<svc>.yml` 读取 + host SSH 路由) 推 M6-5
+
+PR #89 followup：SKILL.md 5 行外部服务追问从 "Category-tagged extension 组" 迁出到新 "Category-tagged external_systems 组"（FDW / 配置文件 / Kerberos / 远端 CLI / warmup 是外部服务可用性问题，不是 PG 扩展功能问题）；lint 加 `if category == 'external_systems'` banned pattern。
+
+#### 13.9.4 skill 硬化 3 PR 链
+
+| PR | 改动 | 触发 |
+|---|---|---|
+| **#85** | SKILL.md frontmatter `model: opus` (generic) → `model: claude-opus-4-7` (精确版本) + lint 收紧到 exact-match | 用户 2026-05-24 "skill 相关坚持改用 opus 4.7，不再使用 sonnet" |
+| **#86** | opus self-review 7 spec fixes：/admin/settings 404 删 grounding / sessions list→mapping (backend 真接受的 shape) / 5题→6题三处统一 / cross-check #3+#8 合并 (13→12) / DROP EXTENSION 反例 + 通用规则 / created_by example 修对 / Fetch "三个 vs 四个"端点数同步 | 用户 "请用 opus 模型 review skill 及周边" |
+| **#89** | SKILL.md 5 行外部服务追问 extension 组 → external_systems 组 + lint 加 external_systems banned pattern | 用户 "迁 6 条追问"（实际 5 条；shared_preload_libraries 留 extension 组）|
+
+memory `feedback_model_override_2026-05-24.md` 拆 §A (agent 一次性 override) + §B (skill 永久钉 opus 4.7)。
+
+#### 13.9.5 §14 R28 候选 → 入档
+
+**R28 intermittent BUG 采样不足导致假阴性**：低重复次数 (≤3 rounds) 跑随机性 BUG 复现脚本 statistically 看不到 fail。
+
+**触发场景**：lg-bug-0009 §9.12 UNION ALL 行序错误是 intermittent 触发——首版 3 rounds repetition，本地 + dogfood + CI 全 PASS → status: fixed。用户 review 提"3 次会误判"，改 10 rounds → round 1 立刻 fail → 反转 status: open。3 rounds 看不到 = false negative。
+
+**正确做法**：
+- 默认 **≥10 rounds** 跑随机性触发的复现脚本
+- 必要时 **binary search 最低 N**：从 10 起，若一直 fail 可降到 5/3/1；从 10 起若 PASS 再加到 30/50 确认稳定
+- 在 case `notes:` 写明"intermittent 触发；N rounds 反映 X% 命中率"，提供 reviewer 决策依据
+- ⚠️ **铁律 1 实战**：低重复跑 PASS 不能写 `status: fixed`——必须先证 fail 可复现，再证 fix 后不可复现
+
+**preflight 教训来源**：lg-bug-0009 V1 PR 落 main 后 user 立刻喊回，反转 status；用户 catch 比 reviewer / CI / dogfood 都早。新加：M4a 类 PR review 时显式问"这是 intermittent 触发吗？rounds 是不是 ≥10？"
+
+#### 13.9.6 §0 changelog gap 教训
+
+v1.7 → v1.10 之间 spec 真改了 ~15 处（§4.1.2 / default DB gpadmin / sql_driver chain / SKILL.md 多次硬化），但 §0 changelog **没有 retroactive bump**——v1.5 上次主动拆 catch-all 的教训没传承。本 v1.10 一次性补 v1.8 / v1.9 / v1.10 三 row，向前对账（PR #45 之后第二次 retroactive bump）。
+
+**未来防御**：M5 / M6 计划完成定义里加一句"§0 changelog 当 sprint 收尾时主动 +0.1"，避免下次又攒成 catch-all。
+
+---
+
+### 13.10 M4c external_systems 首批 case 计划（v1.10 内追加，2026-05-24）
+
+**前置**：external_systems category 已 landed (PR #88, §4.5 + §13.9.3)，dir `cases/external-systems/` 已存在 (空)；skill external_systems 追问组已 ready (PR #89, §13.9.3)。**真跑 case 需要 M6-5 (external_deps runtime injection) 才完整**——但本 sprint 只要**case 蓝图能 Validate 通过 + status=awaiting_env 占位**即可，不强制 Try 跑通。
+
+**M4c 任务**（按用户节奏，可拖到 M5/M6 期间 parallel；非顺序 milestone）：
+
+- **M4c-1 第一例：datalake_fdw 或 hive_connector 蓝图**（推荐先 datalake_fdw，外部依赖最少）—— skill 模式 D `ext:datalake_fdw` 或模式 C 自然语言；YAML 应含 `external_deps: [hive_metastore, hdfs]` 或类似；setup 写 `CREATE EXTENSION datalake_fdw` + `CREATE SERVER` + `CREATE USER MAPPING`；steps 含 `CREATE FOREIGN TABLE` + `SELECT * FROM ... LIMIT 10`；teardown DROP 全部自建对象 + **不** DROP EXTENSION；status=awaiting_env until M6-5 真跑通
+- **M4c-2 第二例：PXF 蓝图** —— PXF 通过 java agent 连 HDFS/Hive/JDBC；case 涉及 `pxf cluster start` + `CREATE SERVER` + `pxf://...` 外表语法
+- **M4c-3 第三例：zombodb 蓝图**（ES 集成）—— `CREATE EXTENSION zombodb` + `CREATE INDEX USING zombodb` + `SELECT ... WHERE table ==> '<query>'` 全文搜索
+- **M4c-dogfood**：每例至少跑 POST /cases/validate 通过 + /cases?category=external_systems 列出；Try 跑通待 M6-5
+
+**完成定义**：
+- 1~3 例 lg-xs-* YAML 落在 `cases/external-systems/`，validate 全 ok
+- 前端 `/cases` 在 external_systems tab 列出
+- 一定数量 case `status: awaiting_env` 是正常，不视为 fail
+
+**不做的事**：
+- 不强制集群部署对应外部服务（数据湖 / Hive / ES）—— 用户自己评估是否值得部署
+- 不在本 milestone 加 runtime injection 代码 —— 那是 M6-5
+- case 内 `{{ external.<svc>.* }}` Jinja 占位**目前 runner 不渲染**，按未来语义写
+
+---
+
+### 13.11 M5 前端 UX 统一面板计划（v1.10 内追加，2026-05-24）
+
+**问题来源**：用户 2026-05-24 反馈"前端页面使用很不方便、没有统一面板"。现状（M3 之后）：
+- `Layout.tsx` 只有 3 个 top nav (Cases / New Case / Runs)，无 sidebar、无 landing、无全局状态条
+- `/` 直接 redirect `/cases`，没法俯瞰全局
+- 跨页不连贯：case detail 看不到"最近哪些 runs 跑过此 case"；run detail 看不到"case 上次结果"
+- 无全局筛选：category tab 只在 /cases；/runs 没法按 category/status/time 筛
+- 触发 run 入口单调：`/runs/new` 是 raw 多选 checkbox，缺 preset ("run all bug_regression open" / "run all extension stable")
+
+**M5 设计目标**：把 7 个孤岛页面缝合成"一套有 dashboard / 有 sidebar / 有跨页关联 / 有全局筛选"的 console。
+
+**M5 任务**（按顺序，依赖图见末段）：
+
+- **M5-1 Layout 重构**：top nav (3 链接) → **sidebar + main content area** 两栏布局
+  - sidebar 含：Logo / 主导航 (Dashboard / Cases / Runs / Admin) / 当前活跃 run 指示器（红/绿/黄 pip + tooltip "Run #N PASS 4h ago"）
+  - main content area: breadcrumb + page content + footer (env / version / 在线状态)
+  - 响应式：sidebar < 1024px 自动 collapse；移动端忽略（不是 M5 范围）
+  - 实施提示：复用 shadcn/ui 的 `Sidebar` + `Breadcrumb` 组件；React Router nested layout
+- **M5-2 Dashboard `/` 页面**（**M5 核心**）：根路径 `/` 不再 redirect `/cases`，新建 `/dashboard` 落地 + `/` redirect 到 `/dashboard`
+  - 4 个 KPI Card：Total cases by category (3 类柱图) / Recent runs (最近 7 天 daily count + pass/fail 比例) / BUG status pie (open vs fixed) / Extension stability (stable vs experimental vs awaiting_env)
+  - 1 个 "Recent activity" 列：最近 10 个 run，每行 status badge + duration + click 跳详情
+  - 1 个 "Quick actions" 横排：Run all bug_regression open / Run all extension stable / View skip_list / New case
+  - 数据源：`GET /admin/categories` + `GET /cases` + `GET /runs` (用现有 endpoint，无新 backend 需求；如果聚合慢，M5-2 可加 `GET /admin/stats` 缓存端点，但先走客户端聚合)
+- **M5-3 跨页关联**：
+  - case detail 加 "Recent runs touching this case" 区块（查 `case_results.case_id = <id>` 最近 N 个）—— 需要新 backend endpoint `GET /cases/:id/recent-runs`
+  - run detail 每行 case 加点击 → /cases/:id 跳转（已有 case_id 字段，前端加链接即可）
+  - dashboard recent activity 点 run 跳 /runs/:id
+- **M5-4 全局筛选 + URL 持久化**：
+  - 抽 `FilterBar` 组件（category multi-select / status multi-select / tag autocomplete / time range picker）
+  - `/cases` + `/runs` 都用同一份 `FilterBar`
+  - 筛选状态 → URL query string (`?category=bug_regression,extension&status=open&since=7d`)，刷新页保留；分享链接他人可见同视图
+  - 实施提示：React Router `useSearchParams` + custom hook `useFilters()`
+- **M5-5 Quick Actions** (RunNewPage 重做)：
+  - `/runs/new` 当前是 "所有 case checkbox + 全选" 太 raw
+  - 重做为：上方 **preset 卡片区** (3 个常用：Run all bug_regression open / Run all extension stable / Run all by current filter) + 下方原 case checkbox 区作为 "advanced selection"
+  - preset 卡片点击 = 自动填 case 列表 + 跳转 confirm 模态
+  - sidebar 上有 "Run by category" 快捷下拉，从任意页面都能触发
+- **M5-6 dogfood**：用户浏览器手动验整套新 UX；产物 `docs/m5-dogfood-<ts>.md` 记 6 路径走查 + 截图 + 修补 spec gap
+
+**§14 R 预付检查**：
+- **R2** Playwright contract test：新组件 (Sidebar / Dashboard / FilterBar / Preset card) 都加 `page.route()` mock 后端的 contract test
+- **R4b 不硬编码 category**：dashboard KPI Card / 全局筛选 dropdown 全 `GET /admin/categories` 拉，**禁止** 写死 `[bug_regression, extension, external_systems]`
+- **R26 dual-code-path**：M5-3 `GET /cases/:id/recent-runs` 新 endpoint 复用 `case_results` storage 模块，不再 inline SQL
+- **R27 path config**：M5-2 dashboard 数据查询路径走 `client.ts` codegen，不要 inline fetch URL
+
+**关键依赖图**:
+```
+M5-1 (Layout 重构) ──── 阻塞 ──→ M5-2 (Dashboard) ─── 阻塞 ──→ M5-6 (dogfood)
+                                       ↑                            ↑
+                                       │                            │
+                                  M5-4 (FilterBar) ─────────────────┤
+                                       ↑                            │
+                                  M5-3 (跨页关联) ───────────────────┤
+                                                                    │
+                                  M5-5 (Quick Actions) ──────────────┘
+```
+
+M5-1 是 hard prerequisite (新 layout 影响所有 page)；M5-2 / M5-3 / M5-4 / M5-5 可 parallel（不同页面 / 不同组件）；M5-6 dogfood 末尾。
+
+**完成定义**：
+- M5-1 ~ M5-5 全 [x] + ci-gate 全绿
+- M5-6 dogfood：用户浏览器手动验 → dashboard 显得出 / sidebar 工作 / 跨页跳转 OK / 全局筛选 URL 持久化 / preset 触发 run OK；产 `docs/m5-dogfood-<ts>.md`
+- 不放过的细节：移动端不支持（明示）；旧 top nav 完全替换（不保留兼容）；CasesPage / RunsPage 必须接 `FilterBar` 替换 inline filter
+- §0 changelog 主动 +0.1 (v1.11)
+
+**M5 不做的事**（明示）：
+- SSE 进度条（M6-1）
+- Run 历史 diff（M6-3）
+- Admin UI (skip_list / settings)（M6-4）
+- artifacts download（M6-2）
+- 移动端响应式
+- 自定义 dashboard 布局（用户拖拽）—— 过度抽象，先固定 layout 跑一段
+
+---
+
+### 13.12 M6 运行体验深化计划（v1.10 内追加，2026-05-24）
+
+**问题来源**：M5 解决前端"看"的体验，M6 解决"跑"和"管理"的体验。当前 `/runs/:id` 是 3s polling、`stdout/stderr` 没法下载、Admin 资源只能 SQL 直改、external_deps 字段写了 runner 不读。
+
+**M6 任务**（按顺序，依赖图见末段）：
+
+- **M6-1 SSE 进度条**：POST /runs 触发后，新 endpoint `GET /runs/:id/stream` (text/event-stream)，每个 step 完成立刻推 SSE event；前端 RunDetailPage 替换 3s polling 为 EventSource；终端事件 (run done / aborted) 关流
+  - 实施提示：FastAPI 用 `StreamingResponse` + asyncio queue；前端 `EventSource` 原生 API；fallback 到 polling 如果 SSE fail
+  - 注意：sql_pool 长连不能阻塞 SSE 写；orchestrator step 完成立刻 publish 事件到 in-memory broker
+- **M6-2 artifacts download**：case_results 表加 `stdout_path` / `stderr_path` / `log_grep_path` 字段；runner 把每 step output 写到 `runs/<run_id>/<case_id>/<step_idx>/{stdout,stderr,log}.txt`；前端 RunDetailPage 每 step 行加 "Download" 按钮；新 endpoint `GET /runs/:run_id/cases/:case_id/steps/:idx/{stdout|stderr|log}` 返文件
+- **M6-3 history diff**：新页面 `/runs/diff?a=<run_id>&b=<run_id>`，并排显示两次 run 的 case 状态变化（pass→fail / fail→pass / new case / removed case / duration diff > X%）；Dashboard 加 "Compare with previous run" 快捷链接
+- **M6-4 Admin UI**：新页面 `/admin/skip-list` + `/admin/settings`
+  - skip_list 在线 CRUD（add/remove case_id with reason）；后端 endpoint 已有 (M2+ work 占位)，本步真实现
+  - settings：dev_db_url / cluster_topology 等运行时可调项；**不** 暴露 case_categories（设计层走 PR）
+  - 加 `ADMIN_PASSWORD` 或 basic auth 防误改（不写 full auth，M6 只防 accident，user 是单人）
+- **M6-5 external_deps runtime injection**（M4c 真跑通的前提）：
+  - `external/<svc>.yml` 文件存储外部服务配置（host / port / credentials / extras）
+  - case_normalizer 加 Jinja 渲染：`{{ external.hive.host }}` → 替换；`{{ external.hive.extras.principal }}` → 替换
+  - orchestrator 调度时把 `external_deps` 列表里的 svc 配置加载注入 Jinja context
+  - shell step `host: '{{ external.<svc>.host }}'` 真按渲染后 host SSH 路由（已用 jinja_render 的 decide_ssh_user）
+  - 增强 case_normalizer 测试 + 加 1 个 e2e fixture
+  - **§14 R26 dual-code-path 风险**：case_normalizer 与 jinja_render 必须共享 external context 加载逻辑
+- **M6-6 dogfood**：用户实跑一例 external_systems case（M4c 第一例 + M6-5 渲染）；产 `docs/m6-dogfood-<ts>.md`；先决条件：集群上至少一个外部服务 (datalake / Hive / ES) 可达
+
+**§14 R 预付检查**：
+- **R26 dual-code-path** (M6-5)：external context 加载 / Jinja 渲染必须模块化共享，不要 inline 两份
+- **R27 path config**：external/<svc>.yml 默认路径用绝对路径 or env var，不要相对路径地雷
+- **R8 declaration-level skip** (M6-2)：artifacts download 测试如果 fixture 文件不存在，必须 `pytest.skip` 在 declaration 层级，不能 inline `if`
+- **R28 intermittent sampling** (M6-6)：dogfood 跑 external_systems case 至少 3 次确认稳定
+
+**关键依赖图**:
+```
+M6-1 (SSE) ────────────────────── 独立 ─────┐
+M6-2 (artifacts) ─── 阻塞 ─→ M6-3 (history diff) ──┤
+M6-4 (Admin UI) ─── 独立 ───────────────────┤
+M6-5 (external_deps runtime) ─── 阻塞 ─→ M6-6 (dogfood) （需 M4c 已 done）
+```
+
+M6-1 / M6-2 / M6-4 / M6-5 可并行；M6-3 依赖 M6-2（diff 用 artifacts）；M6-6 末尾。
+
+**完成定义**：
+- M6-1 ~ M6-5 全 [x] + ci-gate 全绿
+- M6-6 dogfood：至少 1 例 external_systems case (M4c-1) Try 跑通真集群 + SSE 进度条工作 + artifacts 下载可用 + Admin UI skip_list 改动持久；产 `docs/m6-dogfood-<ts>.md`
+- §0 changelog 主动 +0.1 (v1.12)
+
+**M6 不做的事**（明示）：
+- M5 已交付的前端 UX（M6 不重做 sidebar / dashboard）
+- 任何 case category 新增 / case YAML schema 改（§4.1 / §4.5 冻结）
+- 完整身份认证（M6-4 只防 accident，user 单人模式）
+- 大型 dashboard 自定义（M6-3 只做固定 diff 视图）
+
+---
 
 本章记录"preflight 趟过的雷"，按风险等级排序。各条都包含**触发场景**、**正确做法**、**preflight 教训来源**。新人/未来的自己读这一章可以省下数周踩坑。
 
@@ -1892,6 +2161,18 @@ M3b-9 (skill 单测) → M3b-10 (dogfood, 需 M3a 已 done)
   3. 若坚持相对路径（"开发期方便"），**README 显式列必须的 cwd + 必须的 env**，且 `app.main` 启动期 fail fast 验证 path resolve 到的目录存在（`if not _cases_root().is_dir(): logger.error("CASES_ROOT %s not found ...", _cases_root()); sys.exit(2)`），不要让 API 返空数据装作正常。
   4. 即便用 (3) 留相对路径作 fast-path，**生产部署 systemd unit / dockerfile 必须 explicit set 两个 env**，不要继承 cwd 偶然性。
 - 来源：本项目 2026-05-24 dogfood 实测（`docs/m2-dogfood-2026-05-24-0535.md` 末尾 "踩到的两个 spec gap" 第 2 项原始记录）。
+
+**🟠 R28：intermittent BUG 采样不足导致假阴性（v1.10 新增，M4a lg-bug-0009 反转 fixed→open 实战）**
+- 触发：BUG 是 random / non-deterministic 触发（每次 ~30% 概率 fail），case 复现脚本里只跑 N 次（N 太小，如 3）。statistically 看不到 fail：N=3 + 命中率 30% → 全 PASS 概率 (0.7)³ ≈ 34%，假阳性 PASS 概率三分之一。CI / dogfood / reviewer 都看 "全绿" 写 `status: fixed`，bug 落 main 后 user 一跑就喊回。
+- 后果（lg-bug-0009 §9.12 UNION ALL 行序错误，2026-05-24 实战）：V1 PR 用 3 rounds repetition 跑 → 本地 + dogfood + CI 全 PASS → 落 main + `status: fixed`。用户 review 立刻喊 "3 次会误判，改成 10 次"。改 10 rounds → round 1 立刻 fail → 反转 `status: open` + `fixed_version: ""` + notes 加 "Status reverted" 段落。第一例 user catch 比 reviewer / CI / dogfood 都早的案例。
+- 正确做法：
+  1. **默认 ≥10 rounds** 跑随机性触发的复现脚本（VALUES/UNION ALL 顺序 / hashjoin 选错 / lock contention / planner choice 等多解 BUG 类型）。
+  2. **binary search 最低 N**：从 10 起，如果一直 fail 可降到 5/3/1（说明 100% 触发）；如果 10 rounds PASS 再加到 30/50 确认稳定（说明 <10% 触发，case 不够 sharp 需要 sharper trigger）。
+  3. **在 case notes 写明**："intermittent 触发；N rounds 反映 X% 命中率" + "fix 前 reliably reproduce 在 ≥M rounds"，提供 reviewer 决策依据。
+  4. **PR review checklist 加一项**："这是 intermittent 触发吗？rounds 是不是 ≥10？" reviewer 命中 BUG 修复类 PR 时主动问。
+  5. **铁律 1 实战**：低重复跑 PASS 不能写 `status: fixed`——必须先证 fail 可复现，再证 fix 后不可复现。否则就是 "没验证就说完成"。
+  6. **不要默认 N=1**：单次跑 BUG 复现脚本对 deterministic BUG 够用（hashjoin / unnest / planner 100% 触发），但对 random BUG 等于自欺欺人。case 作者要标 BUG 类型决定 N。
+- 来源：lg-bug-0009 §9.12 V1 PR + V2 user-driven fix（PR #79 commit chain），user 主动 catch 比所有自动化都早；§13.9.5 详细分析。
 
 ### 14.3 中危级（积累到一定规模会触发）
 
