@@ -167,7 +167,11 @@ async def execute_sql_step(
                     pass
                 if timeout_ms is not None and timeout_ms > 0:
                     await conn.execute(f"SET statement_timeout = {int(timeout_ms)}")
-                conn.autocommit = True
+                # psycopg AsyncConnection.autocommit is read-only as property —
+                # must use await set_autocommit() (sync conn allows assignment;
+                # AsyncConnection does not). M4a-2 dogfood (case lg-bug-0008
+                # VACUUM FULL) tripped this with AttributeError.
+                await conn.set_autocommit(True)
                 async with conn.cursor() as cur:
                     await cur.execute(sql)
                     # DDL returns no rows.
@@ -254,9 +258,11 @@ async def execute_sql_step(
             except Exception:
                 pass
             if needs_ac:
-                # Restore autocommit=False so future steps on this connection are transactional.
+                # Restore autocommit=False so future steps on this connection are
+                # transactional. AsyncConnection requires await set_autocommit()
+                # (see comment at line ~170 — same bug, symmetric fix).
                 try:
-                    conn.autocommit = False
+                    await conn.set_autocommit(False)
                 except Exception:
                     pass
 
