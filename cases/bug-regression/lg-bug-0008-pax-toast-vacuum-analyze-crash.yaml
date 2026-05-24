@@ -1,0 +1,86 @@
+id: lg-bug-0008-pax-toast-vacuum-analyze-crash
+title: PAX 表含 TOAST 大数组与 NULL 行时 VACUUM FULL + ANALYZE 触发数据库 crash
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "section-9.11-pax-toast-vacuum-analyze-crash"
+  reported_at: "2026-05-24"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/774
+tags: [pax, toast, vacuum, analyze, crash]
+
+description: |
+  PAX + DISTRIBUTED REPLICATED 表里有 1 行 NULL + 1 行需要走 TOAST 外部存储的
+  大数组（≈10M 元素），顺序跑 VACUUM FULL 然后 ANALYZE，飞书原文记录会触发
+  集群 crash（recover mode）。本 case 验证 fix 后不再 crash。
+procedure: |
+  1) psql -c DROP + CREATE PAX REPLICATED 表 + INSERT 1 NULL 行 + 1 行 10M ARRAY
+  2) psql -c 'VACUUM FULL toast_bug_array'
+  3) psql -c 'ANALYZE toast_bug_array'
+  4) psql -c DROP TABLE 收尾
+expected: |
+  - 所有 psql -c 退出码 0，stderr 不含 ERROR / FATAL / server closed
+  - 集群不 crash（无 recover mode）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: postgres
+
+setup:
+  - su - gpadmin -c "psql -c 'DROP TABLE IF EXISTS toast_bug_array'"
+  - |
+    su - gpadmin -c "psql -c \"SET pax.enable_toast = on; CREATE TABLE IF NOT EXISTS toast_bug_array (id INT, data TEXT[]) USING PAX DISTRIBUTED REPLICATED;\""
+  - |
+    su - gpadmin -c "psql -c \"INSERT INTO toast_bug_array VALUES (1, NULL), (2, ARRAY(SELECT 'element_' || generate_series(1, 10000000)));\""
+
+steps:
+  - name: "VACUUM FULL 不应触发 crash"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -c 'VACUUM FULL toast_bug_array'"
+    timeout_sec: 600
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL", "server closed the connection"]
+
+  - name: "ANALYZE 不应触发 crash"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -c 'ANALYZE toast_bug_array'"
+    timeout_sec: 600
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL", "server closed the connection"]
+
+teardown:
+  - su - gpadmin -c "psql -c 'DROP TABLE IF EXISTS toast_bug_array'"
+
+created_by: chenqiang
+created_at: "2026-05-24"
+notes: |
+  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.11。
+  关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/774
+
+  **§4.1.2 约定全程贯彻**: 不仅 VACUUM FULL / ANALYZE 用 psql -c（non-tx-safe），
+  setup 的 CREATE TABLE + INSERT 也用 psql -c。理由：本 case 的 main step 是
+  shell（psql -c VACUUM）开**独立连接**，看不到 psycopg 长连接里 setup 未 commit
+  的 tx 状态。M4a-2 第一版用 `kind: sql` setup 撞过 "relation does not exist"——
+  CREATE TABLE 在 psycopg AsyncConnection 默认 autocommit=False 下没 commit。
+  psql -c 每条独立连接 + 隐式 commit，跨 step 状态一致。
+
+  规模：10M 元素 ARRAY ≈ 100MB+，INSERT 大约 10–60s。timeout 给 600s。
+  可加速：`SET pax.min_size_of_external_toast = 524289;` 把 toast 阈值降到 ~512KB，
+  元素数可降到 ~100K 仍触发 TOAST 路径；保守保留 10M 做 1:1 复现飞书原文。
+
+  recover mode log_grep 留待 M5：默认 log_path 依赖 system_settings 配（Admin
+  UI），M4a-2 阶段未配，暂不加 log_grep step。若以后 BUG 复现，需 log 旁证而非
+  仅 psql exit code，再补 step。
+
+  status: open 保留直到验证某个 build 修复非复现，再迁 fixed + 填 fixed_version。
