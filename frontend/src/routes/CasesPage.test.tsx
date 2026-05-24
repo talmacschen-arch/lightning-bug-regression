@@ -355,4 +355,21 @@ describe('CasesPage', () => {
       expect(screen.getByTestId('categories-empty')).toBeInTheDocument();
     });
   });
+
+  it('renders "+ New Case" header CTA linking to /cases/new', async () => {
+    render(
+      <MemoryRouter>
+        <CasesPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('cases-page-new-case')).toBeInTheDocument();
+    });
+    // shadcn `<Button asChild>` puts the testid on the rendered <a> Link
+    // itself, so we assert against the element directly.
+    const cta = screen.getByTestId('cases-page-new-case');
+    expect(cta.tagName).toBe('A');
+    expect(cta.getAttribute('href')).toBe('/cases/new');
+    expect(cta.textContent).toContain('New Case');
+  });
 });

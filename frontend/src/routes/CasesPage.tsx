@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/types';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -276,6 +277,15 @@ export default function CasesPage() {
 
   return (
     <div data-testid="page-cases" className="p-6">
+      <div
+        data-testid="cases-page-header"
+        className="flex items-center justify-between mb-4"
+      >
+        <h1 className="text-xl font-semibold">Cases</h1>
+        <Button asChild size="sm" data-testid="cases-page-new-case">
+          <Link to="/cases/new">+ New Case</Link>
+        </Button>
+      </div>
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
