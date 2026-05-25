@@ -150,7 +150,7 @@ describe('RunDetailPage', () => {
     await waitFor(() => {
       expect(esInstances.length).toBe(1);
     });
-    expect(esInstances[0].url).toBe('/runs/42/stream');
+    expect(esInstances[0].url).toBe('http://127.0.0.1:8000/runs/42/stream');
     expect(screen.getByTestId('run-stream-mode')).toHaveAttribute('data-mode', 'sse');
     expect(screen.getByTestId('run-stream-mode')).toHaveTextContent('live');
   });

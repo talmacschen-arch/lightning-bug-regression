@@ -239,7 +239,10 @@ export default function RunDetailPage() {
 
     function startSSE() {
       setStreamMode('sse');
-      const es = new EventSource(`/runs/${runId}/stream`);
+      // Absolute URL: vite dev server (port 5173) doesn't proxy /runs
+      // → relative path 404s → EventSource onerror → fallback polling.
+      // Same API_BASE used for M6-2 artifact downloads above.
+      const es = new EventSource(`${API_BASE}/runs/${runId}/stream`);
       esRef.current = es;
       es.onmessage = (e) => {
         if (cancelled) return;
