@@ -112,9 +112,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     with TestClient(app) as c:
         c.captured = captured  # type: ignore[attr-defined]
-        login = c.post(
-            "/auth/login", json={"username": "admin", "password": "admin"}
-        )
+        login = c.post("/auth/login", json={"username": "admin", "password": "admin"})
         assert login.status_code == 200, f"seeded admin login failed: {login.json()}"
         token = login.json()["token"]
         c.headers.update({"Authorization": f"Bearer {token}"})
