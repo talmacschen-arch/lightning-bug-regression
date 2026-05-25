@@ -94,6 +94,40 @@ export async function logout(): Promise<void> {
 }
 
 /**
+ * POST /auth/change-password. 204 on success. Throws on 400 (validation)
+ * or 401 (wrong current_password). Caller should re-call `fetchMe()` to
+ * refresh `must_change_password` flag in UI.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const token = getAuthToken();
+  if (!token) throw new Error('not logged in');
+  const resp = await fetch(`${API_BASE}/auth/change-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  if (resp.status === 204) return;
+  let detail = `HTTP ${resp.status}`;
+  try {
+    const body = await resp.json();
+    detail = body.detail ?? detail;
+  } catch {
+    // ignore
+  }
+  throw new Error(detail);
+}
+
+
+/**
  * GET /auth/me. Returns null on 401 (token invalid / expired) — caller
  * should treat that as "not logged in" and route to /login.
  */
