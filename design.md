@@ -1,6 +1,6 @@
 # post_upgrade_test — 设计文档
 
-> 当前版本: **v1.3**　状态: **M0 全 9 步 done + M1 头 8 个 item done + 架构修 (i): 2026-05-23 M1 后期把 repo 改 public 解锁 branch protection + Wiki**（详 §0 v1.3 (i)）。
+> 当前版本: **v1.19**　状态: **M0 ~ M6 全部交付 + post-M6 UX 迭代 wave 1+2 + 简易用户登录模块 (v1.17) + Release 流程 canonical 文档 + bootstrap.sh (v1.18) + target_versions registry / NewRun 下拉 / Runs Version 列 (v1.19)**（详 §0 历史表 + §13.17）。
 
 ---
 
