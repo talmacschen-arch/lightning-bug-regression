@@ -299,4 +299,73 @@ describe('RunDetailPage', () => {
       expect(screen.getByTestId('artifacts-error-bug-001')).toBeInTheDocument();
     });
   });
+
+  // ---- M6-1 finishing touch: progress bar (2026-05-26) -------------------
+
+  it('progress bar renders during running run with partial completion', async () => {
+    const partial = {
+      ...fakeRunRunning,
+      total: 17,
+      passed: 11,
+      failed: 0,
+      skipped: 1,
+      errored: 0,
+      case_results: [],
+    };
+    mockFetch.mockResolvedValue(mockJsonResponse(partial));
+    renderWithRoute('42');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-progress')).toBeInTheDocument();
+    });
+    const bar = screen.getByTestId('run-progress-bar') as HTMLProgressElement;
+    expect(bar.value).toBe(12); // 11 pass + 0 fail + 1 skip + 0 error
+    expect(bar.max).toBe(17);
+    expect(screen.getByTestId('run-progress-counts')).toHaveTextContent('12 / 17 cases (71%)');
+  });
+
+  it('progress bar shows ETA only while running with done>0 and pending>0', async () => {
+    // started_at = 10s ago, 5 done out of 17 total → avg 2s/case × 12 pending = ~24s ETA
+    const ts = new Date(Date.now() - 10_000).toISOString();
+    const partial = {
+      ...fakeRunRunning,
+      started_at: ts,
+      total: 17,
+      passed: 5,
+      failed: 0,
+      skipped: 0,
+      errored: 0,
+      case_results: [],
+    };
+    mockFetch.mockResolvedValue(mockJsonResponse(partial));
+    renderWithRoute('42');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-progress-eta')).toBeInTheDocument();
+    });
+    // Don't pin exact value — just assert ETA is shown and uses ~Xs format.
+    expect(screen.getByTestId('run-progress-eta').textContent).toMatch(/ETA ~\d+[sm]/);
+  });
+
+  it('progress bar hides ETA when run is terminal', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunDone));
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-progress')).toBeInTheDocument();
+    });
+    // Terminal run shows progress (3/3) but no ETA.
+    expect(screen.queryByTestId('run-progress-eta')).toBeNull();
+    const bar = screen.getByTestId('run-progress-bar') as HTMLProgressElement;
+    expect(bar.value).toBe(3);
+    expect(bar.max).toBe(3);
+  });
+
+  it('progress bar hidden when total is 0 (run not started populating counters)', async () => {
+    const empty = { ...fakeRunRunning, total: 0, case_results: [] };
+    mockFetch.mockResolvedValue(mockJsonResponse(empty));
+    renderWithRoute('42');
+    // Status badge present but progress not rendered
+    await waitFor(() => {
+      expect(screen.getByTestId('run-status-badge')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('run-progress')).toBeNull();
+  });
 });

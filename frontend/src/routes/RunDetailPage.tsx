@@ -152,6 +152,62 @@ function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
   );
 }
 
+// --- M6-1 finishing touch: progress bar -----------------------------------
+//
+// design.md §13.12 / line 679 specified an SSE 进度条. PR #110 landed the SSE
+// stream + per-case row updates but skipped the literal progress bar. Added
+// 2026-05-26 after user dogfood feedback "RUNNING live 没看到进度条".
+
+function RunProgressBar({ run }: { run: RunDetail }) {
+  const isTerminal = TERMINAL_RUN_STATUSES.has(run.status.toLowerCase());
+  const total = run.total ?? run.case_results.length;
+  if (total <= 0) return null;
+
+  const passed = run.passed ?? 0;
+  const failed = run.failed ?? 0;
+  const skipped = run.skipped ?? 0;
+  // errored is fresh in openapi types (PR #157); guard for older shape.
+  const errored = (run as RunDetail & { errored?: number | null }).errored ?? 0;
+  const done = passed + failed + skipped + errored;
+  const pending = Math.max(0, total - done);
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  // ETA = avg-per-done × pending (only when running, ≥1 done, parseable started_at)
+  let eta: string | null = null;
+  if (!isTerminal && done > 0 && pending > 0 && run.started_at) {
+    const elapsedMs = Date.now() - new Date(run.started_at).getTime();
+    if (elapsedMs > 0) {
+      const avgPerCase = elapsedMs / done;
+      const etaMs = avgPerCase * pending;
+      eta = etaMs < 60_000 ? `${Math.round(etaMs / 1000)}s` : `${(etaMs / 60_000).toFixed(1)}m`;
+    }
+  }
+
+  return (
+    <div data-testid="run-progress" className="space-y-1">
+      <progress
+        data-testid="run-progress-bar"
+        value={done}
+        max={total}
+        className="w-full h-2"
+      />
+      <div className="text-xs text-gray-600 flex flex-wrap items-baseline gap-x-3">
+        <span data-testid="run-progress-counts" className="font-mono">
+          {done} / {total} cases ({pct}%)
+        </span>
+        <span className="text-gray-500">
+          {passed} pass · {failed} fail · {skipped} skip · {errored} error · {pending} pending
+        </span>
+        {eta !== null && (
+          <span data-testid="run-progress-eta" className="text-gray-500">
+            ETA ~{eta}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CaseResultRow({ runId, result }: { runId: number; result: CaseResultOut }) {
   return (
     <div data-testid={`run-case-row-${result.case_id}`} className="py-2 border-b last:border-0">
@@ -347,6 +403,7 @@ export default function RunDetailPage() {
           <span data-testid="run-target-version" className="font-mono text-sm">{run.target_version}</span>
         </div>
       )}
+      <RunProgressBar run={run} />
       <div className="mt-4">
         {run.case_results.map((result) => (
           <CaseResultRow key={result.case_id} runId={run.id} result={result} />
