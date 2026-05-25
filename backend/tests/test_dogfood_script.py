@@ -400,9 +400,16 @@ class _FakePool:
     def __init__(self, dsn_map: dict[str, str]) -> None:
         self.dsn_map = dsn_map
         self.closed = False
+        self.discard_calls = 0
 
     async def close_all(self) -> None:
         self.closed = True
+
+    async def discard_all(self) -> None:
+        # orchestrator invokes this once per case to reset session state
+        # (dogfood 2026-05-26 zombodb regression fix). No-op for the fake;
+        # we count calls for any test that wants to assert.
+        self.discard_calls += 1
 
 
 async def test_e2e_with_mock_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

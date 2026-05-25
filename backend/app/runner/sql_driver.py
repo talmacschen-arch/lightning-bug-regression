@@ -35,6 +35,7 @@ R9: NEVER let an exception bubble. Catch everything -> StepResult(status=ERROR, 
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Mapping
@@ -42,8 +43,11 @@ from datetime import UTC, datetime
 
 import psycopg
 from psycopg import AsyncConnection
+from psycopg.pq import TransactionStatus
 
 from app.runner.types import StepError, StepResult, StepStatus
+
+logger = logging.getLogger(__name__)
 
 # Regex: detect whether an SQL string starts with EXPLAIN (per F-2 plan_text populate).
 _EXPLAIN_RE = re.compile(r"(?:^|;)\s*EXPLAIN\b", re.IGNORECASE)
@@ -82,6 +86,42 @@ class SqlSessionPool:
             except Exception:
                 pass
         self._conns.clear()
+
+    async def discard_all(self) -> None:
+        """Reset session state on every open connection.
+
+        Called by orchestrator at the start of each case to prevent
+        session-level GUC / temp object / prepared statement leakage
+        from one case to the next (dogfood 2026-05-26 zombodb regression
+        — lg-bug-0011/0012's non-LOCAL `SET work_mem`, `SET optimizer = off`,
+        `SET enable_seqscan = off` persisted into the persistent
+        AsyncConnection and broke lg-xs-zombodb at the suite tail).
+
+        Idempotent — no-op on unopened sessions (empty `_conns`).
+
+        Per PostgreSQL docs: `DISCARD ALL` resets all SET (non-default
+        session GUCs), prepared statements, listen notifications, temp
+        tables, sequence cache, and plan cache. It does NOT close the
+        connection — so the per-case connection re-use semantic stays
+        intact; just session state is reset.
+
+        R9 fold-don't-bubble: errors per connection are caught + logged;
+        one failed reset doesn't block other sessions in the pool.
+        """
+        for session_name, conn in self._conns.items():
+            try:
+                # DISCARD ALL must run outside a transaction. If a prior
+                # step left the conn in INTRANS / INERROR, rollback first
+                # so the next statement is accepted.
+                if conn.info.transaction_status != TransactionStatus.IDLE:
+                    await conn.rollback()
+                await conn.execute("DISCARD ALL")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "DISCARD ALL on session %s failed: %s — connection may carry stale state",
+                    session_name,
+                    e,
+                )
 
 
 async def execute_sql_step(
