@@ -52,12 +52,16 @@ def fresh_db_url(tmp_path: Path) -> str:
 def test_all_five_tables_plus_alembic_version_exist(fresh_db_url: str) -> None:
     engine = create_engine(fresh_db_url)
     insp = inspect(engine)
+    # v1.17 adds 2 auth tables (users, auth_tokens) on top of the
+    # original 5 business tables.
     expected = {
         "runs",
         "case_results",
         "case_skip_list",
         "system_settings",
         "case_categories",
+        "users",
+        "auth_tokens",
         "alembic_version",
     }
     assert set(insp.get_table_names()) == expected
