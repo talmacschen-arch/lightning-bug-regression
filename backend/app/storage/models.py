@@ -141,3 +141,50 @@ class CaseCategory(Base):
         nullable=False,
     )
     created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Authentication (v1.17 — single-user login module)
+# ---------------------------------------------------------------------------
+
+
+class User(Base):
+    """One user row. Project ships with single admin user seeded at
+    startup; multi-user not in scope. Password stored as bcrypt hash."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
+    )
+    # NULL = never changed (admin/admin still in effect). Frontend uses
+    # this to show "请改密码" red banner until user updates it once.
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AuthToken(Base):
+    """Opaque bearer tokens for active sessions.
+
+    Token stored as sha256 hash (not raw), so a DB dump doesn't enable
+    immediate session replay. Token has no expiry — only invalidated by
+    explicit logout (DELETE) or `change-password` flow. Multiple rows
+    per user OK (multi-device login).
+    """
+
+    __tablename__ = "auth_tokens"
+
+    token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
