@@ -1,0 +1,53 @@
+# external/hadoop_simple.yml — Hadoop + Hive simple-auth single-node cluster.
+# 端口实测核验 2026-05-26 (root SSH 上 10.14.3.201 / hostname=10-14-3-201)
+# 全部为 Hadoop 3 出厂默认。Sibling Kerberos 集群将放
+# external/hadoop_kerberos.yml。
+#
+# Case YAMLs reference this via Jinja:
+#   {{ external.hadoop_simple.host }}                            -> 10.14.3.201
+#   {{ external.hadoop_simple.extras.hdfs_namenode_url }}        -> hdfs://10.14.3.201:9000
+#   {{ external.hadoop_simple.extras.hive_metastore_uri }}       -> thrift://10.14.3.201:9083
+#   {{ external.hadoop_simple.extras.hive_jdbc_url }}            -> jdbc:hive2://10.14.3.201:10000
+#
+# Declare in case: `external_deps: [hadoop_simple]`
+#
+# auth_method = simple (no Kerberos). root SSH 免密 already configured from
+# coordinator → orchestrator's `decide_ssh_user(host=10.14.3.201, dut_hosts=...)`
+# returns "root" since this host is not in dut_hosts.
+#
+# Cases that ssh remote should cmd as:
+#   ssh {{ ssh_user }}@{{ host }} '<remote-cmd>'
+# Non-interactive shell — must explicitly source HADOOP_HOME / HIVE_HOME
+# (no /etc/profile.d/{hadoop,hive}.sh exposed; deployer left config in /etc/profile)
+#   . /etc/profile
+# or set HADOOP_HOME / HIVE_HOME inline:
+#   export HADOOP_HOME=/opt/hadoop
+#   export HIVE_HOME=/opt/hive-3.1.3
+#   export PATH=$HADOOP_HOME/bin:$HIVE_HOME/bin:$PATH
+
+host: 10.14.3.201
+extras:
+  auth_method: simple
+  hadoop_version: 3.1.4    # 实测 (user 报 3.1.3，实为 3.1.4)
+  hive_version: 3.1.3      # 实测
+
+  # SSH — root 免密 already set up by user.
+  ssh_user: root
+  # 远端 install 路径 (case 作者 source 用)
+  hadoop_home: /opt/hadoop
+  hive_home: /opt/hive-3.1.3
+
+  # HDFS NameNode — 实测：fs.defaultFS = hdfs://10.14.3.201:9000
+  hdfs_namenode_url: hdfs://10.14.3.201:9000
+  hdfs_namenode_web_url: http://10.14.3.201:9870
+
+  # Hive Metastore (HMS) Thrift + HiveServer2 (HS2) JDBC + Web UI
+  hive_metastore_uri: thrift://10.14.3.201:9083
+  hive_jdbc_url: jdbc:hive2://10.14.3.201:10000
+  hive_server2_web_url: http://10.14.3.201:10002
+
+  # YARN ResourceManager
+  yarn_resource_manager_web_url: http://10.14.3.201:8088
+  # YARN RM RPC (for clients submitting jobs programmatically — most case
+  # YAMLs only need the web URL above)
+  yarn_resource_manager_rpc: 10.14.3.201:8032
