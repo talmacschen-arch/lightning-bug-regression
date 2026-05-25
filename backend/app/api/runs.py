@@ -108,13 +108,22 @@ class ArtifactInfo(BaseModel):
     """One artifact file under a case's artifacts_path (M6-2).
 
     `step_idx` / `step_id` populated when filename matches the runner's
-    `step-NN-stepid.{stdout,stderr}.txt` pattern; else None (file
-    written by something else, kept for transparency).
+    `step-NN-stepid.{stdout,stderr,error,log}.txt` pattern; else None
+    (file written by something else, kept for transparency).
+
+    `kind` values:
+      * `stdout`  — driver stdout buffer
+      * `stderr`  — driver stderr buffer (NOTICE/WARNING etc.)
+      * `error`   — driver-level exception text (e.g. psycopg.errors.*
+                    from sql_driver._err()); only written when the
+                    StepResult.error field is non-empty
+      * `log`     — auxiliary log captured by the runner
+      * `other`   — filename did not match the per-step pattern
     """
 
     filename: str
     size_bytes: int
-    kind: str  # 'stdout' | 'stderr' | 'log' | 'other'
+    kind: str  # 'stdout' | 'stderr' | 'error' | 'log' | 'other'
     step_idx: int | None = None
     step_id: str | None = None
 
@@ -566,7 +575,7 @@ async def stream_run(run_id: int) -> StreamingResponse:
 # M6-2 artifacts download
 # ---------------------------------------------------------------------------
 
-_STEP_FILENAME_RE = re.compile(r"^step-(\d+)-(.+?)\.(stdout|stderr|log)\.txt$")
+_STEP_FILENAME_RE = re.compile(r"^step-(\d+)-(.+?)\.(stdout|stderr|error|log)\.txt$")
 
 
 def _case_artifacts_dir_or_404(run_id: int, case_id: str) -> Path:
@@ -606,7 +615,7 @@ def _case_artifacts_dir_or_404(run_id: int, case_id: str) -> Path:
 def _classify_artifact(name: str) -> tuple[str, int | None, str | None]:
     """Return (kind, step_idx, step_id) parsed from a filename.
 
-    Recognized: `step-NN-<step_id>.{stdout|stderr|log}.txt`. Anything
+    Recognized: `step-NN-<step_id>.{stdout|stderr|error|log}.txt`. Anything
     else is reported as ('other', None, None) — still listed so the
     user sees what's in the dir.
     """

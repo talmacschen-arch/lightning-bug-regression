@@ -657,6 +657,8 @@ def _seed_run_with_artifacts(
     (artifacts_dir / "step-00-setup-create-table.stdout.txt").write_text("CREATE TABLE\n")
     (artifacts_dir / "step-00-setup-create-table.stderr.txt").write_text("")
     (artifacts_dir / "step-01-select-rows.stdout.txt").write_text(" id\n----\n  1\n  2\n")
+    # PR-G: driver exception text persisted as .error.txt
+    (artifacts_dir / "step-02-boom.error.txt").write_text("psycopg.errors.SyntaxError: oh no\n")
     # other-format file (not matching pattern)
     (artifacts_dir / "summary.json").write_text('{"ok": true}')
 
@@ -697,6 +699,11 @@ def test_list_artifacts_returns_classified_files(
     assert by_name["step-00-setup-create-table.stdout.txt"]["step_idx"] == 0
     assert by_name["step-00-setup-create-table.stdout.txt"]["step_id"] == "setup-create-table"
     assert by_name["step-01-select-rows.stdout.txt"]["step_idx"] == 1
+    # PR-G: `.error.txt` is a first-class kind (driver exception text)
+    assert "step-02-boom.error.txt" in by_name
+    assert by_name["step-02-boom.error.txt"]["kind"] == "error"
+    assert by_name["step-02-boom.error.txt"]["step_idx"] == 2
+    assert by_name["step-02-boom.error.txt"]["step_id"] == "boom"
     # other-format files still appear, classified as 'other'
     assert by_name["summary.json"]["kind"] == "other"
     assert by_name["summary.json"]["step_idx"] is None
