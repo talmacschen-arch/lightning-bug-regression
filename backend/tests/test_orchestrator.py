@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -87,6 +87,17 @@ def _noop_insert(*args: Any, **kwargs: Any) -> None:
     return None
 
 
+def _mock_sql_pool() -> MagicMock:
+    """Return a MagicMock-typed SqlSessionPool stub with an async-aware
+    discard_all() attached. The orchestrator awaits sql_pool.discard_all()
+    once per case (dogfood 2026-05-26 zombodb regression fix), so the
+    stub must be a coroutine — bare MagicMock returns a non-awaitable.
+    """
+    pool = MagicMock()
+    pool.discard_all = AsyncMock(return_value=None)
+    return pool
+
+
 # ---------------------------------------------------------------------------
 # happy path: single sql step PASS
 # ---------------------------------------------------------------------------
@@ -114,7 +125,7 @@ async def test_happy_path_single_sql_step_passes(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),  # presence-only; fake_sql ignores it
+        sql_pool=_mock_sql_pool(),  # presence-only; fake_sql ignores it
     )
     assert result.status is StepStatus.PASS
     assert len(result.step_results) == 1
@@ -160,7 +171,7 @@ async def test_first_fail_step_breaks_subsequent_and_runs_teardown(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     # s2 and s3 must NOT have been called.
     assert call_log == ["s1", "t1"]
@@ -196,7 +207,7 @@ async def test_driver_exception_is_folded_to_error_status(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert result.status is StepStatus.ERROR
     assert result.step_results[0].status is StepStatus.ERROR
@@ -242,7 +253,7 @@ async def test_multi_session_steps_run_concurrently(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     elapsed = asyncio.get_event_loop().time() - t0
 
@@ -293,7 +304,7 @@ async def test_destructive_cases_run_last(monkeypatch: pytest.MonkeyPatch, tmp_p
         jinja_context={},
         dut_hosts=set(),
         session_factory=_noop_session_factory,
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         insert_case_result_fn=_noop_insert,
     )
     assert executed_order == ["B", "D", "A", "C"]
@@ -343,7 +354,7 @@ async def test_setup_failure_skips_steps_but_runs_teardown(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     # main1 must NOT have been called; setup1 + td1 yes.
     assert "main1" not in call_log
@@ -391,7 +402,7 @@ async def test_assertion_pass_downgrade_to_fail_when_expect_mismatches(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert result_pass.status is StepStatus.PASS
     assert result_pass.step_results[0].assertions == [
@@ -417,7 +428,7 @@ async def test_assertion_pass_downgrade_to_fail_when_expect_mismatches(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert result_fail.status is StepStatus.FAIL
     assert result_fail.step_results[0].status is StepStatus.FAIL
@@ -456,7 +467,7 @@ async def test_assertions_accept_yaml_loader_list_form(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert result.status is StepStatus.PASS
     assert result.step_results[0].assertions[0][0] == "row_count"
@@ -513,7 +524,7 @@ async def test_recover_mode_guard_aborts_case_and_marks_cluster_crashed(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         server_log_path=str(server_log),
     )
     # s1 ran; s2 did NOT (guard fired after s1).
@@ -556,7 +567,7 @@ async def test_skip_list_skips_case_without_executing(
         jinja_context={},
         dut_hosts=set(),
         session_factory=_noop_session_factory,
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         skip_list=skip_list,
         insert_case_result_fn=_noop_insert,
     )
@@ -588,7 +599,7 @@ async def test_skip_list_expired_rule_does_not_skip(
         jinja_context={},
         dut_hosts=set(),
         session_factory=_noop_session_factory,
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         skip_list=skip_list,
         insert_case_result_fn=_noop_insert,
     )
@@ -627,7 +638,7 @@ async def test_artifacts_written_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     case_dir = tmp_path / "42" / "lg-bug-0008"
     assert case_dir.is_dir()
@@ -662,7 +673,7 @@ async def test_unknown_step_kind_produces_error_result(tmp_path: Path) -> None:
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert result.status is StepStatus.ERROR
     assert "unknown step kind" in (result.step_results[0].error or "")
@@ -704,7 +715,7 @@ async def test_jinja_undefined_variable_yields_step_error(
         artifacts_root=tmp_path,
         jinja_context={},  # no `external` defined
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert driver_called["v"] is False
     assert result.status is StepStatus.ERROR
@@ -802,7 +813,7 @@ async def test_case_level_exception_in_suite_continues_to_next(
         jinja_context={},
         dut_hosts=set(),
         session_factory=_noop_session_factory,
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         insert_case_result_fn=_noop_insert,
     )
     assert summary.passed == 1
@@ -841,7 +852,7 @@ async def test_teardown_failure_does_not_change_case_status(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert result.status is StepStatus.PASS
     assert result.teardown_results[0].status is StepStatus.FAIL
@@ -882,7 +893,7 @@ async def test_suite_persists_one_row_per_case(
         jinja_context={},
         dut_hosts=set(),
         session_factory=_noop_session_factory,
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         skip_list=skip_list,
         insert_case_result_fn=capture_insert,
     )
@@ -915,7 +926,7 @@ async def test_run_case_returns_case_execution_result_dataclass(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     assert isinstance(result, CaseExecutionResult)
 
@@ -934,11 +945,138 @@ async def test_run_suite_returns_suite_summary_dataclass(
         jinja_context={},
         dut_hosts=set(),
         session_factory=_noop_session_factory,
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
         insert_case_result_fn=_noop_insert,
     )
     assert isinstance(summary, SuiteSummary)
     assert summary.total == 1
+
+
+# ---------------------------------------------------------------------------
+# session-state isolation: discard_all() runs at the start of EVERY case
+# (dogfood 2026-05-26 zombodb regression — see sql_driver.SqlSessionPool.discard_all)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_case_calls_discard_all_before_setup_steps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """run_case must call sql_pool.discard_all() BEFORE the first setup
+    step runs, so non-LOCAL SET GUCs from the prior case don't leak.
+
+    Regression: dogfood 2026-05-26 run #25/#26 — lg-bug-0011 SET
+    work_mem='256kB' + enable_seqscan=off persisted into the next case's
+    session via the shared AsyncConnection and broke lg-xs-zombodb at
+    the suite tail.
+    """
+    order: list[str] = []
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        order.append(f"step:{step_id}")
+        return _make_step_result(step_id, status=StepStatus.PASS)
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    # Mock sql_pool with an async discard_all that records call order.
+    sql_pool = MagicMock()
+
+    async def fake_discard_all() -> None:
+        order.append("discard_all")
+
+    sql_pool.discard_all = fake_discard_all
+
+    case = {
+        "id": "iso-A",
+        "setup": [{"id": "setup1", "kind": "sql", "on": "primary", "sql": "select 0"}],
+        "steps": [{"id": "main1", "kind": "sql", "on": "primary", "sql": "select 1"}],
+        "teardown": [{"id": "td1", "kind": "sql", "on": "primary", "sql": "select 2"}],
+    }
+    result = await run_case(
+        case,
+        run_id=1,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=sql_pool,
+    )
+    assert result.status is StepStatus.PASS
+    # discard_all fires BEFORE the first step (setup or main).
+    assert order[0] == "discard_all", f"expected discard_all first, got order={order}"
+    assert "step:setup1" in order
+    assert "step:main1" in order
+
+
+async def test_run_case_skips_discard_all_when_sql_pool_none(tmp_path: Path) -> None:
+    """When orchestrator is invoked without sql_pool (e.g. log-grep-only
+    or shell-only case), discard_all() must not be attempted — the
+    optional sql_pool parameter exists precisely for that path.
+    """
+    # Case with NO sql steps; sql_pool=None must be accepted gracefully.
+    case = {
+        "id": "no-sql",
+        "steps": [
+            # log_grep with a path that does not exist — the driver returns
+            # status=error but does NOT raise. We only care that run_case
+            # itself does not blow up on sql_pool=None.
+            {
+                "id": "g1",
+                "kind": "log_grep",
+                "log_path": str(tmp_path / "does-not-exist.log"),
+                "pattern": "x",
+            }
+        ],
+    }
+    result = await run_case(
+        case,
+        run_id=1,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=None,
+    )
+    # No crash — case ran to completion even though sql_pool was None.
+    assert result is not None
+    assert len(result.step_results) == 1
+
+
+async def test_run_suite_calls_discard_all_once_per_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Across a suite of N cases, sql_pool.discard_all() fires exactly
+    N times (once at the start of each case). Verifies the isolation
+    invariant doesn't accidentally batch / skip.
+    """
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        return _make_step_result(step_id, status=StepStatus.PASS)
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    discard_calls = {"n": 0}
+    sql_pool = MagicMock()
+
+    async def fake_discard_all() -> None:
+        discard_calls["n"] += 1
+
+    sql_pool.discard_all = fake_discard_all
+
+    cases = [
+        {"id": "A", "steps": _one_sql_step("a1")},
+        {"id": "B", "steps": _one_sql_step("b1")},
+        {"id": "C", "steps": _one_sql_step("c1")},
+    ]
+    summary = await run_suite(
+        cases,
+        run_id=1,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        session_factory=_noop_session_factory,
+        sql_pool=sql_pool,
+        insert_case_result_fn=_noop_insert,
+    )
+    assert summary.passed == 3
+    assert discard_calls["n"] == 3
 
 
 # ---------------------------------------------------------------------------
