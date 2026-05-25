@@ -91,37 +91,59 @@ class SqlSessionPool:
         """Reset session state on every open connection.
 
         Called by orchestrator at the start of each case to prevent
-        session-level GUC / temp object / prepared statement leakage
-        from one case to the next (dogfood 2026-05-26 zombodb regression
-        — lg-bug-0011/0012's non-LOCAL `SET work_mem`, `SET optimizer = off`,
-        `SET enable_seqscan = off` persisted into the persistent
-        AsyncConnection and broke lg-xs-zombodb at the suite tail).
+        session-level GUC + prepared-statement leakage from one case to
+        the next (dogfood 2026-05-26: lg-bug-0011/0012's non-LOCAL
+        ``SET work_mem='256kB'`` + ``SET enable_seqscan = off`` persisted
+        into the persistent AsyncConnection and broke lg-xs-zombodb at
+        the suite tail).
 
-        Idempotent — no-op on unopened sessions (empty `_conns`).
+        Uses ``RESET ALL`` + ``DEALLOCATE ALL`` (both tx-safe) rather
+        than ``DISCARD ALL`` — PostgreSQL refuses ``DISCARD ALL`` inside
+        a transaction block, and psycopg3 with autocommit=False wraps
+        every ``execute()`` in an implicit ``BEGIN``. PR-F's original
+        ``DISCARD ALL`` cascaded into ``InFailedSqlTransaction`` across
+        12/17 cases in dogfood run #32: the failed DISCARD aborted the
+        implicit tx, the bare except just logged a warning and left the
+        conn in INERROR, then the next case's first SQL hit the poisoned
+        connection and errored at 2-8ms.
 
-        Per PostgreSQL docs: `DISCARD ALL` resets all SET (non-default
-        session GUCs), prepared statements, listen notifications, temp
-        tables, sequence cache, and plan cache. It does NOT close the
-        connection — so the per-case connection re-use semantic stays
-        intact; just session state is reset.
+        What this DOES NOT clear vs ``DISCARD ALL``: temp tables, plan
+        cache, sequence cache. None of these are case-isolation pain
+        points in practice — cases don't share temp tables (CREATE TEMP
+        TABLE is session-local + the next case's setup explicitly
+        DROPs/CREATEs its own state). If any of these become a pain
+        point, escalate to a real ``DISCARD ALL`` via an autocommit
+        toggle.
 
-        R9 fold-don't-bubble: errors per connection are caught + logged;
-        one failed reset doesn't block other sessions in the pool.
+        Idempotent — no-op on unopened sessions (empty ``_conns``).
+
+        R9 fold-don't-bubble: per-connection errors caught + logged, AND
+        a best-effort ``rollback()`` so a failed reset doesn't leave the
+        conn in aborted-tx state poisoning the next case (the regression
+        class above).
         """
         for session_name, conn in self._conns.items():
             try:
-                # DISCARD ALL must run outside a transaction. If a prior
-                # step left the conn in INTRANS / INERROR, rollback first
-                # so the next statement is accepted.
+                # If a prior step left the conn in INTRANS / INERROR,
+                # rollback first so RESET ALL / DEALLOCATE ALL see a
+                # clean tx state.
                 if conn.info.transaction_status != TransactionStatus.IDLE:
                     await conn.rollback()
-                await conn.execute("DISCARD ALL")
+                async with conn.cursor() as cur:
+                    await cur.execute("RESET ALL")
+                    await cur.execute("DEALLOCATE ALL")
+                await conn.commit()
             except Exception as e:  # noqa: BLE001
                 logger.warning(
-                    "DISCARD ALL on session %s failed: %s — connection may carry stale state",
+                    "session %s reset failed (RESET ALL / DEALLOCATE ALL): %s "
+                    "— rolling back to leave conn usable",
                     session_name,
                     e,
                 )
+                try:
+                    await conn.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 async def execute_sql_step(
