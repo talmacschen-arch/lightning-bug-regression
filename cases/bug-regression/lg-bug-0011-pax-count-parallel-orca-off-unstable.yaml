@@ -10,23 +10,27 @@ source:
   reported_at: "2026-05-25"
   fixed_version: ""
   ext_doc_url: ""
-issue_url: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
+issue_url: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/265
 tags: [pax, parallel, count, orca, correctness, bitmap_index_scan]
 
 description: |
-  开启 enable_parallel + ORCA=off 时，对 PAX 表跑 count(*) 行数不稳定
-  （连续两次查询返回值可能不同 / 与真实行数不一致）。飞书 §9.10 复现脚本
-  期望连续两次 count(*) 都返回 98016841。
+  飞书 §9.10 (issue #265)：PAX 表 (zstd 压缩 + bigint+text 双列 +
+  distributed by id) 开启 enable_parallel + 关闭 seqscan/indexscan/
+  indexonlyscan 三连强制走 Bitmap Index Scan + ORCA=off 时，count(*)
+  返回行数不稳定（与真实 98016841 不一致 / 连续两次结果不同）。
 procedure: |
-  1) setup: drop + create PAX 表 + insert 98016841 行 + create index
-  2) step1: SET 并行 GUCs + SET optimizer=on; SELECT count(*) → 期望 98016841
-  3) step2: 同会话再跑一次 SELECT count(*) → 期望 98016841（稳定性）
-  4) step3: SET optimizer=off; SELECT count(*) → 期望 98016841（BUG 触发分支）
-  5) step4: 再跑一次 SELECT count(*) → 期望 98016841（稳定性，BUG 分支）
-  6) teardown: drop table
+  1) prep-1..5: drop + create (zstd+distributed) + insert 98016841 行
+     (id, md5(random()::text)) + create index + ANALYZE
+  2) test-1: 全部并行/scan GUCs + SET optimizer=on; SELECT count(*)
+     → 期望 98016841
+  3) test-2: 同会话 SELECT count(*) → 期望 98016841（ORCA=on 稳定性）
+  4) test-3: SET optimizer=off; SELECT count(*) → 期望 98016841（BUG 触发）
+  5) test-4: SELECT count(*) → 期望 98016841（BUG 分支稳定性）
+  6) teardown: DROP TABLE IF EXISTS pax_tab
 expected: |
-  - 4 个 count(*) 步全部返回 98016841
-  - ORCA=off 分支不出现"行数不稳定"（两次返回值都正确且相同）
+  - 9 个 main step 全 PASS：5 个 prep + 4 个 count(*) 均返回 98016841
+  - ORCA=off + Bitmap Index Scan 强制路径下两次返回值都正确且相同
+    （BUG 复现时 test-3/4 会 fail）
 
 applies_to: {}
 preconditions: {}
@@ -37,51 +41,69 @@ defaults:
 
 sessions: []
 
-setup:
-  - DROP TABLE IF EXISTS pax_tab
-  - CREATE TABLE pax_tab (i int) USING pax
-  - INSERT INTO pax_tab SELECT generate_series(1, 98016841)
-  - CREATE INDEX idx_i ON pax_tab (i)
+setup: []
 
 steps:
-  - name: "ORCA=on 第 1 次 count(*)"
+  - name: "prep-1 drop pax_tab"
+    kind: sql
+    sql: DROP TABLE IF EXISTS pax_tab
+    timeout_ms: 30000
+  - name: "prep-2 create PAX zstd table"
+    kind: sql
+    sql: |
+      CREATE TABLE pax_tab (id bigint, name text) USING pax
+      WITH (compresstype=zstd, compresslevel=7) DISTRIBUTED BY (id)
+    timeout_ms: 60000
+  - name: "prep-3 insert 98016841 rows (md5)"
+    kind: sql
+    sql: |
+      SET optimizer=off;
+      INSERT INTO pax_tab SELECT id, md5(random()::text) FROM generate_series(1, 98016841) id
+    timeout_ms: 900000
+  - name: "prep-4 create index idx_id"
+    kind: sql
+    sql: CREATE INDEX idx_id ON pax_tab (id)
+    timeout_ms: 600000
+  - name: "prep-5 ANALYZE pax_tab (psql -c)"
+    kind: shell
+    cmd: su - gpadmin -c "psql -d gpadmin -c 'ANALYZE pax_tab'"
+    timeout_ms: 600000
+    expect:
+      exit_code: 0
+  - name: "test-1 ORCA=on cold (force Bitmap Index Scan)"
     kind: sql
     sql: |
       SET enable_parallel = on;
       SET max_parallel_workers_per_gather = 2;
-      SET parallel_setup_cost = 0;
       SET min_parallel_table_scan_size = 0;
-      SET pax.enable_prefetch TO off;
-      SET pax.enable_iouring TO off;
+      SET parallel_setup_cost = 0;
+      SET enable_seqscan = off;
+      SET enable_indexscan = off;
+      SET enable_indexonlyscan = off;
       SET work_mem = '256kB';
       SET optimizer = on;
-      SELECT count(*) FROM pax_tab WHERE i >= 0;
-    timeout_sec: 120
+      SELECT count(*) FROM pax_tab WHERE id >= 0;
+    timeout_ms: 300000
     expect:
       scalar: "98016841"
-
-  - name: "ORCA=on 第 2 次 count(*)（稳定性）"
+  - name: "test-2 ORCA=on warm (stability)"
     kind: sql
-    sql: |
-      SELECT count(*) FROM pax_tab WHERE i >= 0;
-    timeout_sec: 120
+    sql: SELECT count(*) FROM pax_tab WHERE id >= 0
+    timeout_ms: 300000
     expect:
       scalar: "98016841"
-
-  - name: "ORCA=off 第 1 次 count(*)（BUG 触发分支）"
+  - name: "test-3 ORCA=off cold (BUG trigger branch)"
     kind: sql
     sql: |
       SET optimizer = off;
-      SELECT count(*) FROM pax_tab WHERE i >= 0;
-    timeout_sec: 120
+      SELECT count(*) FROM pax_tab WHERE id >= 0;
+    timeout_ms: 300000
     expect:
       scalar: "98016841"
-
-  - name: "ORCA=off 第 2 次 count(*)（BUG 触发分支稳定性）"
+  - name: "test-4 ORCA=off warm (BUG branch stability)"
     kind: sql
-    sql: |
-      SELECT count(*) FROM pax_tab WHERE i >= 0;
-    timeout_sec: 120
+    sql: SELECT count(*) FROM pax_tab WHERE id >= 0
+    timeout_ms: 300000
     expect:
       scalar: "98016841"
 
@@ -92,28 +114,43 @@ created_by: chenqiang
 created_at: "2026-05-25"
 notes: |
   来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.10。
-  关联 issue: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
+  关联 issue: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/265
+  （注：BUG1 / 9.10 = #265；BUG2 / 9.11 "PAX 结果集行数改变" = #264，
+  我之前 lg-bug-0011 v1 PR #139 把 issue 号搞反了，本版修正）
 
-  **BUG 触发条件**（飞书原文）：开启 enable_parallel + 设置 parallel GUCs
-  (max_parallel_workers_per_gather=2 / parallel_setup_cost=0 /
-  min_parallel_table_scan_size=0 / work_mem=256kB) + PAX 表关闭 prefetch
-  / iouring + ORCA=off → 对 PAX 表跑 `count(*) where i >= 0` 走 Bitmap
-  Index Scan 时返回行数不等于真实行数，且连续多次结果可能不同。
+  **BUG 触发条件（飞书原文逐条对齐）**：
+  1. 表 schema：`(id bigint, name text) USING pax WITH
+     (compresstype=zstd, compresslevel=7) DISTRIBUTED BY (id)`
+     —— 压缩 + 双列 + 显式 distribute；缺一不可
+  2. 数据：98016841 行，name 列 `md5(random()::text)`
+  3. INSERT 前 `SET optimizer=off`（避免 ORCA 拒规划这个 plan shape）
+  4. **必须 ANALYZE**（让 planner 拿到统计信息，否则可能不走目标 plan）
+  5. 会话 GUCs：enable_parallel=on + max_parallel_workers_per_gather=2 +
+     min_parallel_table_scan_size=0 + parallel_setup_cost=0 + work_mem=256kB
+  6. **关键三连：enable_seqscan=off + enable_indexscan=off +
+     enable_indexonlyscan=off** → 强制 planner 走 Bitmap Index Scan
+     （BUG 路径专属入口；任一未关都可能逃出 BUG 分支）
+  7. WHERE 谓词 = `id >= 0`
 
   **case 设计**：
-  - 98016841 行保真飞书原文（INSERT 约 30-60s on synxdb-0001）；
-  - sql_driver 单会话连接持久化（一个 `on: default` 跨 4 steps 复用），
-    step1 设置的 parallel GUCs 在 step2/3/4 仍生效，SET 不必每 step 重复；
-  - sql_driver 多语句 scalar = 最后 SELECT 第一行第一列（sql_driver.py:98-100、
-    150-157）→ "SET ...; SELECT count(*)" 块 scalar 取 count；
-  - 4 个 step 各自 expect scalar=98016841：
-    * step1/2 = ORCA=on 基线 + 稳定性
-    * step3/4 = ORCA=off BUG 触发分支 + 稳定性
-    任一 step scalar != 98016841 即标 fail，准确捕捉 BUG。
+  - prep-1..5 全部移入 main `steps:` 而非 `setup:` —— 因为 setup 字符串项
+    无法传 `timeout_ms`（schema 验证拒绝 dict-shape 项 per §4.1），而
+    orchestrator 默认 timeout = 60s，98M 行 INSERT 必爆。dict-shape steps
+    支持 timeout_ms。
+  - prep-5 ANALYZE 走 `kind: shell + psql -c`：cross-check #11 — 顶层裸跑
+    ANALYZE 是 non-tx-safe DDL，绝禁 psycopg autocommit 包它。
+  - sql_driver 单会话连接持久化（同 `on: default:gpadmin`），test-1 SET 的
+    GUCs 在 test-2/3/4 继承；test-3 仅切 optimizer 单 GUC，其他不重 SET。
+  - 4 个 test step 各自 expect scalar=98016841；任一非 98016841 即 fail。
 
-  **status=open**：飞书段未释 fixed_version。如未来在某 build 验证 4 个
-  step 全 pass，flip 到 `fixed` + 填 fixed_version。
+  **status=open**：飞书段未释 fixed_version。
 
-  **GUC 全 SET 在 step1**：飞书原文先 SET 一堆 parallel GUCs 再分别测
-  ORCA=on / ORCA=off；step3 用 `SET optimizer = off` 单语句切换，
-  其他 GUCs 继承自 step1（同会话）。
+  **本地观测：`timeout_sec` 字段在 backend 完全没被引用**（grep timeout_sec
+  on backend/app/* 0 命中），所有 case 写的 timeout_sec 都是哑字段。本版
+  统一用 `timeout_ms` 才能真正放宽 timeout。建议后续在 design.md 校正
+  字段名约定或在 normalizer 加 timeout_sec→timeout_ms 转换。
+
+  **历史**：本 case PR #139 (v1) merge 的版本 7 项偏离飞书原文（表
+  schema/INSERT 列/ANALYZE/三条 enable_*=off/issue 号/WHERE 谓词/
+  timeout 字段名），用户审核后本次重做覆盖。v1 Try"PASS"未走 BUG 路径，
+  不能证明 BUG 已 fixed。
