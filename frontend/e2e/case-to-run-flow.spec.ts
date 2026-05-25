@@ -97,6 +97,25 @@ test.describe('M2-9 case → run → result happy path', () => {
       });
     });
 
+    // v1.19: Stub target-versions endpoint (populates the <select> on RunNewPage)
+    await page.route('**/admin/target-versions**', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 1,
+            name: '5.1.0',
+            display_order: 100,
+            is_active: true,
+            is_default: false,
+            notes: null,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ]),
+      }),
+    );
+
     // Capture POST /runs body and fulfill with 202
     let postBody: unknown = null;
     await page.route('**/runs', (route) => {
@@ -151,8 +170,8 @@ test.describe('M2-9 case → run → result happy path', () => {
     // 8. Select all cases via global select-all
     await page.click('[data-testid="select-all-global"]');
 
-    // 9. Fill in target version
-    await page.fill('[data-testid="input-target-version"]', '5.1.0');
+    // 9. Select target version from the dropdown (v1.19: <input> → <select>)
+    await page.selectOption('[data-testid="input-target-version"]', '5.1.0');
 
     // 10. Submit
     await page.click('[data-testid="btn-submit-run"]');

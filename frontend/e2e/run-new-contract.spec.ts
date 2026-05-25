@@ -37,6 +37,21 @@ const FAKE_CASES = [
   { id: 'smoke-002', category: 'smoke', title: 'Second smoke', status: 'active', destructive: false, tags: null, error: null },
 ];
 
+// v1.19: Target version is now a `<select>` populated from GET
+// /admin/target-versions?active=true. Each test that exercises the
+// select must mock this endpoint.
+const FAKE_TARGET_VERSIONS = [
+  {
+    id: 1,
+    name: '5.1.0',
+    display_order: 100,
+    is_active: true,
+    is_default: false,
+    notes: null,
+    created_at: '2026-01-01T00:00:00Z',
+  },
+];
+
 test.describe('RunNewPage — POST /runs contract (§6.4 R2)', () => {
   // §14 R8: skip at declaration level when chromium can't launch
   test.skip(!canLaunch, SKIP_REASON);
@@ -50,6 +65,11 @@ test.describe('RunNewPage — POST /runs contract (§6.4 R2)', () => {
     // Stub cases endpoint
     await page.route('**/cases**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FAKE_CASES) }),
+    );
+
+    // v1.19: Stub target-versions endpoint (populates the <select>)
+    await page.route('**/admin/target-versions**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FAKE_TARGET_VERSIONS) }),
     );
 
     // Capture POST /runs body and stub the 202 response
@@ -75,8 +95,8 @@ test.describe('RunNewPage — POST /runs contract (§6.4 R2)', () => {
     await page.click('[data-testid="case-checkbox-smoke-001"]');
     await page.click('[data-testid="case-checkbox-smoke-002"]');
 
-    // Fill in target version
-    await page.fill('[data-testid="input-target-version"]', '5.1.0');
+    // v1.19: target_version is now a <select>; use selectOption with the value
+    await page.selectOption('[data-testid="input-target-version"]', '5.1.0');
 
     // Submit
     await page.click('[data-testid="btn-submit-run"]');
@@ -103,6 +123,11 @@ test.describe('RunNewPage — POST /runs contract (§6.4 R2)', () => {
 
     await page.route('**/cases**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FAKE_CASES) }),
+    );
+
+    // v1.19: empty version list → select only has "— None —", null submits as null
+    await page.route('**/admin/target-versions**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
 
     let postBody: unknown = null;
@@ -140,6 +165,11 @@ test.describe('RunNewPage — POST /runs contract (§6.4 R2)', () => {
 
     await page.route('**/cases**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(FAKE_CASES) }),
+    );
+
+    // v1.19: stub target-versions so page loads cleanly (warning suppressed)
+    await page.route('**/admin/target-versions**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
 
     await page.route('**/runs', (route) => {
