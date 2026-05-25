@@ -15,6 +15,9 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import RunsPage from './RunsPage';
+import type { components } from '@/api/client';
+
+type RunSummary = components['schemas']['RunSummary'];
 
 const apiFetchMock = vi.fn();
 vi.mock('@/api/client', () => ({
@@ -54,7 +57,7 @@ const FAKE_CASES = [
   { id: 'lg-bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const row order', status: 'open', destructive: false, tags: null, error: null },
 ];
 
-function setupMocks(runs = FAKE_RUNS) {
+function setupMocks(runs: RunSummary[] = FAKE_RUNS) {
   apiFetchMock.mockImplementation(async (path: string, _method: string, init?: { query?: Record<string, string> }) => {
     if (path === '/runs') {
       // case_id filter is server-side: when present, only return runs
@@ -324,5 +327,45 @@ describe('RunsPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('runs-page-error')).toBeInTheDocument();
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Version column tests
+  // ---------------------------------------------------------------------------
+
+  it('version column renders named target_version for each run', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    // id=42 fixture has target_version='4.5.0'
+    const v42 = screen.getByTestId('runs-page-version-42');
+    expect(v42.textContent).toContain('4.5.0');
+    // id=40 fixture has target_version='4.4.0'
+    const v40 = screen.getByTestId('runs-page-version-40');
+    expect(v40.textContent).toContain('4.4.0');
+  });
+
+  it('version column shows em-dash for null target_version', async () => {
+    const runsWithNull: RunSummary[] = [
+      { id: 55, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 1, passed: 1, failed: 0, skipped: 0, target_version: null, triggered_by: 'tester' },
+    ];
+    setupMocks(runsWithNull);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    const v55 = screen.getByTestId('runs-page-version-55');
+    expect(v55.textContent).toContain('—');
+  });
+
+  it('q-search on version substring shows matching rows only (regression guard)', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
+    // id=40 has target_version='4.4.0'; others are '4.5.0' or no match on '4.4.0'
+    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: '4.4.0' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('runs-page-row-40')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
+    expect(screen.queryByTestId('runs-page-row-41')).toBeNull();
   });
 });
