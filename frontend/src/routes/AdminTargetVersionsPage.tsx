@@ -38,9 +38,36 @@ function jsonHeaders(): HeadersInit {
   return { 'Content-Type': 'application/json', ...(authHeaders() as Record<string, string>) };
 }
 
-async function readDetail(resp: Response): Promise<{ detail?: string; run_count?: number } | null> {
+/**
+ * Read an error response body and normalize FastAPI's two shapes.
+ *
+ * FastAPI wraps `HTTPException(detail=<dict>)` payloads under a top-level
+ * `detail` key, so DELETE 409 actually serializes as:
+ *   { "detail": { "detail": "...message...", "run_count": N } }
+ * but 400s with a plain string come back as:
+ *   { "detail": "name is required" }
+ *
+ * Normalize both:
+ *   - nested dict → promote inner fields (treat as the flat shape)
+ *   - flat       → return as-is
+ *
+ * Caller then reads `.detail` (string message) and `.run_count` uniformly.
+ */
+async function readDetail(
+  resp: Response,
+): Promise<{ detail?: string; run_count?: number } | null> {
   try {
-    return await resp.json();
+    const body: unknown = await resp.json();
+    if (body && typeof body === 'object') {
+      const obj = body as { detail?: unknown; run_count?: number };
+      // Nested case: FastAPI HTTPException(detail={...}) — unwrap one level.
+      if (obj.detail && typeof obj.detail === 'object') {
+        return obj.detail as { detail?: string; run_count?: number };
+      }
+      // Flat case: plain {detail: "string"} or {detail: "string", run_count: N}.
+      return obj as { detail?: string; run_count?: number };
+    }
+    return null;
   } catch {
     return null;
   }
