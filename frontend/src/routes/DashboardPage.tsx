@@ -139,6 +139,7 @@ function RecentRunsTile({ runs }: RecentRunsTileProps) {
   const verdicts = runs.map(runVerdict);
   const pass = verdicts.filter((v) => v === 'pass').length;
   const fail = verdicts.filter((v) => v === 'fail').length;
+  const error = verdicts.filter((v) => v === 'error').length;
   const running = verdicts.filter((v) => v === 'running').length;
   const aborted = verdicts.filter((v) => v === 'aborted').length;
   return (
@@ -149,6 +150,12 @@ function RecentRunsTile({ runs }: RecentRunsTileProps) {
         <span className="badge badge-success">{pass} pass</span>{' '}
         <span className="badge badge-danger">{fail} fail</span>{' '}
         <span className="badge badge-warning">{running} running</span>
+        {error > 0 && (
+          <>
+            {' '}
+            <span className="badge badge-danger">{error} error</span>
+          </>
+        )}
         {aborted > 0 && (
           <>
             {' '}
