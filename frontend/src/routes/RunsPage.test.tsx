@@ -185,38 +185,50 @@ describe('RunsPage', () => {
     expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
   });
 
-  it('q-search NO LONGER matches verdict / id (scope reduced 2026-05-25)', async () => {
-    // Pre-2026-05-25 the hay was `id + verdict + version + triggered_by`.
-    // Now it's only `version + triggered_by` so:
-    //   - searching "fail" must NOT pick up verdict=fail rows (chip 用)
-    //   - searching a numeric id must NOT match by id
+  it('q-search "42" matches run id=42 (id re-added to hay 2026-05-25 user feedback)', async () => {
     setupMocks();
     renderPage();
     await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
-
-    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: 'fail' } });
-    await waitFor(() => {
-      // empty state because no row's version/triggered_by contains "fail"
-      expect(screen.getByTestId('runs-page-empty')).toBeInTheDocument();
-    });
-
-    // Reset + try id=42 — should also not match any row (no version/by contains "42")
     fireEvent.change(screen.getByTestId('filter-q'), { target: { value: '42' } });
     await waitFor(() => {
-      expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
+      expect(screen.getByTestId('runs-page-row-42')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('runs-page-row-41')).toBeNull();
+  });
+
+  it('q-search "fail" does NOT match verdict (chip filter is the canonical path)', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('filter-q'), { target: { value: 'fail' } });
+    await waitFor(() => {
+      // version/triggered_by hay doesn't contain "fail" → empty state
+      expect(screen.getByTestId('runs-page-empty')).toBeInTheDocument();
     });
   });
 
-  it('placeholder reflects current search scope (version + triggered_by)', async () => {
+  it('placeholder reflects current search scope (id + version + triggered_by)', async () => {
     setupMocks();
     renderPage();
     await waitFor(() => expect(screen.getByTestId('filter-q')).toBeInTheDocument());
     const input = screen.getByTestId('filter-q') as HTMLInputElement;
+    expect(input.placeholder).toContain('id');
     expect(input.placeholder).toContain('version');
     expect(input.placeholder).toContain('triggered_by');
-    // Stale prompts removed
+    // verdict explicitly excluded — chip filter is canonical
     expect(input.placeholder).not.toContain('verdict');
-    expect(input.placeholder).not.toContain('id');
+  });
+
+  it('row renders triggered_by column with 👤 prefix', async () => {
+    setupMocks();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    // id=42 fixture has triggered_by='gpadmin'
+    const tb42 = screen.getByTestId('runs-page-triggered-by-42');
+    expect(tb42.textContent).toContain('gpadmin');
+    // id=38 fixture has triggered_by=null → "—"
+    const tb38 = screen.getByTestId('runs-page-triggered-by-38');
+    expect(tb38.textContent).toContain('—');
   });
 
   it('case-id picker triggers server-side filter via /runs?case_id=X', async () => {
