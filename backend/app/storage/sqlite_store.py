@@ -22,11 +22,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.storage.models import CaseResult, CaseSkipList, Run, SystemSetting
+from app.storage.models import CaseResult, CaseSkipList, Run, SystemSetting, TargetVersion
 
 __all__ = [
     "ActiveRunExists",
@@ -45,6 +45,12 @@ __all__ = [
     "list_runs",
     "set_setting",
     "get_skip_list",
+    "list_target_versions",
+    "get_target_version",
+    "add_target_version",
+    "update_target_version",
+    "delete_target_version",
+    "count_runs_referencing_version",
 ]
 
 
@@ -330,3 +336,127 @@ def set_setting(session: Session, key: str, value: dict) -> None:
         row.value_type = "json"
         row.updated_at = now
     session.flush()
+
+
+# ---------------------------------------------------------------------------
+# target_versions (v1.18+, design.md §4.6)
+# ---------------------------------------------------------------------------
+
+
+def list_target_versions(
+    session: Session,
+    *,
+    active_only: bool = False,
+) -> list[TargetVersion]:
+    """Return target_version rows ordered by ``display_order ASC, name ASC``.
+
+    ``active_only=True`` filters to ``is_active=1`` only (frontend's
+    "Trigger New Run" dropdown asks for this; admin CRUD page asks for
+    everything including inactive).
+    """
+    stmt = select(TargetVersion).order_by(
+        TargetVersion.display_order.asc(),
+        TargetVersion.name.asc(),
+    )
+    if active_only:
+        stmt = stmt.where(TargetVersion.is_active.is_(True))
+    return list(session.scalars(stmt).all())
+
+
+def get_target_version(session: Session, vid: int) -> TargetVersion | None:
+    return session.get(TargetVersion, vid)
+
+
+def _clear_other_defaults(session: Session, keep_id: int | None) -> None:
+    """Set ``is_default=False`` on all target_versions except ``keep_id``.
+
+    Used by add_/update_target_version to enforce the "at most one
+    is_default" invariant. ``keep_id=None`` clears all rows (used during
+    the INSERT flow, before the new row's id is known — caller then sets
+    is_default=True on the new row).
+    """
+    stmt = update(TargetVersion).values(is_default=False)
+    if keep_id is not None:
+        stmt = stmt.where(TargetVersion.id != keep_id)
+    session.execute(stmt)
+
+
+def add_target_version(
+    session: Session,
+    *,
+    name: str,
+    display_order: int = 100,
+    is_active: bool = True,
+    is_default: bool = False,
+    notes: str | None = None,
+) -> TargetVersion:
+    """Insert a new target_version row.
+
+    When ``is_default=True``, all other rows' ``is_default`` is cleared
+    in the same transaction so the at-most-one invariant holds.
+    """
+    if is_default:
+        _clear_other_defaults(session, keep_id=None)
+    row = TargetVersion(
+        name=name,
+        display_order=display_order,
+        is_active=is_active,
+        is_default=is_default,
+        notes=notes,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def update_target_version(
+    session: Session,
+    vid: int,
+    **fields: object,
+) -> TargetVersion | None:
+    """Update a target_version row by id. Returns the row, or None if missing.
+
+    Accepted keys: ``name``, ``display_order``, ``is_active``,
+    ``is_default``, ``notes``. Unknown keys are ignored (caller's
+    Pydantic shape already filters to declared fields).
+
+    When ``is_default=True`` is set, all other rows' ``is_default`` is
+    cleared in the same transaction.
+    """
+    row = session.get(TargetVersion, vid)
+    if row is None:
+        return None
+    allowed = {"name", "display_order", "is_active", "is_default", "notes"}
+    for key, value in fields.items():
+        if key in allowed:
+            setattr(row, key, value)
+    if fields.get("is_default") is True:
+        _clear_other_defaults(session, keep_id=row.id)
+    session.flush()
+    return row
+
+
+def delete_target_version(session: Session, vid: int) -> bool:
+    """Delete by primary key; True if a row was removed.
+
+    Caller is responsible for the ``count_runs_referencing_version``
+    refuse-if-referenced check (enforced in API layer because the API
+    layer also handles the ``?force=true`` override). The storage helper
+    just deletes unconditionally.
+    """
+    row = session.get(TargetVersion, vid)
+    if row is None:
+        return False
+    session.delete(row)
+    session.flush()
+    return True
+
+
+def count_runs_referencing_version(session: Session, name: str) -> int:
+    """Return COUNT(*) FROM runs WHERE target_version = :name.
+
+    Used by DELETE /admin/target-versions/{vid} to refuse deletion when
+    historical runs reference this version name (override: ?force=true).
+    """
+    stmt = select(func.count()).select_from(Run).where(Run.target_version == name)
+    return int(session.scalar(stmt) or 0)

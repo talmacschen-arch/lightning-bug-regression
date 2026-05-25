@@ -115,6 +115,48 @@ class SystemSetting(Base):
     updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class TargetVersion(Base):
+    """One row per UI-selectable target version (v1.18+, design.md §4.6).
+
+    Admin-managed registry that backs the frontend dropdown for
+    "Trigger New Run -> Target version". Backend does NOT validate
+    `runs.target_version` against this catalog — POST /runs is permissive
+    so CLI / CI keep working with arbitrary strings. Catalog only sources
+    the UI dropdown.
+
+    `is_default` is "at most one" (0 or 1 rows). The storage helpers
+    `add_target_version` / `update_target_version` clear other rows'
+    `is_default` when one row is set true (no DB-level partial index;
+    enforced at write time so admin UX is forgiving).
+    """
+
+    __tablename__ = "target_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    display_order: Mapped[int] = mapped_column(
+        Integer,
+        server_default=text("100"),
+        nullable=False,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=text("1"),
+        nullable=False,
+    )
+    is_default: Mapped[bool] = mapped_column(
+        Boolean,
+        server_default=text("0"),
+        nullable=False,
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
+    )
+
+
 class CaseCategory(Base):
     __tablename__ = "case_categories"
 
