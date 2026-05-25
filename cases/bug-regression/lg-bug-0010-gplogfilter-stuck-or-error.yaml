@@ -1,14 +1,14 @@
 id: lg-bug-0010-gplogfilter-stuck-or-error
 title: 9.9 gplogfilter 处理大日志文件长时间卡住或报错
 category: bug_regression
-status: open
+status: fixed
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "section-9.9-gplogfilter-stuck-or-error"
   reported_at: "2026-04-16"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/733
 tags: [gplogfilter, log_analysis, performance, python_buffer, gppylib]
@@ -62,4 +62,9 @@ created_by: chenqiang
 created_at: "2026-05-25"
 notes: |
   来源：飞书 §9.9 + issue #733。
-  Try-PASS verified 2026-05-25.
+  Try-PASS verified 2026-05-25 on SynxDB-4.5.0-build130
+  (PostgreSQL 14.4 / Cloudberry 2.1.0): gplogfilter exits 0 in 24.2s on
+  2,474,919-line gpdb csv，summary 含 "log entries"。fixed_version 上栏
+  = verified-non-reproducing build (not necessarily the fix introduction
+  commit / 飞书 issue #733 仍 open，临时方案 buffer.seek(0) 修源码；
+  本 case 在 build130 上验证 BUG 不再触发)。
