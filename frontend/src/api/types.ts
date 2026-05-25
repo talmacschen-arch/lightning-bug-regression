@@ -31,6 +31,11 @@ export interface paths {
         /**
          * List Runs
          * @description Return the most recent runs (newest first), capped at `limit`.
+         *
+         *     Optional `case_id` query param filters to runs that touched the
+         *     given case (post-M6 UX, 2026-05-25). Example:
+         *     `GET /runs?case_id=lg-bug-0009-union-all-const-distributed-row-order`
+         *     returns only runs whose case_results array contains that case.
          */
         get: operations["list_runs_runs_get"];
         put?: never;
@@ -44,6 +49,12 @@ export interface paths {
          *
          *     Returns 409 with `{detail, active_run_id}` if another run is already
          *     in flight (uniq_runs_running enforced by SQLite).
+         *
+         *     v1.17+ auth: requires Bearer token. Auto-fills `triggered_by` with
+         *     the authenticated user's username if the client doesn't supply one
+         *     (single-user mode = always 'admin'). External curl scripts can still
+         *     override by explicitly sending `triggered_by` in the body (e.g. CI
+         *     bots want a distinct name).
          */
         post: operations["create_run_runs_post"];
         delete?: never;
@@ -65,6 +76,82 @@ export interface paths {
          *     exist.
          */
         get: operations["get_run_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Run
+         * @description SSE stream of run events.
+         *
+         *     Browser usage:
+         *         const es = new EventSource(`/runs/${id}/stream`);
+         *         es.onmessage = (e) => { ... JSON.parse(e.data) ... };
+         *         es.onerror = () => es.close();
+         *
+         *     Headers `Cache-Control: no-cache` + `X-Accel-Buffering: no` ensure
+         *     proxies don't buffer the stream.
+         */
+        get: operations["stream_run_runs__run_id__stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}/cases/{case_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Case Artifacts
+         * @description List artifact files for one case in a run.
+         *
+         *     Empty list = case ran but produced no artifact files (e.g., all
+         *     steps had empty stdout/stderr). 404 = run/case unknown OR artifacts
+         *     dir gone.
+         */
+        get: operations["list_case_artifacts_runs__run_id__cases__case_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{run_id}/cases/{case_id}/artifacts/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Case Artifact
+         * @description Download one artifact file as text/plain attachment.
+         *
+         *     Path-traversal protection: reject filenames containing path
+         *     separators or `..`; further, verify the resolved path is inside
+         *     the case's artifacts dir (defense-in-depth against symlinks).
+         */
+        get: operations["download_case_artifact_runs__run_id__cases__case_id__artifacts__filename__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -331,10 +418,293 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/skip-list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skip List Entries
+         * @description List all skip-list entries (ordered by id).
+         */
+        get: operations["list_skip_list_entries_admin_skip_list_get"];
+        put?: never;
+        /**
+         * Create Skip List Entry
+         * @description Add a new skip-list entry. Idempotent on duplicate (case_id, version)?
+         *     No — duplicates are allowed; the orchestrator's matching rule will
+         *     take any of them (first match wins per §5.3 contract).
+         */
+        post: operations["create_skip_list_entry_admin_skip_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/skip-list/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Skip List Entry
+         * @description Remove a skip-list entry by id. 404 if missing.
+         */
+        delete: operations["delete_skip_list_entry_admin_skip_list__entry_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/cases/{case_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Case
+         * @description Remove a case YAML file from disk. 404 if no file matches.
+         *
+         *     Historical runs are preserved automatically (case_results rows hold
+         *     case_id as a string, no FK). Caller is expected to `git rm + commit +
+         *     push` after — the endpoint only touches the working tree.
+         */
+        delete: operations["delete_case_admin_cases__case_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/external-services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List External Services
+         * @description List all `external/<svc>.yml` files with their raw YAML content.
+         *
+         *     Read-only on purpose: the file is the source of truth, edits go via
+         *     `vi external/<svc>.yml` + git commit. Web UI is just a discovery /
+         *     sanity-check view (e.g. "what does ES URL look like right now?").
+         *
+         *     Honors `EXTERNAL_DEPS_DIR` env var like the loader. Missing dir →
+         *     empty list (no error; first-time setup is OK).
+         */
+        get: operations["list_external_services_admin_external_services_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/target-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Target Versions
+         * @description List target versions ordered by ``display_order ASC, name ASC``.
+         *
+         *     Query: ``?active=true`` returns only ``is_active=1`` rows (frontend
+         *     dropdown uses this). No filter / ``?active=false`` returns
+         *     everything (admin CRUD page uses this).
+         *
+         *     GET is open (no auth) — matches ``/admin/categories``.
+         */
+        get: operations["list_target_versions_admin_target_versions_get"];
+        put?: never;
+        /**
+         * Create Target Version
+         * @description Add a new target_version row.
+         *
+         *     400 if ``name`` is empty / whitespace.
+         *     409 on UNIQUE collision (duplicate ``name``).
+         *     When ``is_default=true``, other rows' ``is_default`` is cleared
+         *     transactionally so the at-most-one invariant holds.
+         */
+        post: operations["create_target_version_admin_target_versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/target-versions/{vid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Target Version
+         * @description Delete a target_version row.
+         *
+         *     Default behaviour: refuse with 409 if any ``runs.target_version``
+         *     row references the version's ``name`` — historical runs would
+         *     otherwise lose dropdown-grounding for the version they were
+         *     triggered against. Pass ``?force=true`` to override.
+         *
+         *     404 on unknown id.
+         */
+        delete: operations["delete_target_version_admin_target_versions__vid__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Target Version
+         * @description Partial update. Only fields present in the body are touched.
+         *
+         *     404 on unknown id; 400 if ``name`` is supplied but empty/whitespace;
+         *     409 on UNIQUE collision with another row's name. ``is_default=true``
+         *     clears other rows' is_default in the same transaction.
+         */
+        patch: operations["patch_target_version_admin_target_versions__vid__patch"];
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @description Validate credentials, mint a new token, return it.
+         *
+         *     No rate limiting — single-user tool, attacker would need to brute-force
+         *     bcrypt remote (slow by design). If exposed publicly later, add a
+         *     middleware-level rate limit.
+         */
+        post: operations["login_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout
+         * @description Invalidate current token (idempotent: missing header → still 204).
+         *
+         *     Doesn't use get_current_user dependency — even invalid/missing tokens
+         *     should not error out logout (we want clients to be able to "clear"
+         *     state reliably).
+         */
+        post: operations["logout_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Me
+         * @description Used by frontend to bootstrap state on page load + decide whether
+         *     to show the "please change password" banner.
+         */
+        get: operations["me_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Verify current_password → update password_hash + password_changed_at.
+         *
+         *     Does NOT invalidate other active tokens (simple; user can manually
+         *     logout other devices if needed). Frontend banner ("please change
+         *     password") disappears once password_changed_at is set.
+         *
+         *     Minimum new password length = 4 chars (lax; single-user tool, user
+         *     knows their own strength preference).
+         */
+        post: operations["change_password_auth_change_password_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ArtifactInfo
+         * @description One artifact file under a case's artifacts_path (M6-2).
+         *
+         *     `step_idx` / `step_id` populated when filename matches the runner's
+         *     `step-NN-stepid.{stdout,stderr}.txt` pattern; else None (file
+         *     written by something else, kept for transparency).
+         */
+        ArtifactInfo: {
+            /** Filename */
+            filename: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Kind */
+            kind: string;
+            /** Step Idx */
+            step_idx?: number | null;
+            /** Step Id */
+            step_id?: string | null;
+        };
         /** CaseDetail */
         CaseDetail: {
             /** Id */
@@ -430,6 +800,13 @@ export interface components {
             /** Display Order */
             display_order: number;
         };
+        /** ChangePasswordRequest */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
         /** CreateRunRequest */
         CreateRunRequest: {
             /** Case Ids */
@@ -453,6 +830,33 @@ export interface components {
             /** Location */
             location: string;
         };
+        /**
+         * ExternalServiceOut
+         * @description One row in the /admin/external-services response.
+         *
+         *     `content` is the raw YAML text — not parsed — so the UI can render
+         *     it verbatim (preserves comments, blank lines, etc.). Frontend does
+         *     not edit; if a user wants to change a value, they edit the file
+         *     directly + commit (single source of truth = `external/<svc>.yml`
+         *     on disk, git-tracked).
+         */
+        ExternalServiceOut: {
+            /** Name */
+            name: string;
+            /** Filename */
+            filename: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Modified At
+             * Format: date-time
+             */
+            modified_at: string;
+            /** Content */
+            content: string;
+            /** Parse Error */
+            parse_error?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -464,6 +868,29 @@ export interface components {
             status: string;
             /** Db */
             db: string;
+        };
+        /** LoginRequest */
+        LoginRequest: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+        };
+        /** LoginResponse */
+        LoginResponse: {
+            /** Token */
+            token: string;
+            /** Username */
+            username: string;
+            /** Must Change Password */
+            must_change_password: boolean;
+        };
+        /** MeResponse */
+        MeResponse: {
+            /** Username */
+            username: string;
+            /** Must Change Password */
+            must_change_password: boolean;
         };
         /** RunDetail */
         RunDetail: {
@@ -486,6 +913,8 @@ export interface components {
             failed?: number | null;
             /** Skipped */
             skipped?: number | null;
+            /** Errored */
+            errored?: number | null;
             /** Target Version */
             target_version?: string | null;
             /** Triggered By */
@@ -517,10 +946,40 @@ export interface components {
             failed?: number | null;
             /** Skipped */
             skipped?: number | null;
+            /** Errored */
+            errored?: number | null;
             /** Target Version */
             target_version?: string | null;
             /** Triggered By */
             triggered_by?: string | null;
+        };
+        /** SkipListCreate */
+        SkipListCreate: {
+            /** Case Id */
+            case_id: string;
+            /** Reason */
+            reason: string;
+            /** Applies To Version */
+            applies_to_version?: string | null;
+            /** Upstream Issue */
+            upstream_issue?: string | null;
+            /** Until Date */
+            until_date?: string | null;
+        };
+        /** SkipListEntryOut */
+        SkipListEntryOut: {
+            /** Id */
+            id: number;
+            /** Case Id */
+            case_id: string;
+            /** Reason */
+            reason: string;
+            /** Applies To Version */
+            applies_to_version?: string | null;
+            /** Upstream Issue */
+            upstream_issue?: string | null;
+            /** Until Date */
+            until_date?: string | null;
         };
         /**
          * StepKindOut
@@ -572,6 +1031,61 @@ export interface components {
             pr_number: number;
             /** Branch */
             branch: string;
+        };
+        /** TargetVersionCreate */
+        TargetVersionCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Display Order
+             * @default 100
+             */
+            display_order: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /** Notes */
+            notes?: string | null;
+        };
+        /** TargetVersionOut */
+        TargetVersionOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Display Order */
+            display_order: number;
+            /** Is Active */
+            is_active: boolean;
+            /** Is Default */
+            is_default: boolean;
+            /** Notes */
+            notes: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** TargetVersionUpdate */
+        TargetVersionUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Display Order */
+            display_order?: number | null;
+            /** Is Active */
+            is_active?: boolean | null;
+            /** Is Default */
+            is_default?: boolean | null;
+            /** Notes */
+            notes?: string | null;
         };
         /** TryRequest */
         TryRequest: {
@@ -659,6 +1173,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                case_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -689,7 +1204,9 @@ export interface operations {
     create_run_runs_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -737,6 +1254,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_run_runs__run_id__stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_case_artifacts_runs__run_id__cases__case_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactInfo"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_case_artifact_runs__run_id__cases__case_id__artifacts__filename__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+                case_id: string;
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -981,6 +1594,405 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StepKindOut"][];
+                };
+            };
+        };
+    };
+    list_skip_list_entries_admin_skip_list_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkipListEntryOut"][];
+                };
+            };
+        };
+    };
+    create_skip_list_entry_admin_skip_list_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkipListCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkipListEntryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_skip_list_entry_admin_skip_list__entry_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                entry_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_case_admin_cases__case_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                case_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_external_services_admin_external_services_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalServiceOut"][];
+                };
+            };
+        };
+    };
+    list_target_versions_admin_target_versions_get: {
+        parameters: {
+            query?: {
+                active?: boolean | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetVersionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_target_version_admin_target_versions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TargetVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_target_version_admin_target_versions__vid__delete: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                vid: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_target_version_admin_target_versions__vid__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                vid: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TargetVersionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TargetVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    login_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    me_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_auth_change_password_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
