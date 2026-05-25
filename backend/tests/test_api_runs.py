@@ -327,6 +327,116 @@ def test_get_run_returns_run_with_case_results_array(client: TestClient) -> None
 
 
 # ---------------------------------------------------------------------------
+# `errored` column (alembic 0005, 2026-05-26)
+#
+# Dogfood 2026-05-26: run #25 had 17 total cases, passed=15 / failed=0 /
+# skipped=1 — the 17th case (jinja UndefinedError) was status `error` but
+# the run row had no column for it, so `15+0+1=16 ≠ 17` math broke. These
+# tests pin the wiring: orchestrator.SuiteSummary.errored must reach the
+# DB and the JSON responses.
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_all_pass_returns_errored_zero(client: TestClient) -> None:
+    """All-pass run from the default fake orchestrator must report
+    `errored == 0` (not None) — the wiring carried the count through."""
+    r = client.post("/runs", json={})
+    run_id = r.json()["run_id"]
+    final = _wait_for_run_terminal(client, run_id)
+    assert final["errored"] == 0
+    assert final["passed"] == 1
+    assert final["failed"] == 0
+    assert final["skipped"] == 0
+    assert final["total"] == 1
+
+
+def test_get_run_with_erroring_case_reports_errored_count(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    """A SuiteSummary with errored>0 must surface in GET /runs/{id}.
+
+    Replaces the default fake orchestrator with one that produces 2 passes,
+    1 fail, 1 skip, and 1 error — mirrors the run #25 shape that lost the
+    error count under the old schema.
+    """
+
+    async def fake_run_suite(
+        cases: list[dict[str, Any]],
+        *,
+        run_id: int,
+        session_factory: Any,
+        **kwargs: Any,
+    ) -> SuiteSummary:
+        from app.storage.sqlite_store import insert_case_result
+
+        with session_factory() as sess:
+            insert_case_result(
+                sess, run_id=run_id, case_id="c-pass-1", status="pass", duration_ms=10
+            )
+            insert_case_result(
+                sess, run_id=run_id, case_id="c-pass-2", status="pass", duration_ms=10
+            )
+            insert_case_result(
+                sess, run_id=run_id, case_id="c-fail-1", status="fail", duration_ms=10
+            )
+            insert_case_result(
+                sess, run_id=run_id, case_id="c-skip-1", status="skip", duration_ms=0
+            )
+            insert_case_result(
+                sess, run_id=run_id, case_id="c-error-1", status="error", duration_ms=0
+            )
+        return SuiteSummary(total=5, passed=2, failed=1, errored=1, skipped=1)
+
+    monkeypatch.setattr(runs_api.orchestrator, "run_suite", fake_run_suite)
+
+    r = client.post("/runs", json={})
+    assert r.status_code == 202
+    run_id = r.json()["run_id"]
+    final = _wait_for_run_terminal(client, run_id)
+
+    assert final["total"] == 5
+    assert final["passed"] == 2
+    assert final["failed"] == 1
+    assert final["skipped"] == 1
+    assert final["errored"] == 1
+    # Sanity: 2 + 1 + 1 + 1 = 5, math actually adds up now (PR-E's verdict
+    # will key on this).
+    assert final["passed"] + final["failed"] + final["skipped"] + final["errored"] == final["total"]
+
+
+def test_list_runs_exposes_errored_field(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    """GET /runs (list) must include `errored` on each row so the
+    frontend's RunsPage can show a 5th counter and compute the `error`
+    verdict without fetching detail."""
+
+    async def fake_run_suite(
+        cases: list[dict[str, Any]],
+        *,
+        run_id: int,
+        session_factory: Any,
+        **kwargs: Any,
+    ) -> SuiteSummary:
+        return SuiteSummary(total=3, passed=1, failed=0, errored=2, skipped=0)
+
+    monkeypatch.setattr(runs_api.orchestrator, "run_suite", fake_run_suite)
+
+    r = client.post("/runs", json={})
+    run_id = r.json()["run_id"]
+    _wait_for_run_terminal(client, run_id)
+
+    listing = client.get("/runs").json()
+    assert len(listing) == 1
+    row = listing[0]
+    assert row["id"] == run_id
+    assert row["errored"] == 2
+    assert row["passed"] == 1
+
+
+# ---------------------------------------------------------------------------
 # helper coverage
 # ---------------------------------------------------------------------------
 

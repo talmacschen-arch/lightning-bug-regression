@@ -198,6 +198,66 @@ def test_finish_run_with_unknown_id_raises_value_error() -> None:
             sqlite_store.finish_run(sess, 12345, status="done", finished_at=datetime(2026, 5, 1))
 
 
+def test_finish_run_persists_errored_count() -> None:
+    """alembic 0005: finish_run accepts `errored=` kwarg and stores it
+    on the runs row. Without this column the error verdict was invisible
+    at the run-summary level (dogfood 2026-05-26 run #25)."""
+    started = datetime(2026, 5, 1, 10, 0, 0)
+    with sqlite_store.get_session() as sess:
+        run = sqlite_store.create_run(sess, started_at=started)
+        run_id = run.id
+
+    with sqlite_store.get_session() as sess:
+        sqlite_store.finish_run(
+            sess,
+            run_id,
+            status="done",
+            finished_at=started + timedelta(minutes=1),
+            total=4,
+            passed=2,
+            failed=0,
+            skipped=1,
+            errored=1,
+        )
+
+    with sqlite_store.get_session() as sess:
+        row = sqlite_store.get_run(sess, run_id)
+        assert row is not None
+        assert row.total == 4
+        assert row.passed == 2
+        assert row.failed == 0
+        assert row.skipped == 1
+        assert row.errored == 1
+
+
+def test_finish_run_without_errored_leaves_column_null() -> None:
+    """Backwards-compat: callers that omit `errored=` (legacy callers,
+    pre-0005 codepaths kept around for safety) leave the column NULL,
+    matching the same convention as passed/failed/skipped."""
+    started = datetime(2026, 5, 1, 10, 0, 0)
+    with sqlite_store.get_session() as sess:
+        run = sqlite_store.create_run(sess, started_at=started)
+        run_id = run.id
+
+    with sqlite_store.get_session() as sess:
+        # No errored= kwarg
+        sqlite_store.finish_run(
+            sess,
+            run_id,
+            status="done",
+            finished_at=started + timedelta(minutes=1),
+            total=1,
+            passed=1,
+            failed=0,
+            skipped=0,
+        )
+
+    with sqlite_store.get_session() as sess:
+        row = sqlite_store.get_run(sess, run_id)
+        assert row is not None
+        assert row.errored is None
+
+
 def test_list_runs_orders_newest_first_and_respects_limit() -> None:
     """list_runs must return id-desc order so the UI can show recent runs
     first, and must respect the `limit` kwarg."""

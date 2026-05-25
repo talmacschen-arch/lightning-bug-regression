@@ -187,3 +187,115 @@ def test_downgrade_then_upgrade_round_trip(tmp_path: Path) -> None:
     _run_alembic(BACKEND_DIR, ["upgrade", "head"], env_extra)
     insp = inspect(create_engine(url))
     assert "case_categories" in insp.get_table_names()
+
+
+def test_0005_adds_errored_column_to_runs(fresh_db_url: str) -> None:
+    """alembic 0005: `runs` table gains an `errored INTEGER NULL` column.
+
+    The column lives next to `passed/failed/skipped` and mirrors their
+    `Integer NULL` shape — NOT `NOT NULL DEFAULT 0` — so half-baked rows
+    that never finished aggregation keep the same "never-aggregated"
+    NULL signal as the other three counters.
+    """
+    engine = create_engine(fresh_db_url)
+    insp = inspect(engine)
+    cols = {c["name"]: c for c in insp.get_columns("runs")}
+    assert "errored" in cols, "alembic 0005 didn't add runs.errored"
+    # Integer + nullable. SQLAlchemy reports the dialect-native type;
+    # we just need Integer-ness + nullability.
+    assert cols["errored"]["nullable"] is True
+    type_str = str(cols["errored"]["type"]).upper()
+    assert "INT" in type_str, f"errored column type unexpected: {type_str}"
+
+
+def test_0005_downgrade_drops_errored_column(tmp_path: Path) -> None:
+    """Downgrade 0005 -> 0004 removes `errored` cleanly. Tests the
+    batch_alter_table drop_column path on SQLite."""
+    db_file = tmp_path / "rt0005.db"
+    url = f"sqlite:///{db_file}"
+    env_extra = {"DATABASE_URL": url}
+    _run_alembic(BACKEND_DIR, ["upgrade", "head"], env_extra)
+    # Confirm errored exists at head
+    insp = inspect(create_engine(url))
+    assert "errored" in {c["name"] for c in insp.get_columns("runs")}
+    # Downgrade one step
+    _run_alembic(BACKEND_DIR, ["downgrade", "0004"], env_extra)
+    insp = inspect(create_engine(url))
+    cols = {c["name"] for c in insp.get_columns("runs")}
+    assert "errored" not in cols
+    # passed/failed/skipped should still exist (we only dropped errored)
+    assert {"passed", "failed", "skipped"}.issubset(cols)
+    # And re-upgrading restores the column
+    _run_alembic(BACKEND_DIR, ["upgrade", "head"], env_extra)
+    insp = inspect(create_engine(url))
+    assert "errored" in {c["name"] for c in insp.get_columns("runs")}
+
+
+def test_0005_backfills_errored_from_case_results(tmp_path: Path) -> None:
+    """Regression for the dogfood incident 2026-05-26: pre-existing runs
+    rows must get their `errored` count populated from `case_results` at
+    upgrade time so historical runs render correctly in the UI.
+
+    Seed: stop at revision 0004, insert a runs row with total set + a
+    handful of case_results (2 error + 1 pass), then upgrade to 0005 and
+    assert errored == 2. Also insert a half-baked row (total NULL) and
+    assert its errored stays NULL (the 'aggregation never finished'
+    signal — don't lie about it).
+    """
+    db_file = tmp_path / "backfill.db"
+    url = f"sqlite:///{db_file}"
+    env_extra = {"DATABASE_URL": url}
+
+    # Stop at 0004 so the errored column doesn't exist yet.
+    _run_alembic(BACKEND_DIR, ["upgrade", "0004"], env_extra)
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        # Row A: aggregated (total NOT NULL), 2 errors + 1 pass.
+        conn.execute(
+            text(
+                "INSERT INTO runs (id, started_at, status, total, passed, failed, skipped) "
+                "VALUES (1, CURRENT_TIMESTAMP, 'done', 3, 1, 0, 0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO case_results (run_id, case_id, status) VALUES "
+                "(1, 'a-1', 'pass'), (1, 'a-2', 'error'), (1, 'a-3', 'error')"
+            )
+        )
+        # Row B: half-baked (total NULL). Has 1 errored case_result. Backfill
+        # should NOT touch it (preserve 'aggregation never finished' signal).
+        conn.execute(
+            text(
+                "INSERT INTO runs (id, started_at, status) VALUES (2, CURRENT_TIMESTAMP, 'aborted')"
+            )
+        )
+        conn.execute(
+            text("INSERT INTO case_results (run_id, case_id, status) VALUES (2, 'b-1', 'error')")
+        )
+        # Row C: aggregated, all pass — backfill should set errored=0
+        # (not NULL), so the row shape is internally consistent.
+        conn.execute(
+            text(
+                "INSERT INTO runs (id, started_at, status, total, passed, failed, skipped) "
+                "VALUES (3, CURRENT_TIMESTAMP, 'done', 2, 2, 0, 0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO case_results (run_id, case_id, status) VALUES "
+                "(3, 'c-1', 'pass'), (3, 'c-2', 'pass')"
+            )
+        )
+
+    # Now upgrade to 0005 — backfill runs.
+    _run_alembic(BACKEND_DIR, ["upgrade", "0005"], env_extra)
+
+    engine = create_engine(url)
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT id, total, errored FROM runs ORDER BY id")).fetchall()
+    by_id = {r.id: r for r in rows}
+    assert by_id[1].errored == 2, "row 1: 2 case_results.status='error' should backfill to 2"
+    assert by_id[2].errored is None, "row 2: half-baked (total NULL) must NOT be backfilled"
+    assert by_id[3].errored == 0, "row 3: aggregated with no errors should be 0 (not NULL)"
