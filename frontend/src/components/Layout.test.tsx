@@ -11,9 +11,9 @@
  *   sidebar / sidebar-nav-dashboard / sidebar-nav-cases / sidebar-nav-runs
  *   sidebar-nav-admin / sidebar-active-run-pip / breadcrumb / main-content
  */
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { Layout } from './Layout';
 
@@ -135,6 +135,11 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Delete case');
     });
 
+    it('breadcrumb shows Admin / Change password at /admin/change-password', () => {
+      renderAt('/admin/change-password');
+      expect(screen.getByTestId('breadcrumb').textContent).toContain('Admin / Change password');
+    });
+
   });
 
   describe('navigation contract', () => {
@@ -163,6 +168,55 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       const text = screen.getByTestId('sidebar').textContent ?? '';
       expect(text).not.toContain('bug_regression');
       expect(text).not.toContain('external_systems');
+    });
+  });
+
+  describe('v1.17 auth UI', () => {
+    it('shows must-change-password banner when fetchMe says so', async () => {
+      // Mock fetch so Layout's useEffect → fetchMe resolves with
+      // must_change_password=true. localStorage token required for
+      // fetchMe to actually hit the network.
+      if (typeof localStorage !== 'undefined') localStorage.setItem('authToken', 't');
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ username: 'admin', must_change_password: true }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      renderAt('/dashboard');
+      await waitFor(() => {
+        expect(screen.getByTestId('must-change-password-banner')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('banner-change-password-link')).toHaveAttribute(
+        'href',
+        '/admin/change-password',
+      );
+
+      vi.unstubAllGlobals();
+      if (typeof localStorage !== 'undefined') localStorage.removeItem('authToken');
+    });
+
+    it('hides must-change-password banner when must_change_password=false', async () => {
+      if (typeof localStorage !== 'undefined') localStorage.setItem('authToken', 't');
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ username: 'admin', must_change_password: false }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      renderAt('/dashboard');
+      // Wait long enough for fetchMe to resolve + Layout to set state
+      await waitFor(() => {
+        expect(screen.getByTestId('sidebar-user')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('must-change-password-banner')).toBeNull();
+
+      vi.unstubAllGlobals();
+      if (typeof localStorage !== 'undefined') localStorage.removeItem('authToken');
     });
   });
 });

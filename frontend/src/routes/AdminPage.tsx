@@ -55,6 +55,18 @@ export default function AdminPage() {
             ⚠️ Permanent — removes YAML from disk; history preserved. For temporary disable, use Skip list.
           </span>
         </li>
+        <li>
+          <Link
+            to="/admin/change-password"
+            data-testid="admin-link-change-password"
+            className="text-blue-700 hover:underline"
+          >
+            Change password →
+          </Link>
+          <span className="ml-2 text-xs text-muted-foreground">
+            修改当前用户密码（单用户 admin）
+          </span>
+        </li>
       </ul>
     </div>
   );

@@ -69,6 +69,7 @@ function pathToBreadcrumb(pathname: string): string {
   if (pathname.startsWith('/admin/skip-list')) return 'Admin / Skip list';
   if (pathname.startsWith('/admin/external-services')) return 'Admin / External services';
   if (pathname.startsWith('/admin/cases')) return 'Admin / Delete case';
+  if (pathname.startsWith('/admin/change-password')) return 'Admin / Change password';
   return pathname;
 }
 
@@ -128,6 +129,23 @@ export function Layout() {
         )}
       </aside>
       <div className="main-area" data-testid="main-content">
+        {me?.must_change_password && (
+          <div
+            data-testid="must-change-password-banner"
+            className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-700 flex items-center justify-between"
+          >
+            <span>
+              ⚠️ 你还在用初始密码（admin/admin）。请尽快改：
+            </span>
+            <Link
+              to="/admin/change-password"
+              data-testid="banner-change-password-link"
+              className="text-red-700 hover:underline font-medium"
+            >
+              改密码 →
+            </Link>
+          </div>
+        )}
         <div className="breadcrumb" data-testid="breadcrumb">
           {pathToBreadcrumb(pathname)}
         </div>

@@ -24,6 +24,9 @@ describe('AdminPage', () => {
     const deleteCase = screen.getByTestId('admin-link-cases');
     expect(deleteCase.getAttribute('href')).toBe('/admin/cases');
 
+    const changePw = screen.getByTestId('admin-link-change-password');
+    expect(changePw.getAttribute('href')).toBe('/admin/change-password');
+
     // Settings link must NOT render — endpoint + page deleted
     expect(screen.queryByTestId('admin-link-settings')).toBeNull();
   });
