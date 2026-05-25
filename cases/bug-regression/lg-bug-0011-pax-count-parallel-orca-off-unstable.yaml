@@ -1,14 +1,14 @@
 id: lg-bug-0011-pax-count-parallel-orca-off-unstable
 title: 9.10 enable_parallel BUG1 [ORCA=OFF] PAX 表 count(*) 查询行数不稳定
 category: bug_regression
-status: open
+status: fixed
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "section-9.10-enable-parallel-bug1-pax-count-orca-off-unstable"
   reported_at: "2026-05-25"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/265
 tags: [pax, parallel, count, orca, correctness, bitmap_index_scan]
@@ -143,7 +143,14 @@ notes: |
     GUCs 在 test-2/3/4 继承；test-3 仅切 optimizer 单 GUC，其他不重 SET。
   - 4 个 test step 各自 expect scalar=98016841；任一非 98016841 即 fail。
 
-  **status=open**：飞书段未释 fixed_version。
+  **status=fixed (2026-05-25)**：Try-PASS on SynxDB-4.5.0-build130
+  (PostgreSQL 14.4 / Cloudberry 2.1.0)：9 main steps 全 PASS，4 个
+  count(*) 全返回 98016841；ORCA=on cold=739ms warm=745ms，
+  ORCA=off cold=2779ms warm=2661ms，prep-3 INSERT 98M+md5=74.3s，
+  prep-5 ANALYZE=1.0s。fixed_version 上栏 = verified-non-reproducing
+  build (not necessarily the fix introduction commit；飞书 issue #265
+  仍 open，本 case 在 build130 上的强制 Bitmap Index Scan 路径未复现
+  BUG)。
 
   **本地观测：`timeout_sec` 字段在 backend 完全没被引用**（grep timeout_sec
   on backend/app/* 0 命中），所有 case 写的 timeout_sec 都是哑字段。本版
