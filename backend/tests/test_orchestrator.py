@@ -656,6 +656,223 @@ async def test_artifacts_written_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 
 # ---------------------------------------------------------------------------
+# Bug A (PR-G): step_id sanitization — `/`, Windows-reserved chars must
+# not corrupt the artifact file path into nested subdirs.
+# Dogfood incident: lg-xs-zombodb-partition-text-search step 0 was named
+# "precondition: ES /_cluster/health status=green (...)" — slash created
+# subdirs, hiding the artifact from the non-recursive iterdir() listing.
+# ---------------------------------------------------------------------------
+
+
+async def test_step_id_with_slash_does_not_create_nested_dirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Maps to PR-G Bug A: a step name containing `/` must be sanitized
+    so the artifact file lands directly in case_artifacts_dir, not in a
+    new subdir created by Path.parent.mkdir()."""
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        return _make_step_result(
+            step_id,
+            status=StepStatus.PASS,
+            stdout="ok",
+            stderr="",
+        )
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    case = {
+        "id": "lg-bug-sanitize-slash",
+        "steps": [
+            # id literally contains `/`, simulating the zombodb step name
+            {"id": "step a/b/c", "kind": "sql", "on": "primary", "sql": "select 1"},
+        ],
+    }
+    result = await run_case(
+        case,
+        run_id=99,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=MagicMock(),
+    )
+    case_dir = tmp_path / "99" / "lg-bug-sanitize-slash"
+    # No nested subdir for the slash fragment
+    assert not (case_dir / "step-00-step a").exists()
+    # The file lands directly in case_dir with underscore replacements
+    expected_stdout = case_dir / "step-00-step a_b_c.stdout.txt"
+    assert expected_stdout.exists(), (
+        f"expected sanitized filename {expected_stdout.name}; "
+        f"got listing: {[p.name for p in case_dir.iterdir()]}"
+    )
+    # The StepResult.artifacts list also has the sanitized path
+    assert any("step a_b_c.stdout.txt" in p for p in result.step_results[0].artifacts)
+
+
+@pytest.mark.parametrize(
+    "illegal_char",
+    ["/", "\\", ":", "*", "?", '"', "<", ">", "|"],
+)
+async def test_step_id_sanitization_replaces_all_illegal_chars(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    illegal_char: str,
+) -> None:
+    """Maps to PR-G Bug A: every char in _ARTIFACT_NAME_ILLEGAL must be
+    replaced by underscore so the artifact stays a single top-level file."""
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        return _make_step_result(step_id, status=StepStatus.PASS, stdout="ok")
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    step_id_value = f"x{illegal_char}y"
+    case = {
+        "id": "lg-bug-sanitize-parametrized",
+        "steps": [
+            {"id": step_id_value, "kind": "sql", "on": "primary", "sql": "select 1"},
+        ],
+    }
+    await run_case(
+        case,
+        run_id=100,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=MagicMock(),
+    )
+    case_dir = tmp_path / "100" / "lg-bug-sanitize-parametrized"
+    # All listed children must be files (no subdir created by the illegal char)
+    children = list(case_dir.iterdir())
+    for child in children:
+        assert child.is_file(), f"illegal char {illegal_char!r} created subdir {child.name}"
+    expected = case_dir / "step-00-x_y.stdout.txt"
+    assert expected.exists(), (
+        f"expected sanitized {expected.name}; got {[c.name for c in children]}"
+    )
+
+
+async def test_step_id_sanitization_preserves_non_ascii_chinese(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Maps to PR-G Bug A: Chinese / non-ASCII chars must be preserved
+    because POSIX filesystems handle UTF-8 fine — only path separators
+    and Windows-reserved chars are the issue."""
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        return _make_step_result(step_id, status=StepStatus.PASS, stdout="ok")
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    case = {
+        "id": "lg-bug-sanitize-cn",
+        "steps": [
+            # Chinese chars kept; slash replaced
+            {"id": "step 中文 with /", "kind": "sql", "on": "primary", "sql": "select 1"},
+        ],
+    }
+    await run_case(
+        case,
+        run_id=101,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=MagicMock(),
+    )
+    case_dir = tmp_path / "101" / "lg-bug-sanitize-cn"
+    expected = case_dir / "step-00-step 中文 with _.stdout.txt"
+    assert expected.exists(), (
+        f"expected sanitized {expected.name}; got listing: {[p.name for p in case_dir.iterdir()]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug B (PR-G): step_result.error is persisted as a `.error.txt` artifact
+# so driver-level exception text is no longer invisible.
+# Dogfood run #26: zombodb step 1 erred at the psycopg level but ALL trace
+# of "what the error said" was lost — error went into step_result.error
+# (the dataclass field), which was never written to disk.
+# ---------------------------------------------------------------------------
+
+
+async def test_sql_error_writes_error_txt_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Maps to PR-G Bug B: when a step has status=ERROR with a non-empty
+    `error` field, orchestrator must persist that text as a
+    `step-NN-<id>.error.txt` artifact under case_artifacts_dir."""
+    err_text = "psycopg.errors.SyntaxError: syntax error near 'ZOMBODB' (mock)"
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        return _make_step_result(
+            step_id,
+            status=StepStatus.ERROR,
+            stdout="",
+            stderr="",
+            error=err_text,
+        )
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    case = {
+        "id": "lg-bug-err-artifact",
+        "steps": [
+            {"id": "boom", "kind": "sql", "on": "primary", "sql": "select 1"},
+        ],
+    }
+    result = await run_case(
+        case,
+        run_id=200,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=MagicMock(),
+    )
+    case_dir = tmp_path / "200" / "lg-bug-err-artifact"
+    error_file = case_dir / "step-00-boom.error.txt"
+    assert error_file.exists(), (
+        f"expected {error_file.name}; got {[p.name for p in case_dir.iterdir()]}"
+    )
+    assert err_text in error_file.read_text(encoding="utf-8")
+    # And the path is appended to the StepResult.artifacts list
+    assert any("step-00-boom.error.txt" in p for p in result.step_results[0].artifacts)
+
+
+async def test_step_with_no_error_does_not_write_error_txt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A passing step with empty `step_result.error` must NOT produce an
+    `.error.txt` artifact — preserves the 'no artifact = nothing to say'
+    semantic so the UI doesn't show empty error blobs for green runs."""
+
+    async def fake_sql(*, pool, step_id, session, sql, timeout_ms):
+        return _make_step_result(step_id, status=StepStatus.PASS, stdout="ok", error=None)
+
+    monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
+
+    case = {
+        "id": "lg-bug-no-error",
+        "steps": [
+            {"id": "happy", "kind": "sql", "on": "primary", "sql": "select 1"},
+        ],
+    }
+    await run_case(
+        case,
+        run_id=201,
+        artifacts_root=tmp_path,
+        jinja_context={},
+        dut_hosts=set(),
+        sql_pool=MagicMock(),
+    )
+    case_dir = tmp_path / "201" / "lg-bug-no-error"
+    # No .error.txt file present
+    assert not (case_dir / "step-00-happy.error.txt").exists()
+    # And nothing matching the pattern at all
+    error_files = list(case_dir.glob("*.error.txt"))
+    assert error_files == []
+
+
+# ---------------------------------------------------------------------------
 # unknown step kind → error (NOT crash)
 # ---------------------------------------------------------------------------
 
