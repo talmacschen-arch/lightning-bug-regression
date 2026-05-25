@@ -156,10 +156,12 @@ describe('RunsPage', () => {
       expect(screen.getByTestId('filter-status-pass')).toBeInTheDocument();
     });
     expect(screen.getByTestId('filter-status-fail')).toBeInTheDocument();
+    // 'error' is now a verdict option (dogfood run #25 — errored cases were
+    // invisible, run showed PASS with 15+0≠17)
+    expect(screen.getByTestId('filter-status-error')).toBeInTheDocument();
     expect(screen.getByTestId('filter-status-running')).toBeInTheDocument();
     expect(screen.getByTestId('filter-status-aborted')).toBeInTheDocument();
-    // Pre-fix legacy chip values that don't exist in backend → must NOT render
-    expect(screen.queryByTestId('filter-status-error')).toBeNull();
+    // Legacy chip values that don't exist in backend → must NOT render
     expect(screen.queryByTestId('filter-status-completed')).toBeNull();
     expect(screen.queryByTestId('filter-status-done')).toBeNull();
   });
@@ -367,5 +369,61 @@ describe('RunsPage', () => {
     });
     expect(screen.queryByTestId('runs-page-row-42')).toBeNull();
     expect(screen.queryByTestId('runs-page-row-41')).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Counter columns: skip / error (dogfood run #25 — "15+0 ≠ 17" incident)
+  // ---------------------------------------------------------------------------
+
+  it('row renders "1 skip" when skipped=1', async () => {
+    const runs: RunSummary[] = [
+      { id: 99, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 10, passed: 9, failed: 0, skipped: 1, target_version: '4.5.0', triggered_by: 'tester' },
+    ];
+    setupMocks(runs);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    expect(screen.getByTestId('runs-page-row-99').textContent).toContain('1 skip');
+  });
+
+  it('row renders "1 error" when errored=1', async () => {
+    const runs = [
+      Object.assign(
+        { id: 98, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 17, passed: 15, failed: 0, skipped: 1, target_version: '4.5.0', triggered_by: 'tester' },
+        { errored: 1 },
+      ) as RunSummary,
+    ];
+    setupMocks(runs);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    expect(screen.getByTestId('runs-page-row-98').textContent).toContain('1 error');
+  });
+
+  it('row renders "0 error" when errored field is absent (pre-PR-D backend row)', async () => {
+    // RunSummary without `errored` field — should default to 0, not "undefined error"
+    const runs: RunSummary[] = [
+      { id: 97, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 10, passed: 10, failed: 0, skipped: 0, target_version: '4.5.0', triggered_by: 'tester' },
+    ];
+    setupMocks(runs);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    expect(screen.getByTestId('runs-page-row-97').textContent).toContain('0 error');
+    // Sanity: text must not contain the literal word "undefined"
+    expect(screen.getByTestId('runs-page-row-97').textContent).not.toContain('undefined');
+  });
+
+  it('"error" verdict badge shows RED when run has errored case (dogfood run #25 regression guard)', async () => {
+    const runs = [
+      Object.assign(
+        { id: 96, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 17, passed: 15, failed: 0, skipped: 1, target_version: '4.5.0', triggered_by: 'tester' },
+        { errored: 1 },
+      ) as RunSummary,
+    ];
+    setupMocks(runs);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('runs-page-list')).toBeInTheDocument());
+    // Verdict must be ERROR (not PASS), badge must be badge-danger
+    const badge = screen.getByTestId('runs-page-status-96');
+    expect(badge.textContent).toBe('ERROR');
+    expect(badge.className).toContain('badge-danger');
   });
 });

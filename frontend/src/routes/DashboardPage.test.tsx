@@ -327,6 +327,34 @@ describe('DashboardPage (M5-2)', () => {
       });
     });
 
+    it('shows error badge in tile when a run has errored cases (dogfood run #25)', async () => {
+      // Run #25 scenario: 15 pass, 0 fail, 1 errored → verdict=error, not pass.
+      // Pre-fix the tile showed PASS (errored was invisible).
+      // Cast via unknown so the `errored` field (pre-PR-D type extension)
+      // attaches without conflicting with the strict RunSummary fixture type.
+      setupMocks({
+        runs: [
+          // id=25: errored=1 → verdict=error
+          Object.assign(
+            { id: 25, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 17, passed: 15, failed: 0, skipped: 1, target_version: null, triggered_by: null },
+            { errored: 1 },
+          ) as (typeof FAKE_RUNS)[number],
+          // id=24: no errored field → verdict=pass
+          { id: 24, status: 'done', started_at: new Date().toISOString(), finished_at: null, total: 10, passed: 10, failed: 0, skipped: 0, target_version: null, triggered_by: null },
+        ],
+      });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-kpi-recent-runs')).toBeInTheDocument();
+      });
+      const tile = screen.getByTestId('dashboard-kpi-recent-runs');
+      // id=25 → verdict=error, id=24 → verdict=pass
+      expect(within(tile).getByText('1 pass')).toBeInTheDocument();
+      expect(within(tile).getByText('1 error')).toBeInTheDocument();
+      // fail badge still shows 0 fail
+      expect(within(tile).getByText('0 fail')).toBeInTheDocument();
+    });
+
     it('shows "Compare last 2 runs" CTA when ≥2 runs exist', async () => {
       // FAKE_RUNS has 3 runs (id 42 newest, 41, 40 oldest)
       setupMocks();

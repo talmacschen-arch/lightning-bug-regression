@@ -4,7 +4,7 @@ import { runVerdict, verdictToBadgeClass, VERDICT_OPTIONS } from './runVerdict';
 
 type RunSummary = components['schemas']['RunSummary'];
 
-function makeRun(partial: Partial<RunSummary>): RunSummary {
+function makeRun(partial: Partial<RunSummary & { errored?: number | null }>): RunSummary {
   return {
     id: 1,
     status: 'done',
@@ -59,12 +59,36 @@ describe('runVerdict', () => {
     expect(runVerdict(realBackendRun)).not.toBe('done');
     expect(runVerdict(realBackendRun)).toBe('pass');
   });
+
+  // --- 'error' verdict tests (dogfood run #25, 2026-05-26) ---
+
+  it('returns "error" when errored>0 and failed=0 (dogfood run #25 zombodb case)', () => {
+    expect(runVerdict(makeRun({ status: 'done', passed: 15, failed: 0, errored: 1 }))).toBe('error');
+  });
+
+  it('returns "fail" when both failed>0 and errored>0 (failed has higher priority)', () => {
+    expect(runVerdict(makeRun({ status: 'done', passed: 5, failed: 1, errored: 1 }))).toBe('fail');
+  });
+
+  it('returns "pass" when errored=0 and failed=0 and passed>0 (regression guard — errored=0 does not affect pass)', () => {
+    expect(runVerdict(makeRun({ status: 'done', passed: 10, failed: 0, errored: 0 }))).toBe('pass');
+  });
+
+  it('returns "pass" when errored field is absent (pre-PR-D rows without errored field)', () => {
+    // makeRun does not set errored, so it is undefined on the object
+    expect(runVerdict(makeRun({ status: 'done', passed: 10, failed: 0 }))).toBe('pass');
+  });
+
+  it('treats null errored as 0', () => {
+    expect(runVerdict(makeRun({ status: 'done', passed: 5, failed: 0, errored: null }))).toBe('pass');
+  });
 });
 
 describe('verdictToBadgeClass', () => {
   it('maps each verdict to a CSS class', () => {
     expect(verdictToBadgeClass('pass')).toBe('badge-success');
     expect(verdictToBadgeClass('fail')).toBe('badge-danger');
+    expect(verdictToBadgeClass('error')).toBe('badge-danger');
     expect(verdictToBadgeClass('aborted')).toBe('badge-danger');
     expect(verdictToBadgeClass('running')).toBe('badge-warning');
     expect(verdictToBadgeClass('empty')).toBe('badge-muted');
@@ -72,7 +96,7 @@ describe('verdictToBadgeClass', () => {
 });
 
 describe('VERDICT_OPTIONS', () => {
-  it('lists the 4 user-facing verdict choices (no "empty")', () => {
-    expect(VERDICT_OPTIONS).toEqual(['pass', 'fail', 'running', 'aborted']);
+  it('lists the 5 user-facing verdict choices (no "empty")', () => {
+    expect(VERDICT_OPTIONS).toEqual(['pass', 'fail', 'error', 'running', 'aborted']);
   });
 });
