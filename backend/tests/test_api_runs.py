@@ -647,6 +647,67 @@ def test_download_artifact_404_for_missing_file(
     assert resp.status_code == 404
 
 
+def test_download_artifact_non_ascii_filename_uses_rfc5987(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: artifact whose filename contains non-ASCII bytes
+    (em-dash, Chinese, ...) must not trip ASGI's latin-1 header encoder.
+
+    Dogfood 2026-05-25: download of
+        `step-10-test-7 final COUNT(*) — expect 1099956 (BUG 断言).stdout.txt`
+    returned 500 UnicodeEncodeError. Fix encodes Content-Disposition
+    per RFC 5987 (ASCII fallback + filename*=UTF-8''...).
+    """
+    run_id, case_id, artifacts_dir = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    spicy_name = "step-10-test-7 final COUNT(*) — expect 1099956 (BUG 断言).stdout.txt"
+    body = "rowcount: 1099956\n"
+    (artifacts_dir / spicy_name).write_text(body, encoding="utf-8")
+
+    # urlencode the filename — TestClient/httpx will pass through.
+    from urllib.parse import quote
+
+    encoded_path_seg = quote(spicy_name, safe="")
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/{encoded_path_seg}")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "charset=utf-8" in resp.headers["content-type"]
+
+    cd = resp.headers["content-disposition"]
+    # Must have both the ASCII-only `filename="..."` fallback and the
+    # UTF-8 percent-encoded `filename*=` form. The fallback must NOT
+    # contain raw non-ASCII bytes (that's what blew up the latin-1
+    # encoder).
+    assert "attachment" in cd
+    assert 'filename="' in cd
+    # filename* parameter present, with UTF-8 charset and percent-encoded value
+    assert "filename*=UTF-8''" in cd
+    # The percent-encoded filename should appear (case-insensitive on hex)
+    assert quote(spicy_name, safe="") in cd
+    # ASCII fallback portion must be 7-bit clean
+    cd.encode("ascii")  # raises if any non-ASCII byte slipped through
+
+    # Body intact
+    assert resp.text == body
+
+
+def test_download_artifact_ascii_filename_still_includes_filename_star(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard: ASCII-only filename path still works after the
+    RFC 5987 refactor — Content-Disposition has `filename="..."` and the
+    response body matches.
+    """
+    run_id, case_id, _ = _seed_run_with_artifacts(tmp_path, monkeypatch)
+    resp = client.get(f"/runs/{run_id}/cases/{case_id}/artifacts/step-01-select-rows.stdout.txt")
+    assert resp.status_code == 200
+    assert resp.text == " id\n----\n  1\n  2\n"
+    cd = resp.headers["content-disposition"]
+    assert "attachment" in cd
+    assert 'filename="step-01-select-rows.stdout.txt"' in cd
+    # Header must be ASCII-clean regardless of source filename
+    cd.encode("ascii")
+
+
 # ---------------------------------------------------------------------------
 # M6-5 external_deps runtime injection
 # ---------------------------------------------------------------------------

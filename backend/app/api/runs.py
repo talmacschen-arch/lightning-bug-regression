@@ -33,6 +33,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
@@ -670,11 +671,24 @@ def download_case_artifact(
             status_code=404,
             detail=f"artifact {filename!r} not found",
         )
+    # Build an RFC 5987 / RFC 6266 Content-Disposition header.
+    # ASGI encodes response headers as latin-1, so a raw non-ASCII
+    # `filename="..."` (em-dash, Chinese, etc.) raises UnicodeEncodeError
+    # at the transport layer (500 ISE). The spec-compliant fix is to
+    # provide an ASCII-only `filename="..."` fallback plus a UTF-8
+    # percent-encoded `filename*=UTF-8''...` parameter; browsers honor
+    # `filename*` when present.
+    ascii_fallback = filename.encode("ascii", errors="replace").decode("ascii").replace('"', "_")
+    encoded = quote(filename, safe="")
     return FileResponse(
         path=target,
         media_type="text/plain; charset=utf-8",
         filename=filename,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
+            )
+        },
     )
 
 
