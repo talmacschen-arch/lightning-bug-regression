@@ -10,16 +10,17 @@
 
 三类用例**共用**同一份 runner、schema、UI；通过 `category` 字段（DB 表驱动可扩展）区分，统计 / 看板 / Run 子集按 category 拆分。
 
-> 状态：**M0 ~ M6 全部交付 + post-M6 UX 迭代 wave 1+2 收尾**（design.md v1.16，2026-05-25）。
+> 状态：**M0 ~ M6 全部交付 + post-M6 UX 迭代 wave 1+2 + 简易用户登录模块**（design.md v1.17，2026-05-25）。
 
 ---
 
-## 功能概览（M0~M6 已交付）
+## 功能概览（M0~M6 + 用户登录已交付）
 
 ### Web UI（`http://localhost:5173/`）
 
 | 页面 | 用途 |
 |---|---|
+| `/login` | 单用户登录（初始 admin/admin）；token 存 localStorage；?next= 支持深链跳转 |
 | `/dashboard` | KPI 看板 — 各 category case 数 + 各 category status breakdown + Recent runs (pass/fail/running/aborted 派生) + Recent activity + Quick actions + "Compare last 2 runs →" 快捷链 |
 | `/cases` | 按 category tab 列 case + 顶部 "+ New Case" CTA + status badge / tags / latest-run |
 | `/cases/:id` | YAML 高亮 + 4-tuple 叙事 + Recent runs 区块（跨页 link 到 /runs/:id） |
@@ -28,10 +29,21 @@
 | `/runs/new` | 多选 case + target_version + 触发 POST /runs；支持 `?category=X&status=Y` URL preset（Dashboard quick-action 走这） |
 | `/runs/:id` | Run 实时进度 — SSE EventSource 推送 + 每 case 行 ▸ Artifacts 折叠（每 step stdout/stderr 下载） |
 | `/runs/diff?a=X&b=Y` | 两 run 并排 diff，分类 = pass→fail / fail→pass / new_case / removed_case / duration_jump (>1.5×) |
-| `/admin` | Skip list / External services / Delete case 三入口 |
+| `/admin` | Skip list / External services / Delete case / Change password 四入口 |
 | `/admin/skip-list` | 暂时禁用某 case CRUD — case_id 用 shadcn Combobox 选（防 typo），支持 until_date 自动过期 |
 | `/admin/external-services` | `external/<svc>.yml` read-only 浏览（YAML 内容 + size + mtime + inline parse_error）|
 | `/admin/cases` | 永久删 case（YAML 文件从磁盘删，case_results 历史保留），confirm dialog 引导用 Skip list 暂时禁用 |
+| `/admin/change-password` | 修改当前用户密码（3 字段表单 + 前端校验 + 成功后 1.5s reload）|
+
+### 用户登录（v1.17 新增）
+
+- **单用户**: 始终只有 `admin` 用户，初始密码 `admin/admin`
+- **Bearer token**: `secrets.token_urlsafe(32)` 不透明 token，sha256 后存 DB（dump 不可即时 replay）
+- **永久 token**: 不过期，logout 才失效；多设备 OK（每次登录独立 token）
+- **首次登录**: 顶部红条 "请改密码" 提醒，可忽略；改完后自动消失（password_changed_at 字段控制）
+- **替换 ADMIN_PASSWORD env** (M6-4): 旧 `X-Admin-Password` header 模式已删除
+- **密码哈希**: bcrypt 工业标准
+- **路由保护**: 前端 `<RequireAuth>` 检查 localStorage token；apiFetch 自动加 `Authorization: Bearer`；401 自动 clear + redirect `/login`
 
 ### CLI / Skill
 
@@ -167,7 +179,8 @@ env vars 说明:
 | `PGHOST` / `PGPORT` / `PGUSER` / `PGDATABASE` | psycopg → 集群 PG 连接 | 可选（被 `external/dut.yml` per-field 覆盖；都不设走默认 `127.0.0.1/gpadmin/gpadmin`） |
 | `GH_TOKEN` | `/cases/submit` endpoint 内部 `gh pr create` / `gh pr merge --auto --squash` | **`/cases/new` 必须** |
 | `LBR_REPO_ROOT` | `/cases/submit` `subprocess.run(cwd=...)` 显式 repo root | 推荐 |
-| `ADMIN_PASSWORD` | 设了就要求 Admin mutation 走 `X-Admin-Password` header；不设 = dev mode 不要求 | 可选 |
+
+> `ADMIN_PASSWORD` env (M6-4 PR #115 落地的) 在 v1.17 已**删除** — 现走用户登录模块 (`/auth/login` admin/admin → Bearer token)，env var 形式无法接入新 auth 流程。
 
 **笔记本访问**（VM 无 GUI / 浏览器）:
 
@@ -175,6 +188,35 @@ env vars 说明:
 ssh -L 5173:127.0.0.1:5173 -L 8000:127.0.0.1:8000 root@<vm-ip>
 # 留隧道开着，浏览器开 http://localhost:5173/
 ```
+
+### 忘记 admin 密码？
+
+单用户 tool 没有邮件重置流程。重置密码 = backend CLI 直改 DB:
+
+```bash
+cd backend
+DATABASE_URL=sqlite:///$(pwd)/data/runs.db .venv/bin/python -c "
+from app.api.auth import hash_password
+from app.storage import sqlite_store
+from app.storage.models import User
+from sqlalchemy import select
+
+# init engine (matches uvicorn startup path)
+sqlite_store.init_engine('sqlite:///$(pwd)/data/runs.db')
+
+with sqlite_store.get_session() as sess:
+    user = sess.scalar(select(User).where(User.username == 'admin'))
+    if user is None:
+        print('no admin user — backend startup auto-seeds; check DB path')
+    else:
+        user.password_hash = hash_password('admin')
+        user.password_changed_at = None
+        sess.commit()
+        print('admin password reset to: admin')
+"
+```
+
+重新登录用 `admin/admin` → 红条提醒再改一次。
 
 ---
 
