@@ -14,6 +14,7 @@ import AdminSkipListPage from './routes/AdminSkipListPage';
 import AdminExternalServicesPage from './routes/AdminExternalServicesPage';
 import AdminCasesPage from './routes/AdminCasesPage';
 import AdminChangePasswordPage from './routes/AdminChangePasswordPage';
+import AdminTargetVersionsPage from './routes/AdminTargetVersionsPage';
 import LoginPage from './routes/LoginPage';
 import NotFoundPage from './routes/NotFoundPage';
 import { getAuthToken } from './lib/auth';
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="/admin/skip-list" element={<AdminSkipListPage />} />
           <Route path="/admin/external-services" element={<AdminExternalServicesPage />} />
           <Route path="/admin/cases" element={<AdminCasesPage />} />
+          <Route path="/admin/target-versions" element={<AdminTargetVersionsPage />} />
           <Route path="/admin/change-password" element={<AdminChangePasswordPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

@@ -57,6 +57,18 @@ export default function AdminPage() {
         </li>
         <li>
           <Link
+            to="/admin/target-versions"
+            data-testid="admin-link-target-versions"
+            className="text-blue-700 hover:underline"
+          >
+            Target Versions →
+          </Link>
+          <span className="ml-2 text-xs text-muted-foreground">
+            Manage the version catalog for Trigger New Run
+          </span>
+        </li>
+        <li>
+          <Link
             to="/admin/change-password"
             data-testid="admin-link-change-password"
             className="text-blue-700 hover:underline"
