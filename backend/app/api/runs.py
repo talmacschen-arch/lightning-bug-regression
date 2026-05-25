@@ -86,6 +86,7 @@ class RunSummary(BaseModel):
     passed: int | None = None
     failed: int | None = None
     skipped: int | None = None
+    errored: int | None = None
     target_version: str | None = None
     triggered_by: str | None = None
 
@@ -269,6 +270,7 @@ async def _execute_run(
                 passed=summary.passed,
                 failed=summary.failed,
                 skipped=summary.skipped,
+                errored=summary.errored,
             )
         event_broker.publish_run_done(
             run_id,
@@ -277,6 +279,7 @@ async def _execute_run(
                 "passed": summary.passed,
                 "failed": summary.failed,
                 "skipped": summary.skipped,
+                "errored": summary.errored,
             },
         )
     except Exception as e:  # noqa: BLE001 — background task must not re-raise
@@ -405,6 +408,7 @@ def list_runs(
                 passed=r.passed,
                 failed=r.failed,
                 skipped=r.skipped,
+                errored=r.errored,
                 target_version=r.target_version,
                 triggered_by=r.triggered_by,
             )
@@ -430,6 +434,7 @@ def get_run(run_id: int) -> RunDetail:
             passed=run.passed,
             failed=run.failed,
             skipped=run.skipped,
+            errored=run.errored,
             target_version=run.target_version,
             triggered_by=run.triggered_by,
             case_results=[
@@ -490,6 +495,7 @@ async def _stream_run_events(run_id: int) -> AsyncIterator[str]:
             "passed": run.passed,
             "failed": run.failed,
             "skipped": run.skipped,
+            "errored": run.errored,
             "case_results": [
                 {
                     "case_id": cr.case_id,
@@ -515,6 +521,7 @@ async def _stream_run_events(run_id: int) -> AsyncIterator[str]:
                 "passed": snapshot["passed"],
                 "failed": snapshot["failed"],
                 "skipped": snapshot["skipped"],
+                "errored": snapshot["errored"],
             },
             "synthetic": True,
         }

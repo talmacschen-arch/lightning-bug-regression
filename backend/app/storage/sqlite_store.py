@@ -169,9 +169,14 @@ def finish_run(
     passed: int | None = None,
     failed: int | None = None,
     skipped: int | None = None,
+    errored: int | None = None,
 ) -> None:
     """Mark a run as terminated. `status` should be 'done' or 'aborted'
     (design.md §4.2). Caller is responsible for valid status strings.
+
+    `errored` was added 2026-05-26 (alembic 0005). Existing callers that
+    don't pass it leave the column NULL — same convention as the other
+    aggregate counts (pre-aggregation rows stay NULL).
     """
     run = session.get(Run, run_id)
     if run is None:
@@ -186,6 +191,8 @@ def finish_run(
         run.failed = failed
     if skipped is not None:
         run.skipped = skipped
+    if errored is not None:
+        run.errored = errored
     session.flush()
 
 

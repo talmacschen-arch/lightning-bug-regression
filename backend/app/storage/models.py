@@ -47,6 +47,7 @@ class Run(Base):
     passed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     failed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     skipped: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    errored: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
 
     __table_args__ = (
