@@ -144,9 +144,54 @@
 
 ---
 
-## 起本机 dev 服务
+## 首次安装（fresh clone bootstrap）
 
-backend + frontend 一起跑通 web 录入 + 触发 run 闭环需要以下 env 显式注入 uvicorn process（裸 `uvicorn app.main:app` 起不来 — §14 R27）。
+**前置**: Python 3.11+ / Node 20+ / npm / git。集群侧 SynxDB 见 §3.1 (design.md)。
+
+最简：
+
+```bash
+git clone https://github.com/talmacschen-arch/lightning-bug-regression.git
+cd lightning-bug-regression
+bash scripts/bootstrap.sh
+```
+
+`scripts/bootstrap.sh` 做 3 件事，idempotent 可重跑：
+1. **backend venv** — `python3 -m venv backend/.venv` + `.venv/bin/pip install -e ".[dev]"`
+2. **DB schema + seed admin** — `alembic upgrade head` 建 7 个 SQLite 表 + 插入 `admin/admin` 用户
+3. **frontend deps** — `cd frontend && npm ci`
+
+如果只想跑某一步，对应手动:
+
+```bash
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+DATABASE_URL=sqlite:///$(pwd)/data/runs.db .venv/bin/alembic upgrade head
+
+cd ../frontend
+npm ci
+```
+
+### 验证安装成功
+
+```bash
+# backend
+cd backend
+.venv/bin/python -m pytest -q                              # 期望: 420 passed
+
+# frontend
+cd ../frontend
+npm run lint && npx tsc --noEmit && npx vitest run         # 期望: vitest 244+ passed
+```
+
+---
+
+## 日常启动
+
+每次开发会话起 backend + frontend。**首次安装跑完才适用**（venv / DB / node_modules 都存在）。`bootstrap.sh` 重跑也安全 — 已有的不动。
+
+backend 启动需要以下 env 显式注入 uvicorn process（裸 `uvicorn app.main:app` 起不来 — §14 R27）：
 
 ```bash
 # 终端 1: backend (从 repo root)
@@ -246,6 +291,41 @@ with sqlite_store.get_session() as sess:
 - **R30** specialist ≤1 novel mechanism per PR
 - **R31** foreman heartbeat mandatory + ci-gate FAILURE = stop
 - **R32** playwright artifact upload on CI failure
+
+---
+
+## Release（打 tag + GitHub Release）
+
+Canonical 步骤详 design.md §13.16。简版:
+
+```bash
+# 1. 状态 sanity
+git checkout main && git pull
+git status                                                  # 期望: working tree clean
+cd backend && .venv/bin/python -m pytest -q                 # 期望: 420+ passed
+cd ../frontend && npx tsc --noEmit && npm run lint && npx vitest run
+
+# 2. 版本号 + tag (与 design.md 内部版本对齐 / 单人 tool 用 0.x semver)
+git tag -a v0.17.0 -m "M0~M6 + 用户登录模块 — design.md v1.17"
+git push origin v0.17.0
+
+# 3. release notes (从 design.md §0 changelog + §18 milestones index 抽精华)
+#    例: 见 design.md §13.16 模板
+cat > /tmp/RELEASE_NOTES_v0.17.0.md <<'EOF'
+## v0.17.0 — 用户登录模块上线
+- M0~M6 全套（runner / web / Admin / external_deps / dogfood）
+- 用户登录: admin/admin + bcrypt + Bearer token + 红条提醒
+详 design.md §0 changelog + §18 milestones index
+EOF
+
+# 4. GitHub release
+GH_TOKEN=... gh release create v0.17.0 \
+  --title "v0.17.0 — M0~M6 + 用户登录" \
+  --notes-file /tmp/RELEASE_NOTES_v0.17.0.md \
+  --target main
+```
+
+后续 release 走同样的 6 步，把 `v0.17.0` 替换成新版本号。
 
 ---
 
