@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 import { Button } from '@/components/ui/button';
+import { fetchMe, type MeResponse } from '@/lib/auth';
 import {
   Dialog,
   DialogContent,
@@ -59,6 +60,14 @@ export default function RunNewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<ConflictError | null>(null);
   const [conflictOpen, setConflictOpen] = useState(false);
+
+  // v1.17: show "Triggered by: <username>" as a readonly hint. Backend
+  // auto-fills triggered_by from the authenticated user on POST /runs;
+  // we don't send it in the body. This is purely informational.
+  const [me, setMe] = useState<MeResponse | null>(null);
+  useEffect(() => {
+    void fetchMe().then(setMe);
+  }, []);
 
   // Refs for per-category indeterminate checkbox DOM nodes
   const categoryCheckboxRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -409,6 +418,18 @@ export default function RunNewPage() {
             onChange={(e) => setTargetVersion(e.target.value)}
             className="border rounded px-2 py-1 text-sm w-48"
           />
+        </div>
+
+        {/* v1.17 triggered_by hint — backend auto-fills from auth user */}
+        <div
+          data-testid="run-new-triggered-by-hint"
+          className="flex items-center gap-2 text-xs text-gray-500"
+        >
+          <span>👤 Triggered by:</span>
+          <span data-testid="run-new-triggered-by-value" className="font-mono">
+            {me?.username ?? '…'}
+          </span>
+          <span className="text-gray-400">(自动填，对应当前登录用户)</span>
         </div>
 
         {/* Submit */}

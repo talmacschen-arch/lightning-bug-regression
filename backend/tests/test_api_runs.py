@@ -102,8 +102,22 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     monkeypatch.setattr(runs_api.orchestrator, "run_suite", fake_run_suite)
 
+    # v1.17+: POST /runs requires auth. Seed admin user + login to get
+    # a Bearer token, then patch the TestClient to auto-attach it on every
+    # request. Tests using `client.post("/runs", ...)` work without
+    # threading headers through every call site.
+    from app.api.auth import seed_admin_if_missing
+
+    seed_admin_if_missing()
+
     with TestClient(app) as c:
         c.captured = captured  # type: ignore[attr-defined]
+        login = c.post(
+            "/auth/login", json={"username": "admin", "password": "admin"}
+        )
+        assert login.status_code == 200, f"seeded admin login failed: {login.json()}"
+        token = login.json()["token"]
+        c.headers.update({"Authorization": f"Bearer {token}"})
         yield c
 
     Base.metadata.drop_all(engine)
@@ -151,6 +165,38 @@ def test_create_run_happy_path_returns_202_and_runs_in_background(
     assert final["passed"] == 1
     # nested case_results array populated by the fake orchestrator.
     assert any(cr["case_id"] == "lg-bug-fake-0001" for cr in final["case_results"])
+
+
+def test_create_run_requires_auth(client: TestClient) -> None:
+    """POST /runs requires Bearer token (v1.17+). Without it → 401."""
+    # Drop the auto-attached Authorization for this one call
+    resp = client.post("/runs", json={}, headers={"Authorization": ""})
+    assert resp.status_code == 401
+
+
+def test_create_run_auto_fills_triggered_by_from_current_user(
+    client: TestClient,
+) -> None:
+    """v1.17: POST /runs without `triggered_by` in body auto-fills from
+    the authenticated user (single-user mode = always 'admin')."""
+    resp = client.post("/runs", json={})
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+    _wait_for_run_terminal(client, run_id)
+    final = client.get(f"/runs/{run_id}").json()
+    assert final["triggered_by"] == "admin"
+
+
+def test_create_run_client_can_override_triggered_by(client: TestClient) -> None:
+    """External tools (CI bot scripts) can still send explicit
+    triggered_by — overrides the auto-fill so it's clear who/what kicked
+    off the run."""
+    resp = client.post("/runs", json={"triggered_by": "ci-bot-prod"})
+    assert resp.status_code == 202
+    run_id = resp.json()["run_id"]
+    _wait_for_run_terminal(client, run_id)
+    final = client.get(f"/runs/{run_id}").json()
+    assert final["triggered_by"] == "ci-bot-prod"
 
 
 def test_create_run_with_explicit_case_ids_filters_load(client: TestClient) -> None:
