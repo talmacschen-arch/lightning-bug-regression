@@ -168,7 +168,7 @@ export default function RunsPage() {
                 {runVerdict(r).toUpperCase()}
               </span>
               <span className="text-xs text-gray-500">
-                {r.passed ?? 0} pass / {r.failed ?? 0} fail / {r.total ?? 0} total
+                {r.passed ?? 0} pass / {r.failed ?? 0} fail / {r.skipped ?? 0} skip / {((r as { errored?: number | null }).errored) ?? 0} error / {r.total ?? 0} total
               </span>
               <span
                 data-testid={`runs-page-triggered-by-${r.id}`}
