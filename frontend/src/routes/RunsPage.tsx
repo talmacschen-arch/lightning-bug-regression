@@ -82,11 +82,11 @@ export default function RunsPage() {
       return false;
     }
     if (filters.q) {
-      // Search hay = version + triggered_by only (post-2026-05-25).
-      // Run id and verdict were removed: id is visible on each row +
-      // doesn't help discovery; verdict already has dedicated chip.
+      // Search hay = id + version + triggered_by (post-2026-05-25,
+      // user re-added id per UX feedback — "搜索框太单调"). Verdict
+      // still excluded: chip filter is more precise.
       const q = filters.q.toLowerCase();
-      const hay = `${r.target_version ?? ''} ${r.triggered_by ?? ''}`.toLowerCase();
+      const hay = `${r.id} ${r.target_version ?? ''} ${r.triggered_by ?? ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -103,7 +103,7 @@ export default function RunsPage() {
         statusOptions={VERDICT_OPTIONS}
         showSinceFilter
         showCategoryFilter={false}
-        qPlaceholder="搜索 version / triggered_by — e.g. 4.5.0, gpadmin"
+        qPlaceholder="搜索 id / version / triggered_by — e.g. 42, 4.5.0, admin"
       />
 
       <div
@@ -169,6 +169,13 @@ export default function RunsPage() {
               </span>
               <span className="text-xs text-gray-500">
                 {r.passed ?? 0} pass / {r.failed ?? 0} fail / {r.total ?? 0} total
+              </span>
+              <span
+                data-testid={`runs-page-triggered-by-${r.id}`}
+                className="text-xs text-gray-500"
+                title="Triggered by"
+              >
+                👤 {r.triggered_by ?? '—'}
               </span>
               <span className="text-xs text-gray-500 text-right">
                 {formatRelative(r.started_at)}

@@ -262,4 +262,4 @@ def change_password(
         sess.commit()
 
 
-__all__ = ["router", "get_current_user", "seed_admin_if_missing"]
+__all__ = ["router", "get_current_user", "seed_admin_if_missing", "CurrentUser"]

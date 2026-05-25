@@ -40,6 +40,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.auth import CurrentUser
 from app.api.cases import _iter_case_files, _load_categories
 from app.runner import event_broker, orchestrator
 from app.runner.case_normalizer import normalize_case
@@ -309,6 +310,7 @@ def create_run(
     body: CreateRunRequest,
     background_tasks: BackgroundTasks,
     response: Response,
+    user: CurrentUser,
 ) -> CreateRunResponse | JSONResponse:
     """Create a run row and spawn the orchestrator in the background.
 
@@ -318,10 +320,19 @@ def create_run(
 
     Returns 409 with `{detail, active_run_id}` if another run is already
     in flight (uniq_runs_running enforced by SQLite).
+
+    v1.17+ auth: requires Bearer token. Auto-fills `triggered_by` with
+    the authenticated user's username if the client doesn't supply one
+    (single-user mode = always 'admin'). External curl scripts can still
+    override by explicitly sending `triggered_by` in the body (e.g. CI
+    bots want a distinct name).
     """
     started_at = datetime.utcnow()
     categories = _load_categories()
     cases = _load_cases_from_disk(body.case_ids, categories)
+
+    # v1.17: triggered_by defaults to current user; client can override.
+    triggered_by = body.triggered_by or user.username
 
     # Reserve the run row (this is the 409 trigger if another is active).
     try:
@@ -329,7 +340,7 @@ def create_run(
             run = sqlite_store.create_run(
                 sess,
                 started_at=started_at,
-                triggered_by=body.triggered_by,
+                triggered_by=triggered_by,
                 target_version=body.target_version,
             )
             run_id = run.id
