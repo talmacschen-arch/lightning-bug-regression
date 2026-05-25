@@ -26,6 +26,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.auth import get_current_user
 from app.runner.step_kinds import STEP_KINDS
@@ -349,3 +350,185 @@ def list_external_services() -> list[ExternalServiceOut]:
             )
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Target version registry (v1.18+, design.md §4.6)
+#
+# Admin-managed catalog that backs the frontend "Trigger New Run -> Target
+# version" dropdown. Per user-decisions on the feature:
+#   1. POST /runs stays permissive — backend does NOT validate
+#      `runs.target_version` against this catalog. CLI / CI scripts
+#      continue working with arbitrary strings.
+#   2. DELETE refuses if any `runs` row references the version's `name`,
+#      unless ?force=true is supplied.
+#   3. `is_default` is "at most one" — enforced at write time by the
+#      storage helpers (`add_target_version` / `update_target_version`).
+#   4. `display_order` is plain integer — admin maintains by hand.
+#   5. `name` has no format regex — any non-empty string accepted.
+# ---------------------------------------------------------------------------
+
+
+class TargetVersionOut(BaseModel):
+    id: int
+    name: str
+    display_order: int
+    is_active: bool
+    is_default: bool
+    notes: str | None
+    created_at: datetime
+
+
+class TargetVersionCreate(BaseModel):
+    name: str
+    display_order: int = 100
+    is_active: bool = True
+    is_default: bool = False
+    notes: str | None = None
+
+
+class TargetVersionUpdate(BaseModel):
+    name: str | None = None
+    display_order: int | None = None
+    is_active: bool | None = None
+    is_default: bool | None = None
+    notes: str | None = None
+
+
+def _tv_to_out(row) -> TargetVersionOut:  # type: ignore[no-untyped-def]
+    return TargetVersionOut(
+        id=row.id,
+        name=row.name,
+        display_order=row.display_order,
+        is_active=bool(row.is_active),
+        is_default=bool(row.is_default),
+        notes=row.notes,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/target-versions", response_model=list[TargetVersionOut])
+def list_target_versions(active: bool | None = None) -> list[TargetVersionOut]:
+    """List target versions ordered by ``display_order ASC, name ASC``.
+
+    Query: ``?active=true`` returns only ``is_active=1`` rows (frontend
+    dropdown uses this). No filter / ``?active=false`` returns
+    everything (admin CRUD page uses this).
+
+    GET is open (no auth) — matches ``/admin/categories``.
+    """
+    with sqlite_store.get_session() as sess:
+        rows = sqlite_store.list_target_versions(sess, active_only=bool(active))
+        return [_tv_to_out(r) for r in rows]
+
+
+@router.post(
+    "/target-versions",
+    response_model=TargetVersionOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(get_current_user)],
+)
+def create_target_version(payload: TargetVersionCreate) -> TargetVersionOut:
+    """Add a new target_version row.
+
+    400 if ``name`` is empty / whitespace.
+    409 on UNIQUE collision (duplicate ``name``).
+    When ``is_default=true``, other rows' ``is_default`` is cleared
+    transactionally so the at-most-one invariant holds.
+    """
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    with sqlite_store.get_session() as sess:
+        try:
+            row = sqlite_store.add_target_version(
+                sess,
+                name=name,
+                display_order=payload.display_order,
+                is_active=payload.is_active,
+                is_default=payload.is_default,
+                notes=payload.notes,
+            )
+            sess.commit()
+        except IntegrityError as exc:
+            sess.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"target_version name {name!r} already exists",
+            ) from exc
+        return _tv_to_out(row)
+
+
+@router.patch(
+    "/target-versions/{vid}",
+    response_model=TargetVersionOut,
+    dependencies=[Depends(get_current_user)],
+)
+def patch_target_version(vid: int, payload: TargetVersionUpdate) -> TargetVersionOut:
+    """Partial update. Only fields present in the body are touched.
+
+    404 on unknown id; 400 if ``name`` is supplied but empty/whitespace;
+    409 on UNIQUE collision with another row's name. ``is_default=true``
+    clears other rows' is_default in the same transaction.
+    """
+    fields = payload.model_dump(exclude_unset=True)
+    if "name" in fields:
+        new_name = fields["name"]
+        if new_name is None or not new_name.strip():
+            raise HTTPException(status_code=400, detail="name must be non-empty")
+        fields["name"] = new_name.strip()
+    with sqlite_store.get_session() as sess:
+        try:
+            row = sqlite_store.update_target_version(sess, vid, **fields)
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"target_version {vid} not found",
+                )
+            sess.commit()
+        except IntegrityError as exc:
+            sess.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="target_version name collides with another row",
+            ) from exc
+        return _tv_to_out(row)
+
+
+@router.delete(
+    "/target-versions/{vid}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(get_current_user)],
+)
+def delete_target_version(vid: int, force: bool = False) -> None:
+    """Delete a target_version row.
+
+    Default behaviour: refuse with 409 if any ``runs.target_version``
+    row references the version's ``name`` — historical runs would
+    otherwise lose dropdown-grounding for the version they were
+    triggered against. Pass ``?force=true`` to override.
+
+    404 on unknown id.
+    """
+    with sqlite_store.get_session() as sess:
+        row = sqlite_store.get_target_version(sess, vid)
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"target_version {vid} not found",
+            )
+        if not force:
+            ref_count = sqlite_store.count_runs_referencing_version(sess, row.name)
+            if ref_count > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "detail": (
+                            f"target_version {row.name!r} is referenced by "
+                            f"{ref_count} run(s); pass ?force=true to override"
+                        ),
+                        "run_count": ref_count,
+                    },
+                )
+        sqlite_store.delete_target_version(sess, vid)
+        sess.commit()

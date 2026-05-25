@@ -53,7 +53,7 @@ def test_all_five_tables_plus_alembic_version_exist(fresh_db_url: str) -> None:
     engine = create_engine(fresh_db_url)
     insp = inspect(engine)
     # v1.17 adds 2 auth tables (users, auth_tokens) on top of the
-    # original 5 business tables.
+    # original 5 business tables. v1.18 adds target_versions (§4.6).
     expected = {
         "runs",
         "case_results",
@@ -62,6 +62,7 @@ def test_all_five_tables_plus_alembic_version_exist(fresh_db_url: str) -> None:
         "case_categories",
         "users",
         "auth_tokens",
+        "target_versions",
         "alembic_version",
     }
     assert set(insp.get_table_names()) == expected
@@ -154,6 +155,23 @@ def test_id_prefix_and_dir_path_are_unique(fresh_db_url: str) -> None:
     flat = {col for cols in unique_cols for col in cols}
     assert "id_prefix" in flat
     assert "dir_path" in flat
+
+
+def test_target_versions_seeded_with_synxdb_default(fresh_db_url: str) -> None:
+    """Migration 0004 seeds one row (SynxDB-4.5.0-build130 as default)."""
+    engine = create_engine(fresh_db_url)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT name, display_order, is_active, is_default FROM target_versions ORDER BY id"
+            )
+        ).fetchall()
+    assert len(rows) == 1
+    only = rows[0]
+    assert only.name == "SynxDB-4.5.0-build130"
+    assert only.display_order == 100
+    assert only.is_active in (1, True)
+    assert only.is_default in (1, True)
 
 
 def test_downgrade_then_upgrade_round_trip(tmp_path: Path) -> None:
