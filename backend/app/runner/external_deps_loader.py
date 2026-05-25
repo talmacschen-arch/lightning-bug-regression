@@ -21,6 +21,16 @@ Why a single module:
     audit / extend (e.g., adding env var expansion later).
   - Tests can swap the dir via the `EXTERNAL_DEPS_DIR` env var without
     monkeypatching imports.
+
+Path resolution (§14 R27 — never trust cwd):
+  `_resolve_dir()` uses a 3-tier order: `EXTERNAL_DEPS_DIR` env >
+  `LBR_REPO_ROOT/external` > cwd-relative `./external`. Earlier versions
+  fell straight from #1 to #3, which broke under cwd drift: dogfood
+  run #25 (2026-05-26) saw `lg-xs-zombodb-partition-text-search` error
+  at 5ms because uvicorn's cwd was `backend/` (no `backend/external/`),
+  while the real configs live at repo-root `external/`. `LBR_REPO_ROOT`
+  is already required by `/cases/submit` and set by README/bootstrap.sh,
+  so tier #2 sits on existing infra.
 """
 
 from __future__ import annotations
@@ -40,14 +50,32 @@ DEFAULT_DIR = "external"
 def _resolve_dir() -> Path:
     """Resolve external/ dir to an absolute Path.
 
-    Honors env `EXTERNAL_DEPS_DIR` (absolute or relative to CWD). Falls
-    back to repo-root `./external/`. Relative paths are interpreted
-    relative to the **current working directory at process start**; the
-    backend's uvicorn is normally launched from repo root, so the default
-    points there.
+    Resolution order (§14 R27 — never trust cwd):
+      1. ``EXTERNAL_DEPS_DIR`` env (test override / explicit deployment
+         override; absolute or cwd-relative)
+      2. ``LBR_REPO_ROOT/external`` (canonical repo layout; the env var
+         is already required by ``/cases/submit`` so we sit on existing
+         infra)
+      3. ``Path(DEFAULT_DIR).resolve()`` (cwd-relative fallback, kept for
+         backward compat with tests that chdir into a fixture)
+
+    Previous code went straight from #1 to #3, which broke when uvicorn's
+    cwd drifted across restarts (dogfood run #25, 2026-05-26:
+    ``lg-xs-zombodb-partition-text-search`` errored at 5ms because
+    uvicorn cwd was ``backend/`` and there's no ``backend/external/``).
+
+    Empty string env values are treated as unset (``if raw:`` is falsy
+    on ``""``) so an accidental ``EXTERNAL_DEPS_DIR=`` in a launcher
+    script falls through to #2 instead of resolving to ``"".resolve()``
+    (== cwd).
     """
-    p = Path(os.getenv("EXTERNAL_DEPS_DIR", DEFAULT_DIR))
-    return p.resolve()
+    raw = os.getenv("EXTERNAL_DEPS_DIR")
+    if raw:
+        return Path(raw).resolve()
+    repo_root = os.getenv("LBR_REPO_ROOT")
+    if repo_root:
+        return (Path(repo_root) / "external").resolve()
+    return Path(DEFAULT_DIR).resolve()
 
 
 def _load_one_svc(svc: str, base_dir: Path) -> dict[str, Any] | None:
