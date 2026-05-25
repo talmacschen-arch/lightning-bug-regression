@@ -57,6 +57,7 @@
 | v1.4 | 2026-05-23 ~ 2026-05-24 早 | pm-designer (Claude) | **M1 后端 MVP 完整交付 + spec 第一轮硬化。** v1.3 末 (h) 后整盘 M1 chain 收尾。(a) **M1 main sprint 11 + 1 prep item**（PR #2~#10 / #12 / #13 / #14~#16）—— `pyproject.toml` deps + runner shared types (`StepResult/StepStatus/StepError`) + `yaml_loader` + `sqlite_store` + 19 expect-clause `assertions.py` + `sql_driver`（psycopg3 + NOTICE 捕获 + statement_timeout 双保险 + autocommit 路径处理 non-tx-safe DDL）+ `shell_driver`（asyncio subprocess + R9 异常折叠 + Phase 2 kill+wait fix）+ `log_grep_driver` + `jinja_render`（StrictUndefined + decide_ssh_user）+ `orchestrator`（顺序 + on: session 并发 + teardown best-effort + destructive 排末 + cluster_crashed 检测）+ FastAPI app（POST/GET /runs / GET /cases / GET /admin/categories + OpenAPI 自动生成）+ M1 dogfood CLI（`scripts/run_m1_dogfood.py` 加 inline normalizer 后真集群跑 5/5 PASS）。foreman 单 session 干完，**首次 hard rule 8 final JSON 正常返**（后面 R25 出现）。(b) **M1-followup 3 dogfood 修**（PR #17/#18/#19）—— F-1 yaml_loader §4.1 align / F-2 plan_text + stdout fallback for plan_contains / F-3 sql_driver `_NON_TX_DDL_RE` + autocommit 安全包装。**§4.1.2 psql -c 约定**（DDL 不能 tx 时 YAML 写 `psql -c '<DDL>'` 走 shell driver，非 try regex 穷举）落地。foreman 用 sonnet 一次例外（用户授权，opus 临时缺额）。(c) **opus review 10 finding 分 P0/P1/P2 分批清**：P0 3 项（R-1 杜撰 status `closed`、R-2 杜撰 4 个 category + 漏 `extension`、R-3 漏 `restart_db` driver）—— PR #20/#21/#22 + CategoryMeta 重构 yaml_loader §4.5 align；P1 4 项（R-4 dead code、R-5 silent list[dict]、R-6 alias 优先级反、R-7 autocommit 分支无 timeout）—— PR #23/#24；P2 3 项（R-8 `_NON_TX_DDL_RE` 不完整 + docstring 标已知漏覆盖 + 指 §4.1.2、R-9 magic string YAML bool tag 抽常量、R-10 autocommit 路径 rollback no-op 加 `if not conn.autocommit` 守卫）—— PR #25。每轮后 dogfood 5/5 PASS 维持不退化。**§14 R4b "category 不硬编码"实战首次 enforce**（opus review 抓到 sonnet 杜撰）。(d) **CI gate 架构 phase 3 完成**：M1 9 个 PR 全部"先合后跑 CI"暴露 §14 R22；branch protection 加 required = `gate`（修正为 job name 不是 `ci-gate / gate`，§14 R23）；repo 切 public 解锁 rulesets。(e) **§14 R24/R25 spec 硬化**：R24 = specialist agent commit + push 不开 PR / 不跑本地 ci-gate 等价（M1 / M1-followup / M1-cleanup 反复栽 `ruff format --check`），fix = `.claude/agents/backend-fixer.md` step 1 明列本地 ci-gate triplet（`ruff check + ruff format --check + pytest -q`）+ 6→7-step PR contract（step 0 加 `git checkout -b`）。R25 = foreman session 不返 final JSON 就 exit，spec 硬化 5 min 后下一 session 仍犯（连续 3 次）。**用户决策 option A 包装层**落地 `scripts/dispatch-foreman.sh`：调度前 snapshot SHA + ISO ts → 跑 foreman 捕 stdout 到 `docs/foreman-runs/<sprint>-<ts>.log` → 调度后 gh / git 独立 reconstruct → 写 reconciled JSON 到 `.json` 含 `r25_violation: bool` + `verified_merged_prs_in_window` + `new_commits_on_main_in_window` + `foreman_self_report`。caller 直接 parse wrapper JSON，foreman 自律失败不影响。**3 次 R25 后 wrapper 实战零事故**。bash heredoc gotcha 教训：unquoted `<<PYEOF` 让 bash 解析 Python 里的 backtick 为命令替换，必须用 `<<'PYEOF'` quoted + export DF_* env 传 context。(f) **design.md §13.4 M1 实战回顾 + §13.5 M2 子步骤计划补完**（PR #26）。(g) **5 例 BUG dogfood 通过 CLI 路径**（M1 dogfood script，`scripts/run_m1_dogfood.py`）—— 5/5 PASS 但走的是 CLI normalizer 路径，API 路径分叉问题埋伏到 M2 dogfood 才暴露（见 v1.5 (f)）。(h) **整盘 M1 chain 收尾**：25 PR merged + 3 direct commit + ci-gate 全绿 + dogfood 5/5 PASS 维持过 4 个 sprint refactor。 |
 | v1.5 | 2026-05-24 | pm-designer (Claude) | **M2 前端 MVP 完整交付 + dual-code-path 暴露并修复 + §14 R26/R27 入档。** 改动量按 v0.5 起约定本应至少 +0.1，前期 (v1.3 + v1.4) 攒成"catch-all 行"是反 pattern，本行起恢复"一次重大交付 = +0.1"节奏。M2 主体（10 子步骤 / 5 sprint）：(a) **M2-1 ~ M2-4 横向 infra**（PR #28/#33/#32/#31）—— Vite + React + TS strict skeleton / Tailwind + shadcn/ui / openapi-typescript codegen + client.ts / ErrorBoundary + react-router layout；ci-gate frontend block 首次触发，npm + tsc + lint + vitest 全绿。(b) **M2-5 ~ M2-8 四页面**（PR #37/#34/#35—M2-7 specialist 顺手把 M2-8 RunsPage 也带做）—— `/cases` 按 `GET /admin/categories` 拉 tab（**§14 R4b 不硬编码 bug_regression/extension**，所有 category 渲染拉 API）+ status 徽章 + skip_list 标记；`/cases/:id` YAML 高亮 + 4-tuple 叙事 Card；`/runs/new` 多选 checkbox + 全选反选 + target_version + POST /runs + **§6.4 R2 Playwright contract test**（`page.route(...) + postDataJSON()` 断言 body shape）+ 409 模态；`/runs` 按 started_at desc 列 + load more；`/runs/:id` 3s polling 直到 terminal。(c) **M2-9 Playwright E2E**（PR #39）—— `e2e/case-to-run-flow.spec.ts` 完整 happy path（`/cases` → 选 tab → `/runs/new` → 全选 → 提交 → `/runs/99` → 看 PASS）+ `_helpers.ts` 抽 `chromiumCanLaunch()` (§14 R8 declaration-level skip 正确范式)；ci-gate.yml 加 `npx playwright install --with-deps chromium + npx playwright test` step，实际跑过且绿。(d) **§13.4 M1 实战回顾 + §13.5 M2 子步骤计划补完**（PR #26）—— design.md 把 M1 4 sprint chain 25 PR + 3 direct commit 时间线、deliverable file 级 map、opus review 10 finding P0/P1/P2 三级 fix 对照、5 例 dogfood 5/5 PASS 终态、§14 R 实战教训沉淀全部正式入档；M2 10 子步骤 + 依赖图 + §14 R 预付清单（R2/R4b/R6/R7/R8/R24/R25）+ 完成定义 + 不做的事一次性写完。(e) **M2-10 dogfood 浏览器手动验**（人类驱动，2026-05-24 04:50-05:10）—— 笔记本 ssh -L 5173+8000 → 浏览器 `http://localhost:5173/`，按 §13.5 完成定义 6 路径走查全 PASS（`/cases` 5 例 BUG + 空 extension tab / case detail YAML+4tuple / `/runs/new` 表单全选反选 / `/runs` 空态 / POST 跳转 / polling 工作），报告 `docs/m2-dogfood-2026-05-24-0535.md`。(f) **dual-code-path divergence 连续暴露 2 次** —— M2-10 提交真 run 时所有 case 报 `'str' object has no attribute 'get'` 0ms 假性 error。挖出 root cause = `_load_cases_from_disk` 漏 `normalize_case` 一步（**M1 dogfood script 跑 5/5 PASS 是因为走 CLI 路径有 inline normalizer，API 路径绕过整个 normalizer**）。**PR #42** 抽 `backend/app/runner/case_normalizer.py` 共享模块，两条路径强制 import 同一份。修完再跑 → duration_ms=1 不再 0ms，但仍 error。第二次挖出 `_execute_run` 调 `run_suite(...)` 漏 `sql_pool=` 参数，orchestrator 显式吐 "sql step requires sql_pool to be configured"。**PR #43** 抽 `backend/app/runner/dsn_builder.py` 共享 + `build_dsn_map / dsn_map_from_env`（用户偏 libpq env 风格 PGHOST/PGPORT/PGUSER/PGDATABASE，默认 127.0.0.1/gpadmin/postgres 对齐 §3.1）+ API path `SqlSessionPool(dsn_map_from_env(cases))` + `close_all()` finally。**真集群 5/5 PASS**：synxdb-0001 上 POST /runs run #6 → 全 5 例 pass，duration 104~5467ms 真实 SQL 跑过。**§14 R26 (dual-code-path) + §14 R27 (relative-path env defaults，相关：`DEFAULT_CASES_ROOT = Path("cases")` + `DEFAULT_DATABASE_URL` 两个相对路径互斥 cwd，dogfood 30 min trial-and-error 才搞通) 入档**（PR #44）—— 严重级，未来 reviewer 在 PR review 时按 R26/R27 cross-reference。(g) **5 例 BUG 实测 upstream-fixed 客观证据**：5 例 status 全 `open` → API 跑 5/5 PASS = lg-bug-0001 hashjoin 选对小表 / 0002 unnest 不 crash / 0003 ANALYZE 后无 NOTICE / 0004 CTAS rowcount>0 / 0005 LC_CTYPE upper 不报错。**M5 review 阶段统改 `status: fixed`**（保留客观证据链）。 |
 | v1.6 | 2026-05-24 | pm-designer (Claude) | **§13.6 M2 实战回顾 + §13.7 M3a 计划 + §13.8 M3b 计划入档（M3 sprint kick-off prep）**。本行起恢复 "每个 milestone 收尾 = 主动 +0.1 写新行" 节奏（PR #45 retroactive bump 后的第一个新交付）。(a) **§13.6 M2 实战回顾**：5 sprint round + 2 followup hotfix + 2 docs PR 时间线（PR #26~#45 横跨 20 个），文件级 deliverable map（frontend/* 全树 + backend 后期加 case_normalizer/dsn_builder + docs），4 条非 R 级 dispatch 教训（同期 parallel PR 改共享文件冲突 / specialist scope creep / specialist deletion blindness on stale base / ci-gate trigger race），5 例 BUG 状态变更证据表（M2 API dogfood 加进 CLI dogfood 之上成双证据链）。(b) **§13.7 M3a Web 录入计划**：10 个子步骤（M3a-1~M3a-3 backend endpoints `/cases/validate` `/cases/try` `/cases/submit` 三路并行 → M3a-4 editor page skeleton → M3a-5/6/7 双入口 + 三段闸门状态机 → M3a-8 contract test (§6.4 R2) + M3a-9 polling Try → M3a-10 dogfood），§14 R 预付清单（R2/R6/R7/R26/R27），依赖图，完成定义，明示不做（LLM 真接入 stub / monaco 推后 / 闸门绕过永不做）。**关键约束**：M3a-1/2 必须复用 `yaml_loader + case_normalizer` 模块（§14 R26）；M3a-3 `git push` cwd 显式（§14 R27）；M3a-5 LLM 入口先做 stub 不阻塞主流程。(c) **§13.8 M3b Skill 录入计划**：10 个子步骤（M3b-1 `/admin/step-kinds` + M3b-2 cases?q= 查重增强 backend → M3b-3 SKILL.md 骨架 + 6 个铁律 → M3b-4 6 题对齐（§14 R4b 不硬编码 category）→ M3b-5 通用追问 6 类 + M3b-6 extension 追问 13 类 → M3b-7 canonical 顺序 + 11 项 cross-check → M3b-8 输出格式 + footer → M3b-9 skill 单测 → M3b-10 dogfood with M3a 闭环）。skill 严格 generator-only（§5.5.1 铁律）：禁止 Write / git / submit，所有副作用走 frontend；模型选 opus（实战漂移少）。M3a/M3b 完成后 §13.x 全配齐，可开 M4a 飞书 BUG 批量补录与 M4b extension 首批 3~5 例。 |
+| v1.17 | 2026-05-25 | pm-designer (Claude) | **简易用户登录模块交付 (3 PR / 9 文件 / 600+ LOC) — 替换 ADMIN_PASSWORD env 守门。** 开发尾声前最后一个 feature。设计原则: single-user (always admin) + 永久 token (无 expire) + bcrypt 哈希 + sha256-hashed opaque bearer + 多设备 OK + 不主动 invalidate 其他 token (简单)。**3 PR 链**: (a) **#131 backend auth core** — Alembic 0003 加 users + auth_tokens 表 + startup seed admin/admin (password_changed_at=NULL) + 新 endpoints (login / logout / me / change-password) + `Depends(get_current_user)` dependency 替代旧 `require_admin_password` (ADMIN_PASSWORD env + X-Admin-Password header pattern, M6-4 PR #115 落地的) + 新 dep `bcrypt>=4,<6` (passlib 1.7.4 与 bcrypt 5.x 不兼容，直接用 bcrypt 模块) + 20 测试; admin.py 把所有 mutation (skip-list POST/DELETE, delete-case) 改 `Depends(get_current_user)`. (b) **#132 frontend login + guard + Logout** — 新 `routes/LoginPage.tsx` (admin/admin 初始提示 + ?next= 跳转) + `lib/auth.ts` (token 存取 + login/logout/fetchMe helpers) + App.tsx `<RequireAuth>` HOC + Layout sidebar 加 "👤 admin + Logout" + api/client.ts auto-注入 `Authorization: Bearer <token>` + 401 → clearAuthToken + window.location.href '/login'; **CI 撞 1 次 e2e** = 5 个 playwright 测试因没 token 被 RequireAuth Redirect 到 /login 找不到 page-specific selector，fix = `e2e/_helpers.ts` 加 `seedAuth(page)` helper (addInitScript + mock /auth/me) + 3 spec test.beforeEach 调用. (c) **#133 frontend change-password + 红条** — `routes/AdminChangePasswordPage.tsx` (3 字段 + 前端校验 + 成功后 setTimeout 1.5s + reload) + `lib/auth.ts` 加 `changePassword()` helper + Layout 加 `must_change_password` 红条 banner (me.must_change_password=true 才显 + Link to /admin/change-password) + AdminPage 加 Change password 第 4 入口. **Admin 页定型为 4 入口** (v1.17 起): Skip list / External services / Delete case / Change password. **完整 UX 闭环**: /dashboard → RequireAuth gate → /login (admin/admin) → token + 红条提醒 → /admin/change-password → reload → 红条消失. **数字**: backend pytest 396→420 (+24) / frontend vitest 211→244 (+33) / merged PRs 130→133 (+3). **§14 R30 self-check**: 每 PR 1 个 novel mechanism (bcrypt+token / RequireAuth+localStorage / change-password UI+banner). **§14 R26 self-check**: 单 lib/auth.ts 是所有 token 存取 + API 调用 source；admin.py 单 get_current_user dependency 所有 mutation 共用. **忘记密码 fallback** (单人 tool 决策): backend CLI snippet `python -c "..."` reset 密码 — 详 README. |
 | v1.16 | 2026-05-25 | pm-designer (Claude) | **M6 post-iter wave 2 (3 PR) + Admin 页面定型 (3 入口) + Dashboard R4b 实战修。** v1.15 落 external/dut.yml 后用户继续 dogfood + 提问：(a) **#125 Admin > External services 浏览页** — 用户："external/<svc>.yml 是 vi 编辑？" → 确认；引入 read-only 浏览页 (扫 EXTERNAL_DEPS_DIR 列 .yml/.yaml + 显完整 YAML 内容 + size + mtime + inline parse_error，**不开 web 编辑入口**遵循 v1.15 #123 "filesystem 是 source of truth" 原则)；顺手修 `external/dut.yml` hosts: `synxdb-0001` → `std` (标准 standby coordinator hostname) + 加 mdw/std/sdw1/sdw2 topology 注释。(b) **#126 Admin > Delete case + 教育性 confirm** — 用户先想要 delete + Runs 页 combobox 保留显示已删 case (历史搜索)，反思后改方案：删除 = forever，combobox 不显已删。`DELETE /admin/cases/{case_id}` 删 YAML 文件，case_results 表保留 (case_id 是 string 无 FK)；confirm dialog 教育文案 = "短期不想跑某 case → 用 Skip List (可加过期日，到期自动恢复)；只有彻底不再保留这个 case 时才走 Delete"；require_admin_password 守门 + path traversal 双重防御 (_iter_case_files + resolve relative_to)；不自动 git commit/push (避 endpoint 持凭据)。CI 撞 1 次 eslint (`_msg: string` 触发 no-unused-vars，项目 config 没 argsIgnorePattern: '^_'；fix = vitest 1.x tuple-arg generic `vi.fn<[string], boolean>`)。(c) **#127 Dashboard row 2 数据驱动 — §14 R4b 实战 N+1 反模式** 用户："为什么外部系统集成测试不在第 2 行？" 根因 = `bugCategory()` / `extensionCategory()` 两个 helper 用 id_prefix 硬找 `lg-bug-`/`lg-ext-`，没找 `lg-xs-`。M5-2 写 row 2 时只考虑 2 个 category；M4c 加 external_systems 后 row 2 缺新 category。Fix = 删两 helper，row 2 改 `data.categories.map(...)` 跟 row 1 同模式；testid 从 `dashboard-kpi-bug-status` / `extension-stability` → `dashboard-kpi-status-<category_name>` 一致命名。**§14 R4b 实战教训**：同一文件 row N 数据驱动 vs row N+1 硬编码是隐性反模式 — visibility gap 拖到第三个 category 加入后才暴露；review 阶段应主动扫"两个看起来一样的 list/row 是否都按数据驱动写"。(d) **Admin 页定型为 3 入口**：Skip list (暂时禁用，可 until_date 自动过期) / External services (read-only YAML 浏览) / Delete case (永久删 + 教育性引导回 Skip List)。**M6 post-iter 累计 PRs**: #119-#127 共 9 个，全 user-driven 手写，0 foreman dispatch；vitest 156→204 / pytest 388→396+ / merged PRs 117→127 (+10)。 |
 | v1.15 | 2026-05-25 | pm-designer (Claude) | **M6 sprint 后续 UX 迭代 (5 PR) + DUT 连接统一到 `external/dut.yml`。** 用户 M6 收尾后陆续追问 + UX 优化提议 → 5 个独立小 PR + 1 个 refactor PR + 1 个 EMPTY run DB cleanup，全部 user-driven 手写无 foreman。(a) **#119 Settings allowlist 砍 dev_db_url + cluster_topology** — 2 个 reserved key 没接 consumer，编辑无效。(b) **#120 Skip List case_id 改 shadcn Combobox** — 用户反馈 case_id 长易 typo；引入 cmdk + @radix-ui/react-popover；新 `ui/popover.tsx` + `ui/command.tsx` + 复用业务组件 `CaseIdCombobox.tsx` (fuzzy search id 或 title，rich row = id mono + title + status badge)；vitest.setup.ts 加 ResizeObserver + scrollIntoView polyfill (jsdom 缺)。(c) **#121 RunsPage `?case_id=X` filter + 搜索 scope 收窄** — 用户："搜 ID 意义不大；想搜哪几轮测了某 case"；backend 加 `GET /runs?case_id=X` SQL JOIN case_results；前端 useFilters hook + `case_id` 字段 URL 持久化；FilterBar 下方加 "Includes case:" CaseIdCombobox (PR #120 第 2 处复用); 搜框 hay 从 `id + verdict + version + triggered_by` 收窄到 `version + triggered_by`。(d) **#122 Skip List until_date 加中文 label** — `type="date"` 不渲染 placeholder，原文字看不见；显式 `<label>` 写 "skip 自动过期日 (可选) — 不填 = 永久 skip 直到手动删；填了 = 当天起恢复跑"。(e) **#123 砍 Admin > Settings + DUT 迁到 external/dut.yml** — 用户："Settings 排啥用处？"；翻 15 个 case YAML 后承认 3 个 allowlist key 实际无 consumer (jinja_context 没 case 引用 / dut_hosts 可走 external/ / server_log_path case YAML 自己写); 设计原则：**外部依赖统一 `external/<svc>.yml` 体系，DUT 也是一个外部系统**；新 `external/dut.yml` + `dsn_builder.dsn_map_from_external_or_env` (file > env > default 优先级 per-field) + `_execute_run` 始终包含 dut；删 `/admin/settings` GET/PUT endpoints + AdminSettingsPage frontend + 6 个 settings 测试 + AdminPage Settings 链接 + Layout breadcrumb；real-cluster smoke run #18 lg-bug-0001 PASS 2267ms 验 dut.yml 路径连真集群正确。(f) **DB cleanup**: 删 EMPTY verdict run #18 (M6-6 skip-test 1 case skipped 后 counters 全 0 显 EMPTY)；backup `runs.db.backup-20260525-024905-pre-run18-delete`。**§3.1 集群访问约定**同步加 v1.15 注脚指向 external/dut.yml。**M6 sprint 数字累计**：vitest 195/195 (M6 收尾 187 → +Combobox 9 + RunsPage 4 + AdminPage -5 settings + 净 +8) / pytest 392/392 (388 + dsn_builder 4 + admin -6 settings + runs 替换 -1+1) / merged PRs 117 → ~123。**设计观察**: §14 R26 ("dual-code-path") 新变体 = "spec 层声明的能力 vs runtime 实际接通"——M6-4 PR #115 落 settings endpoint 但 backend `_load_jinja_context_and_dut_hosts` 没 consumer drives the runner，留待 §14 R 候选条 "wiring-gap" 沉淀。 |
 | v1.14 | 2026-05-25 | pm-designer (Claude) | **M6 运行体验深化 sprint 完整交付 + M6-4 wiring fix forensic + §13.14 实战回顾入档。** M6 主体（6 子步骤 + 1 dogfood，PR #110/#112/#114/#115/#116/#117 + 报告 `docs/m6-dogfood-2026-05-25-0212.md`）：(a) **M6-1 SSE 进度条** (#110) — `app/runner/event_broker.py` per-run asyncio.Queue broker (publish 非阻塞 best-effort + multi-subscriber + terminal 自关) + `GET /runs/{id}/stream` StreamingResponse (text/event-stream, 含 snapshot 让后到订阅者看 baseline + 20s keepalive comment 防 proxy 关连) + orchestrator `publish_case_done` 每 case 完成 (skip-list 短路也 publish) + `_execute_run` finally `publish_run_done` / `publish_run_aborted` + 前端 RunDetailPage 替换 3s polling 为 EventSource (init GET → SSE event → refetch 模式) + fallback to polling on stream error。**顺修 pre-existing bug**: 旧 `TERMINAL_STATUSES = {'pass','fail','error','completed'}` 用 verdict 比 lifecycle status，polling 永不停止；M6-1 删 stale 常量改判 `{'done','aborted'}`。(b) **M6-2 artifacts download** (#112) — 不需 schema 改（orchestrator 已经写 `<artifacts_root>/<run_id>/<case_id>/step-NN-<step_id>.{stdout,stderr}.txt`）+ `GET /runs/{run_id}/cases/{case_id}/artifacts` 列文件 + `GET .../{filename}` 下载 (FileResponse + `Content-Disposition: attachment` + text/plain charset=utf-8) + 文件名正则解 `step_idx` / `step_id` / `kind`(stdout/stderr/log/other) + path traversal 防护 (拒 `/` `\` `..` + resolve 后 `relative_to(artifacts_dir)` 二次验证防 symlink 跳出) + 前端 RunDetailPage 每 case 行下方 ▸Artifacts 折叠 lazy fetch list/loading/error/empty 4 态 + `<a download>` 直跳后端 endpoint。(c) **M6-3 history diff** (#114) — 纯前端实现无 backend 新 endpoint (两个并行 GET /runs/{id})；`/runs/diff?a=X&b=Y` 新路由 + Layout breadcrumb "Runs / Diff" + RunsDiffPage 客户端 diff 7 类 (pass_to_fail / fail_to_pass / new_case / removed_case / duration_jump(>1.5×) / status_change_other / unchanged) + 排序 regression first → fixed → new → removed → duration_jump → status_change_other → unchanged + unchanged 默认隐藏复选框切换 + Dashboard "Compare last 2 runs →" 链接 (≥2 run 才显)。(d) **M6-4 Admin UI** (#115 + F1 fix in #117) — 新 5 个 endpoint: `GET/POST /admin/skip-list` + `DELETE /admin/skip-list/{id}` + `GET /admin/settings` + `PUT /admin/settings/{key}` + `require_admin_password` 依赖 (env `ADMIN_PASSWORD` 设了就要求 `X-Admin-Password` header；env 没设 → dev mode 不要求；GETs 全开)；存储层加 `add_skip_list_entry` / `delete_skip_list_entry` / `list_settings` 3 个 helper；`ADMIN_EDITABLE_SETTINGS` allowlist 限制可写 key 到 jinja_context/dut_hosts/dev_db_url/cluster_topology/server_log_path 防误改 case_categories；PUT value 必须 JSON 对象 (dict)；前端 `/admin` landing + `/admin/skip-list` (CRUD with confirm() delete) + `/admin/settings` (5 个 textarea JSON 编辑 bad JSON inline error) + Sidebar Admin 从 disabled 改可点 + breadcrumb 3 个新映射 + localStorage.adminPassword 自动注入 header。**F1 wiring fix in #117**: M6-4 PR 落了 CRUD endpoints 但 `_execute_run` **没把 DB 里的 skip_list 传给 `orchestrator.run_suite`**——orchestrator 早就支持 (M2 `_matching_skip_rule`) 但 API 路径从未 wire。Dogfood 暴露 (Run #17 加 skip 仍 PASS) → fix: `_execute_run` 调 run_suite 前 `sqlite_store.get_skip_list(sess)` 转 list[dict] 传 skip_list kwarg + regression test `test_execute_run_passes_skip_list_to_orchestrator`。(e) **M6-5 external_deps runtime injection** (#116) — 新 `app/runner/external_deps_loader.py` (collect_external_deps 跨 case union 去重 + load_external_context 读 `external/<svc>.yml`，默认 `./external/` 可 `EXTERNAL_DEPS_DIR` env 覆盖；missing file / non-dict / invalid YAML → warning + skip 后续 Jinja UndefinedError 给清晰错误) + `_execute_run` 在调 orchestrator 前注入 `jinja_context["external"]`，user-supplied 优先 (本地 override > yaml 默认) + sample `external/elasticsearch.yml` + M4c-1 case `lg-xs-zombodb-partition-text-search` ES URL 2 处 hardcode 改为 `{{ external.elasticsearch.extras.scheme }}://{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}`。**修 case_normalizer drop external_deps bug** (§14 R26 一例)：之前 normalize_case **drop external_deps 字段**，导致 collect_external_deps 收不到 svc 列表 wiring 静默失败；本 PR 加字段透传 + 3 个新 test。(f) **M6-6 dogfood** (#117) — M4c-1 case 3 轮 real-cluster (synxdb-0001 + ES 192.168.195.203:9200 status=green) verification: Run #15 PASS 1/0/1 (1312ms, SSE 3 events 流式 + M6-5 Jinja 渲染) + Run #16 PASS 1/0/1 (M6-3 diff side B) + Run #18 SKIP 0/0/1 (F1 wiring fix verified)。`docs/m6-dogfood-2026-05-25-0212.md` 完整证据链 + F1 forensic + F2 followup (step 02 missing artifact，shell driver stdout 经 `su` 子 shell 后被吞，low impact 留 backlog)。**§14 R28 满足 (≥3 轮)**。**4 个 parallel UI 小 PR** (与 M6 不冲突，用户授权 parallel)：#111 CasesPage "+ New Case" header CTA + #113 Dashboard quick-actions 去掉重复 "+ New case" + 之前 #107 Dashboard verdict 计数器修 + #109 RunsPage hide no-op category chip。**M6 sprint 总成绩**：~2 小时夜间 push / 6 PR + 1 dogfood / 代码净增 ~2600 行 / vitest 156→187 (+31) / pytest 376→388 (+12) / ci-gate 0 失败 (M5 R24 教训之后 backend-fixer + frontend-fixer hard rule 一致 enforce) / dogfood F1 暴露 1 个 wiring bug + 修 + regression test。**§14 R30 实战**: 每个 M6 子 PR `novel mechanism: 1` self-check 全过 (SSE 端到端 = 1 / artifacts API+UI = 1 / diff classification+UI = 1 / admin CRUD pattern = 1 / external context loading+injection+render = 1)，无 R30 命中。 |
@@ -92,6 +93,7 @@
 | Web LLM 接入 (M3a 入口 A "从描述生成") | **§13.13 + §18.M7**（v1.13 新增 plan）| §5.4 设计 / `CaseNewPage.tsx` `handleGenerateStub` (M3a-5 stub) |
 | 风险预警与反模式 R1-R28 | §14（**不动**，memory 大量引用）| §0 changelog 中 R 入档记录 |
 | 多 Agent 协作 (dev workflow) | §8 / §15 | §13.4 M1 retro 中 dispatch 教训 |
+| **用户登录模块** (v1.17 新增) | **§13.15** | §0 v1.17 changelog / `app/api/auth.py` / `lib/auth.ts` / Admin 第 4 入口 Change password |
 
 **编辑约定**: 想加新 topic 时，先在本表登记 → 决定 canonical 放哪一节 → 再写内容；不要又"东一块西一块"。
 
@@ -2316,6 +2318,101 @@ M6 sprint 主交付后用户陆续 dogfood，提出 5 轮 UX 优化 → 5 个独
 
 ---
 
+### 13.15 简易用户登录模块（v1.17 内追加，2026-05-25 写入）
+
+**触发**: 开发尾声前用户提："请帮设计一个简易的用户登录模块：(1) 初始账号 admin/admin；(2) 支持登录后修改密码"。M6-4 PR #115 的 `ADMIN_PASSWORD` env + `X-Admin-Password` header 模式被认作 placeholder，本 sprint 真做 single-user login。
+
+**核心决策（设计前 user 拍板）**:
+
+| 项 | 选择 | 理由 |
+|---|---|---|
+| 用户数 | 单 user (admin) | 单人项目，不做 multi-user / 角色 |
+| 用户名 | 始终 admin | 不允许改用户名（简化）|
+| 初始密码 | admin | UX 提示登录后第一时间改 |
+| Token 类型 | 不透明 random 32-byte (sha256 存) | 单人 tool 不值得引 JWT；DB 泄漏不可立即 replay |
+| Token 过期 | 永不过期，logout 才失效 | 多设备 OK；用户嫌严格可手动 logout |
+| 改密码后旧 token | 不主动 invalidate | 简化；user 想严格则手动 logout 多设备 |
+| 首次登录强制改密码 | 红条提醒，可忽略 | 不强制，但视觉提醒 |
+| 忘记密码 | backend CLI snippet reset | 单人 tool，邮件重置过度设计 |
+| 密码哈希 | bcrypt | 工业标准；passlib 弃用直接用 `bcrypt` 模块 |
+| 替换 ADMIN_PASSWORD env | 删 | 旧机制 vestigial，新 auth 取代 |
+
+**3 PR 链**:
+
+| PR | 范围 | 文件数 |
+|---|---|---|
+| **#131 backend** | Alembic 0003 + users/auth_tokens model + auth.py endpoints + get_current_user dep + 替换 require_admin_password + 20 测试 | 9 |
+| **#132 frontend login + guard** | LoginPage / lib/auth.ts / App.tsx RequireAuth / api/client.ts auto-Bearer + 401 redirect / Layout sidebar Logout + Logout 测试 + e2e seedAuth helper | 8 |
+| **#133 change-password + 红条** | AdminChangePasswordPage / lib/auth.ts changePassword helper / Layout must_change_password banner / AdminPage 第 4 入口 | 8 |
+
+**实战教训**:
+
+(a) **passlib 1.7.4 vs bcrypt 5.x 不兼容** (PR #131 实战)：`passlib` 读 `bcrypt.__about__.__version__` 但 bcrypt 5.x 删了；fix = 直接用 `bcrypt` 模块（更简单，少一层）。**未来加 argon2 等算法时再考虑 wrapper**。
+
+(b) **B008 noqa 反模式** (PR #131)：ruff `B008` 把 FastAPI 推荐的 `Depends(...)` 默认参数标 false positive；fix = 用 `typing.Annotated` 把 dependency type 化 (`CurrentUser = Annotated[User, Depends(get_current_user)]`)，参数变 type-only 没默认值，绕过 lint。**FastAPI 现代推荐做法**。
+
+(c) **CI playwright e2e 找不到 selector** (PR #132)：新加 `<RequireAuth>` HOC 没 token 就 redirect /login → 5 个 e2e 测试访问 protected route 全失败。fix = `e2e/_helpers.ts` 新 `seedAuth(page)` helper (`page.addInitScript(localStorage.setItem)` + mock `/auth/me`)，3 spec 加 `test.beforeEach`. **教训**：加 frontend guard 时必须同步检查 e2e 是否依赖 protected route。
+
+(d) **token 存 sha256 而非原文**：DB dump 不能即时 replay session。开发尾声单人项目本不严格需要，但成本几乎为 0（一行 `hashlib.sha256`），习惯比较好.
+
+**完整 UX 闭环**:
+```
+1. 浏览器 → /dashboard → RequireAuth (no token) → Navigate /login?next=/dashboard
+2. /login admin/admin → POST /auth/login → token 存 localStorage → Navigate /dashboard
+3. Layout fetchMe (useEffect) → me.must_change_password=true → 顶部红条 "请改密码"
+4. 点红条 / Admin → Change password → /admin/change-password → form 提交 →
+   POST /auth/change-password → 1.5s setTimeout → window.location.reload
+5. reload 后 Layout fetchMe → me.must_change_password=false → 红条消失 ✓
+6. Logout → POST /auth/logout + clearAuthToken → Navigate /login
+```
+
+**Admin 页 4 入口** (v1.17 起定型):
+
+| 入口 | 功能 |
+|---|---|
+| Skip list | 暂时禁用 case (可 until_date 自动过期) |
+| External services | 浏览 `external/<svc>.yml` (read-only) |
+| Delete case | 永久删 YAML (历史保留) |
+| Change password | 修改当前用户密码 |
+
+**忘记密码 CLI fallback**:
+
+```bash
+backend/.venv/bin/python -c "
+from app.api.auth import hash_password
+from app.storage import sqlite_store
+from app.storage.models import User
+from sqlalchemy import select
+with sqlite_store.get_session() as sess:
+    user = sess.scalar(select(User).where(User.username == 'admin'))
+    user.password_hash = hash_password('admin')
+    user.password_changed_at = None
+    sess.commit()
+print('reset to admin/admin')
+"
+```
+
+**数字最终**：backend pytest 396→420 (+24) / frontend vitest 211→244 (+33) / merged PRs 130→133 (+3) / 600+ LOC.
+
+**§14 R26 self-check (dual-code-path)**:
+- `lib/auth.ts` 是 frontend 唯一 token 存取 source — apiFetch + Layout fetchMe + change-password 全走它
+- `app/api/auth.py::get_current_user` 是 backend 唯一 auth dependency — admin.py 所有 mutation 共用
+- 删除 ADMIN_PASSWORD env 后**不存在 dual auth path**（之前 `require_admin_password` 同时支持 env + header 两种，现在收敛到一种）
+
+**§14 R30 self-check (≤1 novel mechanism per PR)**:
+- PR #131: 1 mechanism = bcrypt password + opaque-token session (coherent backend unit)
+- PR #132: 1 mechanism = RequireAuth + localStorage token + apiFetch auto-Bearer + 401 redirect (一个 frontend auth UX flow)
+- PR #133: 1 mechanism = change-password UI + 红条 + 成功 reload (一个 password-mutation flow)
+
+**未来 expansion path** (留 backlog，**不在本 sprint scope**):
+- 多用户 + 角色 (需要重做 schema + dependency)
+- OAuth / SSO (集成 GitHub / OIDC)
+- Token expiry + refresh
+- Rate limit on login endpoint (单人 tool 暂不需要)
+- Password complexity policy (单人 tool 用户自管)
+
+---
+
 ## 14. 风险预警与反模式（v0.5 新增）
 
 本章记录"preflight 趟过的雷"，按风险等级排序。各条都包含**触发场景**、**正确做法**、**preflight 教训来源**。新人/未来的自己读这一章可以省下数周踩坑。
@@ -3424,6 +3521,16 @@ design.md §13 当前 13 个子节按时间线展开：plan 写在 sprint 启动
 - **关键学到**：(1) **R30 "≤1 novel mechanism per PR" sprint-wide 0 命中** — vertical-slice (e.g. SSE 端到端 = 1 broker + 1 endpoint + 1 client) 比 horizontal-slice 更易 review；(2) **F1 = §14 R26 一种隐性变体**——"endpoint 落地 + 单测验 persistence 但 runtime 路径未接通"，添 regression test `test_execute_run_passes_skip_list_to_orchestrator` 防退；(3) **user-driven 路径在 R-stabilized codebase 上显著比 foreman 路径快**（M6 2h vs M5-1 foreman ~6h）
 - **数字**：vitest 127→187 (+60) / pytest 345→388 (+43) / merged PRs +18
 
+### 18.Auth 简易用户登录模块（done, v1.17）
+
+- **状态**：✅ DONE — 3 PR / 9 文件 / 600+ LOC / 全 user-driven 手写
+- **关键 §**：§13.15 (sprint retro) / §0 v1.17 changelog
+- **关键 PR**：#131 backend (users/auth_tokens + /auth/* + bcrypt + Bearer + 替代 ADMIN_PASSWORD) / #132 frontend login + guard + Logout (含 e2e seedAuth helper 修 playwright) / #133 change-password + 红条提醒
+- **核心决策**: 单用户 admin / 永不过期 token / sha256 存 hash / 不主动 invalidate 多设备 / 红条提醒可忽略
+- **Admin 页定型 4 入口** (v1.17 起): Skip list / External services / Delete case / Change password
+- **数字**: backend pytest 396→420 (+24) / frontend vitest 211→244 (+33) / merged PRs 130→133 (+3)
+- **关键学到**: passlib 1.7.4 与 bcrypt 5.x 不兼容 (直接用 bcrypt 模块) / FastAPI `Depends` 默认参数 ruff B008 用 `Annotated` 绕过 / 新加 frontend guard 时必须同步检查 playwright e2e 是否依赖 protected route (PR #132 e2e fix)
+
 ### 18.M7 LLM 接入（plan, v1.13 新增）
 
 - **状态**: 📋 plan only — 4 子步骤 + dogfood (M7-1 backend / M7-2 prompt / M7-3 frontend / M7-4 tests / M7-5 dogfood)
@@ -3445,6 +3552,7 @@ design.md §13 当前 13 个子节按时间线展开：plan 写在 sprint 启动
 | M4 | R28 (intermittent BUG sampling ≥10 rounds) | sql_driver chain refactor + lg-bug-0009 反转 fixed→open 铁律 1 实战；§4.1.2 psql -c 约定硬化 |
 | M5 ✅ done | R29~R32 (M5-1 PR #94 失败链事后) | sidebar + dashboard 统一面板；moving away from flat top nav |
 | M6 ✅ done (v1.14) | R26 隐性变体 (F1 wiring-gap: endpoint 落地 + 单测过 + runtime 不读) / R30 sprint-wide 0 命中 (vertical-slice 模式实战印证) | SSE event broker + artifacts API + admin CRUD pattern + external_deps Jinja injection; user-driven 路径 2h 闭环 vs foreman 路径 ~6h |
+| **Auth ✅ done (v1.17)** | passlib/bcrypt 5.x 兼容 / FastAPI B008+`Annotated` / **新 frontend guard 必须同步修 e2e** (PR #132 5 个 playwright 失败) | bcrypt + opaque token + Bearer + RequireAuth HOC + must_change_password 红条 + Admin 第 4 入口 |
 | M7 (待, v1.13) | — | Anthropic SDK 接入 / `/cases/new` 入口 A 真 work / 必须人工确认 gate |
 
 **模式**：每个 milestone 至少触发 1 个新 §14 R 入档 / 1 个核心设计转向。"sprint = 学习一轮 = 沉淀一条反模式"——§14 是 milestone 的副产物，不是孤立的章节。
