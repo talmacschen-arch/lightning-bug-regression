@@ -694,7 +694,7 @@ async def test_step_id_with_slash_does_not_create_nested_dirs(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     case_dir = tmp_path / "99" / "lg-bug-sanitize-slash"
     # No nested subdir for the slash fragment
@@ -739,7 +739,7 @@ async def test_step_id_sanitization_replaces_all_illegal_chars(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     case_dir = tmp_path / "100" / "lg-bug-sanitize-parametrized"
     # All listed children must be files (no subdir created by the illegal char)
@@ -777,7 +777,7 @@ async def test_step_id_sanitization_preserves_non_ascii_chinese(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     case_dir = tmp_path / "101" / "lg-bug-sanitize-cn"
     expected = case_dir / "step-00-step 中文 with _.stdout.txt"
@@ -826,7 +826,7 @@ async def test_sql_error_writes_error_txt_artifact(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     case_dir = tmp_path / "200" / "lg-bug-err-artifact"
     error_file = case_dir / "step-00-boom.error.txt"
@@ -862,7 +862,7 @@ async def test_step_with_no_error_does_not_write_error_txt(
         artifacts_root=tmp_path,
         jinja_context={},
         dut_hosts=set(),
-        sql_pool=MagicMock(),
+        sql_pool=_mock_sql_pool(),
     )
     case_dir = tmp_path / "201" / "lg-bug-no-error"
     # No .error.txt file present
