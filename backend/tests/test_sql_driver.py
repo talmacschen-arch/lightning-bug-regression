@@ -43,6 +43,14 @@ class _FakeAsyncCursor:
         self.description: Any = None
         self.rowcount: int = -1
         self._rows: list[tuple] | None = None
+        # Track every SQL string passed to .execute() — tests for
+        # discard_all() rely on this to assert RESET ALL +
+        # DEALLOCATE ALL are issued in order.
+        self.executed: list[str] = []
+        # Per-statement side-effect map: SQL prefix → exception. If a
+        # call to .execute() matches a key (startswith), raise the
+        # mapped exception. Used to simulate "RESET ALL refused".
+        self.execute_side_effects: dict[str, BaseException] = {}
 
     async def __aenter__(self) -> _FakeAsyncCursor:
         return self
@@ -51,8 +59,12 @@ class _FakeAsyncCursor:
         return None
 
     async def execute(self, sql: str) -> None:
+        self.executed.append(sql)
         if self._execute_delay:
             await asyncio.sleep(self._execute_delay)
+        for prefix, exc in self.execute_side_effects.items():
+            if sql.startswith(prefix):
+                raise exc
         if self._execute_exc is not None:
             raise self._execute_exc
         # Move to first result set, if any.
@@ -367,24 +379,45 @@ async def test_non_explain_query_has_no_plan_text() -> None:
 # ---------------------------------------------------------------------------
 # (p) discard_all() — orchestrator session-state isolation between cases
 #     (dogfood 2026-05-26: lg-bug-0011 SET work_mem='256kB' leaked into
-#     lg-xs-zombodb at suite tail; DISCARD ALL is the per-case fix)
+#     lg-xs-zombodb at suite tail; per-case session reset is the fix)
+#
+#     Implementation note: PR-F's original DISCARD ALL fell over because
+#     PostgreSQL refuses DISCARD ALL inside a transaction block, and
+#     psycopg3 with autocommit=False wraps every execute() in an
+#     implicit BEGIN — 12/17 cases errored at 2-8ms with
+#     InFailedSqlTransaction in dogfood run #32. Approach A
+#     (2026-05-26): replace with RESET ALL + DEALLOCATE ALL (both
+#     tx-safe), and on the exception path roll back so a failed reset
+#     doesn't poison the conn for the next case.
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_discard_all_issues_discard_on_every_open_conn() -> None:
-    """discard_all() must issue `DISCARD ALL` on every conn in `_conns`.
+async def test_discard_all_issues_reset_and_deallocate_on_every_open_conn() -> None:
+    """discard_all() must issue ``RESET ALL`` + ``DEALLOCATE ALL`` (in
+    that order) on every conn in ``_conns``.
 
-    Mocks two open sessions, calls discard_all(), asserts both saw
-    DISCARD ALL via conn.execute().
+    Mocks two open sessions, calls discard_all(), asserts both cursors
+    saw RESET ALL then DEALLOCATE ALL, and no DISCARD ALL was issued
+    on the conn directly (the old broken path).
     """
     pool = SqlSessionPool({"a": "postgresql://stub/a", "b": "postgresql://stub/b"})
-    conn_a = _FakeAsyncConnection(_FakeAsyncCursor())
-    conn_b = _FakeAsyncConnection(_FakeAsyncCursor())
+    cur_a = _FakeAsyncCursor()
+    cur_b = _FakeAsyncCursor()
+    conn_a = _FakeAsyncConnection(cur_a)
+    conn_b = _FakeAsyncConnection(cur_b)
     # Inject directly into pool's internal map (skip real connect for unit-purity).
     pool._conns["a"] = conn_a  # type: ignore[assignment]
     pool._conns["b"] = conn_b  # type: ignore[assignment]
     await pool.discard_all()
-    assert "DISCARD ALL" in conn_a.executed
-    assert "DISCARD ALL" in conn_b.executed
+    # Cursor-level: both RESET ALL and DEALLOCATE ALL issued, in order.
+    assert cur_a.executed == ["RESET ALL", "DEALLOCATE ALL"]
+    assert cur_b.executed == ["RESET ALL", "DEALLOCATE ALL"]
+    # Conn-level: NO DISCARD ALL was issued via conn.execute — that
+    # path is what triggered InFailedSqlTransaction in dogfood run #32.
+    assert "DISCARD ALL" not in conn_a.executed
+    assert "DISCARD ALL" not in conn_b.executed
+    # Each conn's reset is committed so the next case starts clean.
+    assert conn_a.commits == 1
+    assert conn_b.commits == 1
 
 
 @pytest.mark.asyncio
@@ -396,49 +429,130 @@ async def test_discard_all_is_noop_when_no_sessions_open() -> None:
 
 @pytest.mark.asyncio
 async def test_discard_all_rolls_back_when_conn_in_transaction() -> None:
-    """If a conn is INTRANS/INERROR, rollback() must be called before
-    DISCARD ALL is issued — otherwise PG rejects DISCARD ALL in a tx.
+    """If a conn is INTRANS/INERROR, rollback() must be called BEFORE
+    the reset SQL — and the reset SQL is RESET ALL + DEALLOCATE ALL
+    (both tx-safe), not DISCARD ALL.
     """
     from psycopg.pq import TransactionStatus
 
     pool = SqlSessionPool({"a": "postgresql://stub/a"})
-    conn = _FakeAsyncConnection(_FakeAsyncCursor())
+    cur = _FakeAsyncCursor()
+    conn = _FakeAsyncConnection(cur)
     conn.info.transaction_status = TransactionStatus.INTRANS
     pool._conns["a"] = conn  # type: ignore[assignment]
     await pool.discard_all()
+    # Pre-reset rollback fires, then RESET ALL + DEALLOCATE ALL, then commit.
     assert conn.rollbacks == 1
-    assert "DISCARD ALL" in conn.executed
+    assert cur.executed == ["RESET ALL", "DEALLOCATE ALL"]
+    assert conn.commits == 1
 
 
 @pytest.mark.asyncio
 async def test_discard_all_skips_rollback_when_conn_idle() -> None:
     """If conn is already IDLE, do NOT issue a needless rollback."""
     pool = SqlSessionPool({"a": "postgresql://stub/a"})
-    conn = _FakeAsyncConnection(_FakeAsyncCursor())
+    cur = _FakeAsyncCursor()
+    conn = _FakeAsyncConnection(cur)
     # default info.transaction_status == IDLE
     pool._conns["a"] = conn  # type: ignore[assignment]
     await pool.discard_all()
     assert conn.rollbacks == 0
-    assert "DISCARD ALL" in conn.executed
+    assert cur.executed == ["RESET ALL", "DEALLOCATE ALL"]
 
 
 @pytest.mark.asyncio
 async def test_discard_all_per_conn_error_does_not_block_others() -> None:
-    """R9 fold-don't-bubble: one session's DISCARD ALL raising must not
+    """R9 fold-don't-bubble: one session's reset raising must not
     prevent the next session's reset. Dogfood-critical: a single bad
     conn shouldn't silently break isolation for every other case.
     """
     pool = SqlSessionPool({"a": "postgresql://stub/a", "b": "postgresql://stub/b"})
-    conn_a = _FakeAsyncConnection(_FakeAsyncCursor())
-    conn_b = _FakeAsyncConnection(_FakeAsyncCursor())
+    cur_a = _FakeAsyncCursor()
+    cur_b = _FakeAsyncCursor()
+    # Configure cur_a's RESET ALL to raise; cur_b stays healthy.
+    cur_a.execute_side_effects["RESET ALL"] = RuntimeError("RESET ALL refused")
+    conn_a = _FakeAsyncConnection(cur_a)
+    conn_b = _FakeAsyncConnection(cur_b)
 
-    async def _boom(sql: str) -> None:
-        raise RuntimeError("DISCARD ALL refused")
-
-    conn_a.execute = _boom  # type: ignore[assignment]
     pool._conns["a"] = conn_a  # type: ignore[assignment]
     pool._conns["b"] = conn_b  # type: ignore[assignment]
     # Must not raise.
     await pool.discard_all()
-    # conn_b still got its reset despite conn_a blowing up.
-    assert "DISCARD ALL" in conn_b.executed
+    # conn_b still got its full reset despite conn_a blowing up.
+    assert cur_b.executed == ["RESET ALL", "DEALLOCATE ALL"]
+
+
+# ---------------------------------------------------------------------------
+# (p2) RESET ALL failure → best-effort rollback so the conn is usable
+#     by the next case (the regression class behind dogfood run #32:
+#     bare except left the conn in INERROR → next case errored at 2-8ms
+#     with InFailedSqlTransaction). NEW in Approach A 2026-05-26.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_discard_all_rolls_back_on_reset_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If the reset SQL raises, discard_all must:
+
+    1. Log a warning naming the session.
+    2. Call ``conn.rollback()`` so the conn isn't left in INERROR.
+    3. Not propagate the exception to the caller.
+    """
+    import logging
+
+    pool = SqlSessionPool({"a": "postgresql://stub/a"})
+    cur = _FakeAsyncCursor()
+    cur.execute_side_effects["RESET ALL"] = RuntimeError("simulated reset failure")
+    conn = _FakeAsyncConnection(cur)
+    pool._conns["a"] = conn  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING, logger="app.runner.sql_driver"):
+        # Must not raise.
+        await pool.discard_all()
+
+    # Warning logged, naming the session.
+    assert any("session a reset failed" in rec.getMessage() for rec in caplog.records), (
+        f"expected warning naming session 'a'; got {[r.getMessage() for r in caplog.records]}"
+    )
+    # Best-effort rollback fired (the conn was IDLE at start, so the
+    # only rollback comes from the except-path recovery).
+    assert conn.rollbacks == 1
+    # No commit happened (we failed mid-reset).
+    assert conn.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_discard_all_rollback_recovery_tolerates_rollback_failure() -> None:
+    """If even the recovery rollback() raises, discard_all must still
+    not propagate (R9 fold-don't-bubble all the way down).
+    """
+    pool = SqlSessionPool({"a": "postgresql://stub/a"})
+    cur = _FakeAsyncCursor()
+    cur.execute_side_effects["RESET ALL"] = RuntimeError("simulated reset failure")
+    conn = _FakeAsyncConnection(cur)
+
+    async def _rollback_boom() -> None:
+        raise RuntimeError("rollback also failed")
+
+    conn.rollback = _rollback_boom  # type: ignore[assignment]
+    pool._conns["a"] = conn  # type: ignore[assignment]
+    # Must not raise.
+    await pool.discard_all()
+
+
+@pytest.mark.asyncio
+async def test_discard_all_deallocate_runs_after_reset() -> None:
+    """If RESET ALL succeeds but DEALLOCATE ALL fails, discard_all
+    still rolls back so the conn is usable.
+    """
+    pool = SqlSessionPool({"a": "postgresql://stub/a"})
+    cur = _FakeAsyncCursor()
+    cur.execute_side_effects["DEALLOCATE ALL"] = RuntimeError("dealloc failed")
+    conn = _FakeAsyncConnection(cur)
+    pool._conns["a"] = conn  # type: ignore[assignment]
+    await pool.discard_all()
+    # Both statements were attempted in order.
+    assert cur.executed == ["RESET ALL", "DEALLOCATE ALL"]
+    # Recovery rollback fired.
+    assert conn.rollbacks == 1
+    assert conn.commits == 0
