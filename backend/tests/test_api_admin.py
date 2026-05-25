@@ -18,9 +18,14 @@ from app.storage.models import Base, CaseCategory
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Spin a fresh in-memory DB + seed the two §4.5 categories so the
-    endpoint has something to return. Mirrors the seed inserts in
-    alembic migration 0001."""
+    """In-memory DB + seeded categories + seeded admin user (v1.17).
+
+    `c.auth_headers` is attached: `{Authorization: Bearer <token>}` —
+    use on all mutation requests (skip-list POST/DELETE, delete-case,
+    etc.). GETs don't need the header.
+    """
+    from app.api.auth import seed_admin_if_missing
+
     engine = create_engine(
         "sqlite:///:memory:",
         future=True,
@@ -64,7 +69,13 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         )
         sess.commit()
 
+    seed_admin_if_missing()
+
     with TestClient(app) as c:
+        login = c.post("/auth/login", json={"username": "admin", "password": "admin"})
+        assert login.status_code == 200, f"seeded admin login failed: {login.json()}"
+        token = login.json()["token"]
+        c.auth_headers = {"Authorization": f"Bearer {token}"}  # type: ignore[attr-defined]
         yield c
 
     Base.metadata.drop_all(engine)
@@ -168,6 +179,7 @@ def test_skip_list_empty_returns_empty_array(client: TestClient) -> None:
 def test_create_skip_list_entry_round_trip(client: TestClient) -> None:
     resp = client.post(
         "/admin/skip-list",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
         json={
             "case_id": "lg-bug-9999-flaky",
             "reason": "intermittent on 4.5.0 — needs ≥10 rounds (R28)",
@@ -184,7 +196,7 @@ def test_create_skip_list_entry_round_trip(client: TestClient) -> None:
     assert body["until_date"] == "2026-12-31"
     assert isinstance(body["id"], int)
 
-    # GET should return the row
+    # GET should return the row (GETs don't require auth)
     listing = client.get("/admin/skip-list").json()
     assert len(listing) == 1
     assert listing[0]["id"] == body["id"]
@@ -195,11 +207,13 @@ def test_create_skip_list_entry_rejects_blank_required_fields(
 ) -> None:
     resp = client.post(
         "/admin/skip-list",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
         json={"case_id": "  ", "reason": "x"},
     )
     assert resp.status_code == 400
     resp = client.post(
         "/admin/skip-list",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
         json={"case_id": "y", "reason": ""},
     )
     assert resp.status_code == 400
@@ -208,17 +222,24 @@ def test_create_skip_list_entry_rejects_blank_required_fields(
 def test_delete_skip_list_entry(client: TestClient) -> None:
     resp = client.post(
         "/admin/skip-list",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
         json={"case_id": "lg-bug-X", "reason": "test"},
     )
     eid = resp.json()["id"]
-    del_resp = client.delete(f"/admin/skip-list/{eid}")
+    del_resp = client.delete(
+        f"/admin/skip-list/{eid}",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+    )
     assert del_resp.status_code == 204
     # GET shows it's gone
     assert client.get("/admin/skip-list").json() == []
 
 
 def test_delete_skip_list_404_for_unknown_id(client: TestClient) -> None:
-    resp = client.delete("/admin/skip-list/999999")
+    resp = client.delete(
+        "/admin/skip-list/999999",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+    )
     assert resp.status_code == 404
 
 
@@ -242,50 +263,40 @@ def test_settings_put_endpoint_removed(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# X-Admin-Password auth guard (M6-4; still active for skip-list mutations)
+# Bearer-token auth gate (v1.17+ replaces M6-4 X-Admin-Password env pattern)
 # ---------------------------------------------------------------------------
 
 
-def test_no_auth_required_when_admin_password_env_unset(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Dev-mode: env unset → mutating endpoints work without header."""
-    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+def test_mutation_without_bearer_token_401(client: TestClient) -> None:
+    """No Authorization header → mutating endpoint returns 401."""
     resp = client.post(
         "/admin/skip-list",
-        json={"case_id": "lg-bug-dev", "reason": "no auth in dev"},
-    )
-    assert resp.status_code == 201
-
-
-def test_mutation_blocked_without_password_when_env_set(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
-    resp = client.post(
-        "/admin/skip-list",
-        json={"case_id": "lg-bug-blocked", "reason": "no header"},
+        json={"case_id": "lg-bug-no-auth", "reason": "no header"},
     )
     assert resp.status_code == 401
 
 
-def test_mutation_allowed_with_correct_password(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
+def test_mutation_with_invalid_bearer_token_401(client: TestClient) -> None:
     resp = client.post(
         "/admin/skip-list",
-        headers={"X-Admin-Password": "secret-pw-2026"},
-        json={"case_id": "lg-bug-ok", "reason": "with header"},
+        headers={"Authorization": "Bearer not-a-real-token"},
+        json={"case_id": "lg-bug-bad-token", "reason": "bad token"},
+    )
+    assert resp.status_code == 401
+
+
+def test_mutation_with_valid_bearer_token_201(client: TestClient) -> None:
+    """Sanity: the fixture-seeded admin user's token works on mutations."""
+    resp = client.post(
+        "/admin/skip-list",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+        json={"case_id": "lg-bug-with-token", "reason": "with bearer"},
     )
     assert resp.status_code == 201
 
 
-def test_get_endpoints_remain_open_with_admin_password(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """GETs should still work without password (read-only access OK)."""
-    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
+def test_get_endpoints_remain_open_without_token(client: TestClient) -> None:
+    """GETs are open — no Authorization header required."""
     assert client.get("/admin/skip-list").status_code == 200
     assert client.get("/admin/categories").status_code == 200
 
@@ -402,7 +413,10 @@ def test_delete_case_removes_yaml_file(
     case_yaml = _seed_test_case_dir(monkeypatch, tmp_path)
     assert case_yaml.exists()
 
-    resp = client.delete("/admin/cases/lg-bug-test-delete")
+    resp = client.delete(
+        "/admin/cases/lg-bug-test-delete",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+    )
     assert resp.status_code == 204
     assert not case_yaml.exists()
 
@@ -411,7 +425,10 @@ def test_delete_case_404_when_not_found(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _seed_test_case_dir(monkeypatch, tmp_path)
-    resp = client.delete("/admin/cases/lg-bug-not-real")
+    resp = client.delete(
+        "/admin/cases/lg-bug-not-real",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+    )
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"]
 
@@ -423,7 +440,10 @@ def test_delete_case_path_traversal_attempt_returns_404(
     only yields files inside category dirs, so a `..` case_id has no
     matching file = 404 (route param doesn't even allow raw `/`)."""
     _seed_test_case_dir(monkeypatch, tmp_path)
-    resp = client.delete("/admin/cases/..%2Fevil")
+    resp = client.delete(
+        "/admin/cases/..%2Fevil",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+    )
     assert resp.status_code in (404, 400)
 
 
@@ -458,7 +478,10 @@ def test_delete_case_preserves_case_results_history(
         )
         run_id = run.id
 
-    resp = client.delete("/admin/cases/lg-bug-test-delete")
+    resp = client.delete(
+        "/admin/cases/lg-bug-test-delete",
+        headers=client.auth_headers,  # type: ignore[attr-defined]
+    )
     assert resp.status_code == 204
     assert not case_yaml.exists()
 
@@ -469,19 +492,18 @@ def test_delete_case_preserves_case_results_history(
         assert rows[0].case_id == "lg-bug-test-delete"
 
 
-def test_delete_case_requires_admin_password_when_set(
+def test_delete_case_requires_bearer_token(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _seed_test_case_dir(monkeypatch, tmp_path)
-    monkeypatch.setenv("ADMIN_PASSWORD", "secret-pw-2026")
 
-    # Without header → 401
+    # Without Authorization header → 401
     resp = client.delete("/admin/cases/lg-bug-test-delete")
     assert resp.status_code == 401
 
-    # With header → 204
+    # With valid Bearer token → 204
     resp = client.delete(
         "/admin/cases/lg-bug-test-delete",
-        headers={"X-Admin-Password": "secret-pw-2026"},
+        headers=client.auth_headers,  # type: ignore[attr-defined]
     )
     assert resp.status_code == 204

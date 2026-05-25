@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import admin as admin_router
+from app.api import auth as auth_router
 from app.api import cases as cases_router
 from app.api import healthz as healthz_router
 from app.api import runs as runs_router
@@ -43,6 +44,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     db_url = get_database_url()
     logger.info("initializing storage engine: %s", db_url)
     sqlite_store.init_engine(db_url)
+    # v1.17: ensure the default admin user exists on first boot.
+    auth_router.seed_admin_if_missing()
     yield
 
 
@@ -78,6 +81,7 @@ app.include_router(healthz_router.router)
 app.include_router(runs_router.router)
 app.include_router(cases_router.router)
 app.include_router(admin_router.router)
+app.include_router(auth_router.router)
 
 
 __all__ = ["app"]

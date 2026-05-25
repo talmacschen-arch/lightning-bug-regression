@@ -20,14 +20,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import date, datetime
 
 import yaml
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.auth import get_current_user
 from app.runner.step_kinds import STEP_KINDS
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
@@ -38,26 +38,10 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # ---------------------------------------------------------------------------
-# M6-4 lightweight auth guard
+# Auth gate (v1.17+): mutation endpoints use `Depends(get_current_user)`
+# from app.api.auth. The legacy `ADMIN_PASSWORD` env + `X-Admin-Password`
+# header pattern (M6-4 PR #115) is replaced.
 # ---------------------------------------------------------------------------
-
-
-def require_admin_password(
-    x_admin_password: str | None = Header(default=None),
-) -> None:
-    """Reject mutations when ADMIN_PASSWORD is set but header doesn't match.
-
-    If ADMIN_PASSWORD env is unset / empty → no-op (dev mode).
-    Use as `Depends(require_admin_password)` on mutating endpoints.
-    """
-    expected = os.getenv("ADMIN_PASSWORD")
-    if not expected:
-        return
-    if x_admin_password != expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid or missing X-Admin-Password",
-        )
 
 
 class CategoryOut(BaseModel):
@@ -186,7 +170,7 @@ def list_skip_list_entries() -> list[SkipListEntryOut]:
     "/skip-list",
     response_model=SkipListEntryOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin_password)],
+    dependencies=[Depends(get_current_user)],
 )
 def create_skip_list_entry(payload: SkipListCreate) -> SkipListEntryOut:
     """Add a new skip-list entry. Idempotent on duplicate (case_id, version)?
@@ -219,7 +203,7 @@ def create_skip_list_entry(payload: SkipListCreate) -> SkipListEntryOut:
 @router.delete(
     "/skip-list/{entry_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_admin_password)],
+    dependencies=[Depends(get_current_user)],
 )
 def delete_skip_list_entry(entry_id: int) -> None:
     """Remove a skip-list entry by id. 404 if missing."""
@@ -255,7 +239,7 @@ def delete_skip_list_entry(entry_id: int) -> None:
 @router.delete(
     "/cases/{case_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_admin_password)],
+    dependencies=[Depends(get_current_user)],
 )
 def delete_case(case_id: str) -> None:
     """Remove a case YAML file from disk. 404 if no file matches.
