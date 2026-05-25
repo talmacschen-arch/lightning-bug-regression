@@ -150,6 +150,18 @@ def _normalize_one_step(
     else:
         out["on"] = step.get("on") or f"default:{default_db}"
 
+    # YAML-author-friendly alias: timeout_sec → timeout_ms. Orchestrator only
+    # reads timeout_ms; without this conversion every author who wrote
+    # timeout_sec silently fell back to the 60s default (dogfood 2026-05-25
+    # lg-bug-0011 v1: setup INSERT of 98M rows was killed at exactly 60s
+    # with asyncio.TimeoutError despite `timeout_sec: 120`). timeout_ms wins
+    # on conflict (explicit canonical key).
+    if "timeout_sec" in step and "timeout_ms" not in out:
+        sec = step["timeout_sec"]
+        if sec is not None:
+            out["timeout_ms"] = int(sec) * 1000
+    out.pop("timeout_sec", None)
+
     # sql kind needs sql:/run:
     if kind == "sql" and not (step.get("sql") or step.get("run")):
         raise ValueError(f"sql step {out['id']!r} missing sql/run field")
