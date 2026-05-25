@@ -15,6 +15,12 @@ import {
 type CategoryOut = components['schemas']['CategoryOut'];
 type CaseSummary = components['schemas']['CaseSummary'];
 
+type TargetVersionOption = {
+  id: number;
+  name: string;
+  is_default: boolean;
+};
+
 interface ConflictError {
   detail: string;
   active_run_id: number;
@@ -48,6 +54,8 @@ export default function RunNewPage() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [targetVersion, setTargetVersion] = useState('');
+  const [versionOptions, setVersionOptions] = useState<TargetVersionOption[]>([]);
+  const [versionLoadError, setVersionLoadError] = useState(false);
   // Tracks the URL preset key string that has been applied, so navigating
   // to a NEW preset (?category=…&status=…) triggers re-apply, but the
   // same URL stays sticky after the user edits selection.
@@ -67,6 +75,37 @@ export default function RunNewPage() {
   const [me, setMe] = useState<MeResponse | null>(null);
   useEffect(() => {
     void fetchMe().then(setMe);
+  }, []);
+
+  // Fetch available target versions from the registry on mount.
+  // Failure is non-fatal: select renders with only "— None —" + a warning.
+  //
+  // /admin/target-versions is not yet in the generated OpenAPI types
+  // (PR-A lands in parallel). We cast through `unknown` to call apiFetch
+  // with a string path. Migrate to the fully-typed overload after running
+  // `npm run gen:types` post PR-A merge.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchVersions = apiFetch as unknown as (
+      p: string,
+      m: string,
+      i?: { query?: Record<string, string> },
+    ) => Promise<unknown>;
+    fetchVersions('/admin/target-versions', 'get', { query: { active: 'true' } })
+      .then((data) => {
+        if (cancelled) return;
+        const opts = data as TargetVersionOption[];
+        setVersionOptions(opts);
+        // Pre-select the default version if one exists
+        const defaultOpt = opts.find((v) => v.is_default);
+        if (defaultOpt) setTargetVersion(defaultOpt.name);
+      })
+      .catch(() => {
+        if (!cancelled) setVersionLoadError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Refs for per-category indeterminate checkbox DOM nodes
@@ -409,15 +448,26 @@ export default function RunNewPage() {
           <label htmlFor="input-target-version" className="text-sm font-medium">
             Target version
           </label>
-          <input
+          <select
             id="input-target-version"
             data-testid="input-target-version"
-            type="text"
-            placeholder="e.g. 5.1.0 (optional)"
             value={targetVersion}
             onChange={(e) => setTargetVersion(e.target.value)}
             className="border rounded px-2 py-1 text-sm w-48"
-          />
+          >
+            <option value="">— None —</option>
+            {versionOptions.map((v) => (
+              <option key={v.id} value={v.name}>{v.name}</option>
+            ))}
+          </select>
+          {versionLoadError && (
+            <span
+              data-testid="version-load-error"
+              className="text-xs text-amber-600"
+            >
+              Could not load version list
+            </span>
+          )}
         </div>
 
         {/* v1.17 triggered_by hint — backend auto-fills from auth user */}
