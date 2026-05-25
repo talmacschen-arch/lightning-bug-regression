@@ -513,6 +513,17 @@ async def run_case(
     except OSError as e:
         logger.warning("could not create artifacts dir %s: %s", case_artifacts_dir, e)
 
+    # Reset session-level state on every persistent sql connection BEFORE
+    # this case's setup runs. Without this, non-LOCAL `SET` GUCs / temp
+    # tables / prepared statements from a previous case bleed into this
+    # case's session and silently corrupt behavior (dogfood 2026-05-26:
+    # lg-bug-0011/0012 SET work_mem='256kB' + enable_seqscan=off persisted
+    # into the persistent AsyncConnection and broke lg-xs-zombodb at the
+    # suite tail). discard_all() swallows per-connection errors with
+    # logger.warning, so we don't need a try/except here.
+    if sql_pool is not None:
+        await sql_pool.discard_all()
+
     setup_steps: list[dict[str, Any]] = list(case.get("setup") or [])
     main_steps: list[dict[str, Any]] = list(case.get("steps") or [])
     teardown_steps: list[dict[str, Any]] = list(case.get("teardown") or [])

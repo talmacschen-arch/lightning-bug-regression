@@ -81,6 +81,18 @@ class _FakeAsyncCursor:
         return list(self._rows or [])
 
 
+class _FakeConnInfo:
+    """Mimics psycopg AsyncConnection.info, which exposes
+    `.transaction_status` (a psycopg.pq.TransactionStatus enum value).
+    Tests can monkey-set `transaction_status` to simulate INTRANS / INERROR.
+    """
+
+    def __init__(self) -> None:
+        from psycopg.pq import TransactionStatus as _TS
+
+        self.transaction_status = _TS.IDLE
+
+
 class _FakeAsyncConnection:
     """Minimal AsyncConnection stub with notice-handler hooks.
 
@@ -96,6 +108,10 @@ class _FakeAsyncConnection:
         self.closed = False
         self.rollbacks = 0
         self.commits = 0
+        # Mimic psycopg's conn.info.transaction_status. discard_all() reads
+        # this to decide whether to rollback before issuing DISCARD ALL.
+        # Default IDLE — tests that want INTRANS overwrite via .info_status_value.
+        self.info = _FakeConnInfo()
 
     def cursor(self) -> _FakeAsyncCursor:
         return self._cursor
@@ -346,3 +362,83 @@ async def test_non_explain_query_has_no_plan_text() -> None:
 
 # Tests (n) and (o) (autocommit DDL SET-ordering / timeout opt-in) removed
 # with the autocommit branch per §4.1.2 refactor — see comment block at (i).
+
+
+# ---------------------------------------------------------------------------
+# (p) discard_all() — orchestrator session-state isolation between cases
+#     (dogfood 2026-05-26: lg-bug-0011 SET work_mem='256kB' leaked into
+#     lg-xs-zombodb at suite tail; DISCARD ALL is the per-case fix)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_discard_all_issues_discard_on_every_open_conn() -> None:
+    """discard_all() must issue `DISCARD ALL` on every conn in `_conns`.
+
+    Mocks two open sessions, calls discard_all(), asserts both saw
+    DISCARD ALL via conn.execute().
+    """
+    pool = SqlSessionPool({"a": "postgresql://stub/a", "b": "postgresql://stub/b"})
+    conn_a = _FakeAsyncConnection(_FakeAsyncCursor())
+    conn_b = _FakeAsyncConnection(_FakeAsyncCursor())
+    # Inject directly into pool's internal map (skip real connect for unit-purity).
+    pool._conns["a"] = conn_a  # type: ignore[assignment]
+    pool._conns["b"] = conn_b  # type: ignore[assignment]
+    await pool.discard_all()
+    assert "DISCARD ALL" in conn_a.executed
+    assert "DISCARD ALL" in conn_b.executed
+
+
+@pytest.mark.asyncio
+async def test_discard_all_is_noop_when_no_sessions_open() -> None:
+    """Idempotent on an empty pool — must not raise."""
+    pool = SqlSessionPool({"a": "postgresql://stub/a"})
+    await pool.discard_all()  # no conns opened → should be silent no-op
+
+
+@pytest.mark.asyncio
+async def test_discard_all_rolls_back_when_conn_in_transaction() -> None:
+    """If a conn is INTRANS/INERROR, rollback() must be called before
+    DISCARD ALL is issued — otherwise PG rejects DISCARD ALL in a tx.
+    """
+    from psycopg.pq import TransactionStatus
+
+    pool = SqlSessionPool({"a": "postgresql://stub/a"})
+    conn = _FakeAsyncConnection(_FakeAsyncCursor())
+    conn.info.transaction_status = TransactionStatus.INTRANS
+    pool._conns["a"] = conn  # type: ignore[assignment]
+    await pool.discard_all()
+    assert conn.rollbacks == 1
+    assert "DISCARD ALL" in conn.executed
+
+
+@pytest.mark.asyncio
+async def test_discard_all_skips_rollback_when_conn_idle() -> None:
+    """If conn is already IDLE, do NOT issue a needless rollback."""
+    pool = SqlSessionPool({"a": "postgresql://stub/a"})
+    conn = _FakeAsyncConnection(_FakeAsyncCursor())
+    # default info.transaction_status == IDLE
+    pool._conns["a"] = conn  # type: ignore[assignment]
+    await pool.discard_all()
+    assert conn.rollbacks == 0
+    assert "DISCARD ALL" in conn.executed
+
+
+@pytest.mark.asyncio
+async def test_discard_all_per_conn_error_does_not_block_others() -> None:
+    """R9 fold-don't-bubble: one session's DISCARD ALL raising must not
+    prevent the next session's reset. Dogfood-critical: a single bad
+    conn shouldn't silently break isolation for every other case.
+    """
+    pool = SqlSessionPool({"a": "postgresql://stub/a", "b": "postgresql://stub/b"})
+    conn_a = _FakeAsyncConnection(_FakeAsyncCursor())
+    conn_b = _FakeAsyncConnection(_FakeAsyncCursor())
+
+    async def _boom(sql: str) -> None:
+        raise RuntimeError("DISCARD ALL refused")
+
+    conn_a.execute = _boom  # type: ignore[assignment]
+    pool._conns["a"] = conn_a  # type: ignore[assignment]
+    pool._conns["b"] = conn_b  # type: ignore[assignment]
+    # Must not raise.
+    await pool.discard_all()
+    # conn_b still got its reset despite conn_a blowing up.
+    assert "DISCARD ALL" in conn_b.executed
