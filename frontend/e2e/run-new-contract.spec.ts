@@ -10,9 +10,14 @@
  * failing with an unintelligible launcher error.
  */
 import { test, expect } from '@playwright/test';
-import { chromiumCanLaunch, SKIP_REASON } from './_helpers';
+import { chromiumCanLaunch, SKIP_REASON, seedAuth } from './_helpers';
 
 const canLaunch = chromiumCanLaunch();
+
+// v1.17: pre-seed auth token so RequireAuth doesn't redirect to /login.
+test.beforeEach(async ({ page }) => {
+  if (canLaunch) await seedAuth(page);
+});
 
 const FAKE_CATEGORIES = [
   {
