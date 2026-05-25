@@ -1,0 +1,194 @@
+id: lg-bug-0012-pax-count-parallel-orca-off-result-set-changes
+title: 9.11 enable_parallel BUG2 [ORCA=OFF] PAX 表结果集行数改变
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-9.11-enable-parallel-bug2-pax-result-set-changes"
+  reported_at: "2026-05-25"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
+tags: [pax, parallel, count, orca, correctness, result_set, prefetch]
+
+description: |
+  飞书 §9.11 (issue #264)：PAX 表 (zstd 压缩) 在 ORCA=off + enable_parallel
+  下跑 SELECT COUNT(*) / DELETE / 再 COUNT(*) 序列，最终行数偏离预期
+  1099956。飞书结论：与 pax Prefetch 相关。本 case 回归该路径，最终
+  COUNT(*) 断言抓 BUG。
+
+procedure: |
+  1) prep-1: DROP TABLE IF EXISTS foo
+  2) prep-2: CREATE TABLE foo (a INT, b INT, c CHAR(128)) USING pax
+     WITH (compresstype=zstd, compresslevel=7) + CREATE INDEX foo_index ON foo(b)
+  3) prep-3: 11 次独立 psql -c INSERT 100k 行，形成 11 个 PAX micro-partition
+  4) prep-4: ANALYZE foo (kind: shell + psql -c)
+  5) test-1: SET 并行 GUCs + SET optimizer=off + SELECT COUNT(*) → 1100000
+  6) test-2: SELECT COUNT(*) WHERE b=17 → 11
+  7) test-3: DELETE WHERE b=17 → rows_affected=11
+  8) test-4: SELECT COUNT(*) WHERE b=17 → 0
+  9) test-5: SELECT COUNT(*) → 1099989
+  10) test-6: DELETE WHERE b=16 OR b=10000 OR b=15 → rows_affected=33
+  11) test-7: SELECT COUNT(*) → 1099956 (核心 BUG 断言)
+  12) teardown: DROP TABLE IF EXISTS foo
+
+expected: |
+  - test-1 COUNT(*) = 1100000 (11 批 × 100k)
+  - test-2/4 b=17 行数 11/0
+  - test-3/6 DELETE rows_affected 11/33
+  - test-5 COUNT(*) = 1099989 (1100000 − 11)
+  - **test-7 COUNT(*) = 1099956 (1099989 − 33)** ← BUG 复现时偏离
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "prep-1 drop foo"
+    kind: sql
+    sql: DROP TABLE IF EXISTS foo
+    timeout_ms: 30000
+
+  - name: "prep-2 create foo (zstd) + index"
+    kind: sql
+    sql: |
+      CREATE TABLE foo (a INT, b INT, c CHAR(128)) USING pax
+      WITH (compresstype=zstd, compresslevel=7);
+      CREATE INDEX foo_index ON foo(b);
+    timeout_ms: 60000
+
+  - name: "prep-3 11 micro-inserts (11 PAX micro-partitions)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "
+        set -e
+        for n in 1 2 3 4 5 6 7 8 9 10 11; do
+          psql -d gpadmin -c \"INSERT INTO foo SELECT i, i, 'hello world' FROM generate_series(1, 100000) AS i\"
+        done
+      "
+    timeout_ms: 600000
+    expect:
+      exit_code: 0
+
+  - name: "prep-4 analyze foo (psql -c)"
+    kind: shell
+    cmd: su - gpadmin -c "psql -d gpadmin -c 'ANALYZE foo'"
+    timeout_ms: 300000
+    expect:
+      exit_code: 0
+
+  - name: "test-1 SET parallel + ORCA=off + COUNT(*)"
+    kind: sql
+    sql: |
+      SET optimizer = off;
+      SET enable_parallel = on;
+      SET max_parallel_workers_per_gather = 2;
+      SET min_parallel_table_scan_size = 0;
+      SET parallel_setup_cost = 0;
+      SELECT COUNT(*) FROM foo;
+    timeout_ms: 120000
+    expect:
+      scalar: "1100000"
+
+  - name: "test-2 COUNT(*) WHERE b=17"
+    kind: sql
+    sql: SELECT COUNT(*) FROM foo WHERE b = 17
+    timeout_ms: 60000
+    expect:
+      scalar: "11"
+
+  - name: "test-3 DELETE WHERE b=17 (rows_affected=11)"
+    kind: sql
+    sql: DELETE FROM foo WHERE b = 17
+    timeout_ms: 120000
+    expect:
+      rows_affected: 11
+
+  - name: "test-4 COUNT(*) WHERE b=17 post-delete"
+    kind: sql
+    sql: SELECT COUNT(*) FROM foo WHERE b = 17
+    timeout_ms: 60000
+    expect:
+      scalar: "0"
+
+  - name: "test-5 COUNT(*) (1100000 − 11)"
+    kind: sql
+    sql: SELECT COUNT(*) FROM foo
+    timeout_ms: 60000
+    expect:
+      scalar: "1099989"
+
+  - name: "test-6 DELETE WHERE b IN (16,10000,15) (rows_affected=33)"
+    kind: sql
+    sql: DELETE FROM foo WHERE b = 16 OR b = 10000 OR b = 15
+    timeout_ms: 120000
+    expect:
+      rows_affected: 33
+
+  - name: "test-7 final COUNT(*) — expect 1099956 (BUG 断言)"
+    kind: sql
+    sql: SELECT COUNT(*) FROM foo
+    timeout_ms: 60000
+    expect:
+      scalar: "1099956"
+
+teardown:
+  - DROP TABLE IF EXISTS foo
+
+created_by: chenqiang
+created_at: "2026-05-25"
+notes: |
+  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.11。
+  关联 issue: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
+
+  **BUG 触发条件（飞书原文逐条对齐 2026-05-25 fresh fetch）**：
+  1. 表 schema：`(a INT, b INT, c CHAR(128)) USING pax WITH
+     (compresstype=zstd, compresslevel=7)` —— 无显式 distribute（默认 hash by a），
+     比之前 extract 多了 zstd 压缩
+  2. CREATE INDEX foo_index ON foo(b)
+  3. **11 个独立 BEGIN/COMMIT 事务** 各 INSERT 100k 行（飞书原文 11 个连续
+     BEGIN..COMMIT 块）：每个事务一个 PAX micro-partition，BUG 路径依赖多
+     micro-partition 场景
+  4. ANALYZE foo 后开始测试
+  5. 同一会话 SET：optimizer=off + enable_parallel=on +
+     max_parallel_workers_per_gather=2 + min_parallel_table_scan_size=0 +
+     parallel_setup_cost=0（无 SET enable_seqscan/indexscan 关闭，与 9.10 BUG1
+     的强制 Bitmap Index Scan 路径不同）
+  6. 跑 7 步 select/delete 序列，最终 COUNT(*) 期望 1099956
+  7. 飞书结论："开并行，简单的 SELECT COUNT(*) FROM foo 问题，和 pax
+     Prefetch 有关" —— 测试步骤未显式 SET pax.enable_prefetch，本 case 也
+     不设（保持飞书原文最小可复现集；BUG 在默认 prefetch=on 下应触发）
+
+  **case 设计**：
+  - prep-3 用 `kind: shell` 跑 `psql -c` 循环 11 次：每次独立 psql 进程 =
+    独立 connection = 独立 commit → PAX 11 个 micro-partition 分开。如果
+    合并成单 sql 块走 sql_driver，会落到 1 个 commit/1 个 micro-partition，
+    BUG 路径走偏。这是飞书 11 笔 BEGIN/COMMIT 的语义所在。
+  - prep-4 ANALYZE 走 `kind: shell + psql -c`（cross-check #11：顶层 ANALYZE
+    是 non-tx-safe DDL，绝禁 psycopg autocommit 包它）。
+  - test-1..7 共享 `on: default:gpadmin` 同会话连接，test-1 的 SET 在
+    test-2..7 继承（sql_driver 单会话连接持久化，session-level GUC 不随
+    statement commit 重置）。
+  - DELETE 用 `expect.rows_affected`：sql_driver 在 DML 时把 `cur.rowcount`
+    写入 step.rows_affected（sql_driver.py:138/144/161），assertions 的
+    rows_affected 评估器对应（assertions.py _rows_affected）。
+  - 行数对账：1,100,000 − 11 (b=17 × 11 批) − 33 (b∈{16,10000,15} × 11 批)
+    = 1,099,956。
+
+  **status=open**：默认开放，待用户在前端 UI 点 Try 实测后按当前 build 行为
+  flip（per lg-bug-0005/0008/0010/0011 范式：Try-PASS 后改 fixed +
+  fixed_version="SynxDB-4.5.0-build130"，failing 时保持 open）。
+
+  **注**：与 lg-bug-0011 (9.10 / BUG1 / #265) 互为兄弟 BUG，路径有重叠
+  （都是 ORCA=off + parallel + PAX count）但触发条件正交：
+  - 9.10 强制 Bitmap Index Scan（三条 enable_seqscan/indexscan/indexonlyscan=off）
+  - 9.11 默认 scan 路径 + 多 micro-partition + prefetch 路径（飞书结论）
