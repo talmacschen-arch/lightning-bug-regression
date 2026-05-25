@@ -75,7 +75,20 @@ class SqlSessionPool:
             raise StepError(f"unknown sql session: {session!r}")
         if session not in self._conns:
             self._conns[session] = await psycopg.AsyncConnection.connect(
-                self._dsn[session], autocommit=False
+                self._dsn[session],
+                autocommit=False,
+                # prepare_threshold=None disables psycopg3's automatic
+                # server-side prepared-statement caching (the `_pg3_<N>`
+                # statements). Dogfood run #33 (2026-05-26) cascaded
+                # `InvalidSqlStatementName: prepared statement "_pg3_0"
+                # does not exist` because discard_all()'s DEALLOCATE ALL
+                # wiped server-side names while psycopg3's client cache
+                # still believed they existed. Disabling auto-prepare
+                # syncs the contract: server has no prepared statements
+                # unless user-issued PREPARE; client never assumes any.
+                # Cost: no client-side statement plan caching, micro-
+                # perf hit invisible on test-runner workloads.
+                prepare_threshold=None,
             )
         return self._conns[session]
 
