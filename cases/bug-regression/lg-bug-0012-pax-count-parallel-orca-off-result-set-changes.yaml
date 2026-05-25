@@ -1,14 +1,14 @@
 id: lg-bug-0012-pax-count-parallel-orca-off-result-set-changes
 title: 9.11 enable_parallel BUG2 [ORCA=OFF] PAX 表结果集行数改变
 category: bug_regression
-status: open
+status: fixed
 severity: medium
 destructive: false
 
 source:
   feishu_anchor: "section-9.11-enable-parallel-bug2-pax-result-set-changes"
   reported_at: "2026-05-25"
-  fixed_version: ""
+  fixed_version: "SynxDB-4.5.0-build130"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
 tags: [pax, parallel, count, orca, correctness, result_set, prefetch]
@@ -184,9 +184,14 @@ notes: |
   - 行数对账：1,100,000 − 11 (b=17 × 11 批) − 33 (b∈{16,10000,15} × 11 批)
     = 1,099,956。
 
-  **status=open**：默认开放，待用户在前端 UI 点 Try 实测后按当前 build 行为
-  flip（per lg-bug-0005/0008/0010/0011 范式：Try-PASS 后改 fixed +
-  fixed_version="SynxDB-4.5.0-build130"，failing 时保持 open）。
+  **status=fixed (2026-05-25)**：Try-PASS on SynxDB-4.5.0-build130
+  (PostgreSQL 14.4 / Cloudberry 2.1.0): 11 main steps 全 PASS，
+  最终 test-7 COUNT(*) = 1099956 (= 1100000 − 11 (b=17) − 33 (b∈{16,10000,15} × 11 批))，
+  与飞书预期一致；POST /runs run #24 总耗时 1560ms（UI Try）。
+  fixed_version 上栏 = verified-non-reproducing build (not necessarily
+  the fix introduction commit；飞书 issue #264 仍 open，本 case 在
+  build130 上的 ORCA=off + 多 micro-partition + 默认 prefetch 路径
+  未复现 BUG)。
 
   **注**：与 lg-bug-0011 (9.10 / BUG1 / #265) 互为兄弟 BUG，路径有重叠
   （都是 ORCA=off + parallel + PAX count）但触发条件正交：
