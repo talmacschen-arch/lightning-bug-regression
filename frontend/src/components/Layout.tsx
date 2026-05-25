@@ -19,7 +19,9 @@
  *   sidebar-active-run-pip  (static grey for now; M5-2 will wire data)
  *   breadcrumb / main-content
  */
-import { Link, Outlet, useLocation, NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, Outlet, useLocation, NavLink, useNavigate } from 'react-router-dom';
+import { fetchMe, logout, type MeResponse } from '@/lib/auth';
 
 interface NavItemProps {
   to: string;
@@ -72,6 +74,23 @@ function pathToBreadcrumb(pathname: string): string {
 
 export function Layout() {
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [me, setMe] = useState<MeResponse | null>(null);
+
+  // v1.17: fetch the current user once on mount so sidebar can show the
+  // username + change-password indicator. 401 → fetchMe returns null →
+  // top-level App.tsx RequireAuth already gated, so we just don't render
+  // user info if null. Mount-only fetch — no polling.
+  useEffect(() => {
+    void fetchMe().then(setMe);
+  }, []);
+
+  async function handleLogout() {
+    await logout();
+    setMe(null);
+    navigate('/login', { replace: true });
+  }
+
   return (
     <div className="app-shell-v2">
       <aside className="sidebar" data-testid="sidebar">
@@ -92,6 +111,21 @@ export function Layout() {
           <span className="pip-dot pip-dot--grey" aria-label="no recent runs" />
           <span className="pip-label">No recent runs</span>
         </div>
+        {me !== null && (
+          <div data-testid="sidebar-user" className="sidebar-user">
+            <span data-testid="sidebar-username" className="sidebar-username">
+              👤 {me.username}
+            </span>
+            <button
+              type="button"
+              data-testid="sidebar-logout"
+              onClick={() => void handleLogout()}
+              className="sidebar-logout-btn"
+            >
+              Logout
+            </button>
+          </div>
+        )}
       </aside>
       <div className="main-area" data-testid="main-content">
         <div className="breadcrumb" data-testid="breadcrumb">
