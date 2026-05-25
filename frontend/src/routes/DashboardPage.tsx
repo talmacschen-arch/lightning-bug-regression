@@ -220,7 +220,9 @@ function RecentActivity({ runs }: RecentActivityProps) {
               </span>
               <span className="run-id">Run #{r.id}</span>
               <span className="run-summary">
-                {r.passed ?? 0} pass / {r.failed ?? 0} fail / {r.total ?? 0} total
+                {r.passed ?? 0} pass / {r.failed ?? 0} fail /{' '}
+                {r.skipped ?? 0} skip / {r.errored ?? 0} error /{' '}
+                {r.total ?? 0} total
               </span>
               <span className="run-time">{formatRelative(r.started_at)}</span>
             </Link>
