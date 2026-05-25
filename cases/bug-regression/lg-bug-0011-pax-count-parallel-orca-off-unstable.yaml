@@ -1,0 +1,119 @@
+id: lg-bug-0011-pax-count-parallel-orca-off-unstable
+title: 9.10 enable_parallel BUG1 [ORCA=OFF] PAX 表 count(*) 查询行数不稳定
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-9.10-enable-parallel-bug1-pax-count-orca-off-unstable"
+  reported_at: "2026-05-25"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
+tags: [pax, parallel, count, orca, correctness, bitmap_index_scan]
+
+description: |
+  开启 enable_parallel + ORCA=off 时，对 PAX 表跑 count(*) 行数不稳定
+  （连续两次查询返回值可能不同 / 与真实行数不一致）。飞书 §9.10 复现脚本
+  期望连续两次 count(*) 都返回 98016841。
+procedure: |
+  1) setup: drop + create PAX 表 + insert 98016841 行 + create index
+  2) step1: SET 并行 GUCs + SET optimizer=on; SELECT count(*) → 期望 98016841
+  3) step2: 同会话再跑一次 SELECT count(*) → 期望 98016841（稳定性）
+  4) step3: SET optimizer=off; SELECT count(*) → 期望 98016841（BUG 触发分支）
+  5) step4: 再跑一次 SELECT count(*) → 期望 98016841（稳定性，BUG 分支）
+  6) teardown: drop table
+expected: |
+  - 4 个 count(*) 步全部返回 98016841
+  - ORCA=off 分支不出现"行数不稳定"（两次返回值都正确且相同）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  - DROP TABLE IF EXISTS pax_tab
+  - CREATE TABLE pax_tab (i int) USING pax
+  - INSERT INTO pax_tab SELECT generate_series(1, 98016841)
+  - CREATE INDEX idx_i ON pax_tab (i)
+
+steps:
+  - name: "ORCA=on 第 1 次 count(*)"
+    kind: sql
+    sql: |
+      SET enable_parallel = on;
+      SET max_parallel_workers_per_gather = 2;
+      SET parallel_setup_cost = 0;
+      SET min_parallel_table_scan_size = 0;
+      SET pax.enable_prefetch TO off;
+      SET pax.enable_iouring TO off;
+      SET work_mem = '256kB';
+      SET optimizer = on;
+      SELECT count(*) FROM pax_tab WHERE i >= 0;
+    timeout_sec: 120
+    expect:
+      scalar: "98016841"
+
+  - name: "ORCA=on 第 2 次 count(*)（稳定性）"
+    kind: sql
+    sql: |
+      SELECT count(*) FROM pax_tab WHERE i >= 0;
+    timeout_sec: 120
+    expect:
+      scalar: "98016841"
+
+  - name: "ORCA=off 第 1 次 count(*)（BUG 触发分支）"
+    kind: sql
+    sql: |
+      SET optimizer = off;
+      SELECT count(*) FROM pax_tab WHERE i >= 0;
+    timeout_sec: 120
+    expect:
+      scalar: "98016841"
+
+  - name: "ORCA=off 第 2 次 count(*)（BUG 触发分支稳定性）"
+    kind: sql
+    sql: |
+      SELECT count(*) FROM pax_tab WHERE i >= 0;
+    timeout_sec: 120
+    expect:
+      scalar: "98016841"
+
+teardown:
+  - DROP TABLE IF EXISTS pax_tab
+
+created_by: chenqiang
+created_at: "2026-05-25"
+notes: |
+  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.10。
+  关联 issue: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
+
+  **BUG 触发条件**（飞书原文）：开启 enable_parallel + 设置 parallel GUCs
+  (max_parallel_workers_per_gather=2 / parallel_setup_cost=0 /
+  min_parallel_table_scan_size=0 / work_mem=256kB) + PAX 表关闭 prefetch
+  / iouring + ORCA=off → 对 PAX 表跑 `count(*) where i >= 0` 走 Bitmap
+  Index Scan 时返回行数不等于真实行数，且连续多次结果可能不同。
+
+  **case 设计**：
+  - 98016841 行保真飞书原文（INSERT 约 30-60s on synxdb-0001）；
+  - sql_driver 单会话连接持久化（一个 `on: default` 跨 4 steps 复用），
+    step1 设置的 parallel GUCs 在 step2/3/4 仍生效，SET 不必每 step 重复；
+  - sql_driver 多语句 scalar = 最后 SELECT 第一行第一列（sql_driver.py:98-100、
+    150-157）→ "SET ...; SELECT count(*)" 块 scalar 取 count；
+  - 4 个 step 各自 expect scalar=98016841：
+    * step1/2 = ORCA=on 基线 + 稳定性
+    * step3/4 = ORCA=off BUG 触发分支 + 稳定性
+    任一 step scalar != 98016841 即标 fail，准确捕捉 BUG。
+
+  **status=open**：飞书段未释 fixed_version。如未来在某 build 验证 4 个
+  step 全 pass，flip 到 `fixed` + 填 fixed_version。
+
+  **GUC 全 SET 在 step1**：飞书原文先 SET 一堆 parallel GUCs 再分别测
+  ORCA=on / ORCA=off；step3 用 `SET optimizer = off` 单语句切换，
+  其他 GUCs 继承自 step1（同会话）。
