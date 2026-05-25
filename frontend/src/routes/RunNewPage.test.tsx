@@ -42,6 +42,11 @@ const FAKE_CASES_EXT = [
   { id: 'ext-001', category: 'extension', title: 'Ext case', status: 'active', destructive: false, tags: null, error: null },
 ];
 
+const FAKE_VERSION_OPTIONS = [
+  { id: 1, name: 'SynxDB-4.5.0-build130', is_default: true },
+  { id: 2, name: 'SynxDB-4.6.0-build42', is_default: false },
+];
+
 function setupMocks() {
   mockApiFetch.mockImplementation(async (path: string, _method: string, init?: { query?: Record<string, string | number | undefined> }) => {
     if (path === '/admin/categories') return FAKE_CATEGORIES;
@@ -51,6 +56,7 @@ function setupMocks() {
       if (category === 'extension') return FAKE_CASES_EXT;
       return [...FAKE_CASES_BUG, ...FAKE_CASES_EXT];
     }
+    if (path === '/admin/target-versions') return FAKE_VERSION_OPTIONS;
     return [];
   });
 }
@@ -88,11 +94,13 @@ describe('RunNewPage', () => {
     expect(screen.getByTestId('select-all-extension')).toBeInTheDocument();
   });
 
-  it('renders global select-all, invert, submit, and version input', async () => {
+  it('renders global select-all, invert, submit, and version select', async () => {
     await renderAndLoad();
     expect(screen.getByTestId('select-all-global')).toBeInTheDocument();
     expect(screen.getByTestId('invert-selection')).toBeInTheDocument();
-    expect(screen.getByTestId('input-target-version')).toBeInTheDocument();
+    const versionSelect = screen.getByTestId('input-target-version');
+    expect(versionSelect).toBeInTheDocument();
+    expect(versionSelect.tagName).toBe('SELECT');
     expect(screen.getByTestId('btn-submit-run')).toBeInTheDocument();
   });
 
@@ -175,6 +183,7 @@ describe('RunNewPage', () => {
         if (category === 'extension') return FAKE_CASES_EXT;
         return FAKE_CASES_BUG;
       }
+      if (path === '/admin/target-versions') return [];
       if (path === '/runs') return { detail: 'Run already active', active_run_id: 42 };
       return [];
     });
@@ -187,6 +196,133 @@ describe('RunNewPage', () => {
       expect(screen.getByTestId('modal-active-run-conflict')).toBeInTheDocument();
     });
     expect(screen.getByTestId('link-existing-run')).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Target version dropdown tests
+  // ---------------------------------------------------------------------------
+
+  it('dropdown: renders options from API + preselects is_default row', async () => {
+    await renderAndLoad();
+    // Wait for version options to load
+    await waitFor(() => {
+      const select = screen.getByTestId('input-target-version') as HTMLSelectElement;
+      expect(select.options.length).toBe(3); // None + 2 versions
+    });
+    const select = screen.getByTestId('input-target-version') as HTMLSelectElement;
+    expect(select.options[0].text).toBe('— None —');
+    expect(select.options[1].text).toBe('SynxDB-4.5.0-build130');
+    expect(select.options[2].text).toBe('SynxDB-4.6.0-build42');
+    // is_default=true on id=1 → preselected
+    expect(select.value).toBe('SynxDB-4.5.0-build130');
+  });
+
+  it('dropdown: selecting None submits target_version: null', async () => {
+    let capturedBody: unknown = undefined;
+    mockApiFetch.mockImplementation(async (path: string, method: string, init?: { query?: Record<string, string | number | undefined>; body?: unknown }) => {
+      if (path === '/admin/categories') return FAKE_CATEGORIES;
+      if (path === '/cases') {
+        const category = init?.query?.['category'];
+        if (category === 'bug_regression') return FAKE_CASES_BUG;
+        if (category === 'extension') return FAKE_CASES_EXT;
+        return [...FAKE_CASES_BUG, ...FAKE_CASES_EXT];
+      }
+      if (path === '/admin/target-versions') return FAKE_VERSION_OPTIONS;
+      if (path === '/runs' && method === 'post') {
+        capturedBody = init?.body;
+        return { run_id: 99 };
+      }
+      return [];
+    });
+
+    await renderAndLoad();
+    // Wait for default preselection
+    await waitFor(() => {
+      const select = screen.getByTestId('input-target-version') as HTMLSelectElement;
+      expect(select.value).toBe('SynxDB-4.5.0-build130');
+    });
+    // Change to None
+    fireEvent.change(screen.getByTestId('input-target-version'), { target: { value: '' } });
+    // Select a case and submit
+    fireEvent.click(screen.getByTestId('case-checkbox-bug-001'));
+    fireEvent.click(screen.getByTestId('btn-submit-run'));
+
+    await waitFor(() => {
+      expect(capturedBody).not.toBeUndefined();
+    });
+    expect((capturedBody as { target_version: unknown }).target_version).toBeNull();
+  });
+
+  it('dropdown: selecting a named version submits that string', async () => {
+    let capturedBody: unknown = undefined;
+    mockApiFetch.mockImplementation(async (path: string, method: string, init?: { query?: Record<string, string | number | undefined>; body?: unknown }) => {
+      if (path === '/admin/categories') return FAKE_CATEGORIES;
+      if (path === '/cases') {
+        const category = init?.query?.['category'];
+        if (category === 'bug_regression') return FAKE_CASES_BUG;
+        if (category === 'extension') return FAKE_CASES_EXT;
+        return [...FAKE_CASES_BUG, ...FAKE_CASES_EXT];
+      }
+      if (path === '/admin/target-versions') return FAKE_VERSION_OPTIONS;
+      if (path === '/runs' && method === 'post') {
+        capturedBody = init?.body;
+        return { run_id: 100 };
+      }
+      return [];
+    });
+
+    await renderAndLoad();
+    // Wait for options to load
+    await waitFor(() => {
+      const select = screen.getByTestId('input-target-version') as HTMLSelectElement;
+      expect(select.options.length).toBe(3);
+    });
+    // Pick the second version (not the default)
+    fireEvent.change(screen.getByTestId('input-target-version'), { target: { value: 'SynxDB-4.6.0-build42' } });
+    // Select a case and submit
+    fireEvent.click(screen.getByTestId('case-checkbox-bug-001'));
+    fireEvent.click(screen.getByTestId('btn-submit-run'));
+
+    await waitFor(() => {
+      expect(capturedBody).not.toBeUndefined();
+    });
+    expect((capturedBody as { target_version: unknown }).target_version).toBe('SynxDB-4.6.0-build42');
+  });
+
+  it('dropdown: GET /admin/target-versions 500 → only None option, run submission still works', async () => {
+    let capturedBody: unknown = undefined;
+    mockApiFetch.mockImplementation(async (path: string, method: string, init?: { query?: Record<string, string | number | undefined>; body?: unknown }) => {
+      if (path === '/admin/categories') return FAKE_CATEGORIES;
+      if (path === '/cases') {
+        const category = init?.query?.['category'];
+        if (category === 'bug_regression') return FAKE_CASES_BUG;
+        if (category === 'extension') return FAKE_CASES_EXT;
+        return [...FAKE_CASES_BUG, ...FAKE_CASES_EXT];
+      }
+      if (path === '/admin/target-versions') throw new Error('500 Internal Server Error');
+      if (path === '/runs' && method === 'post') {
+        capturedBody = init?.body;
+        return { run_id: 101 };
+      }
+      return [];
+    });
+
+    await renderAndLoad();
+    // Wait for the error state to settle
+    await waitFor(() => {
+      expect(screen.getByTestId('version-load-error')).toBeInTheDocument();
+    });
+    const select = screen.getByTestId('input-target-version') as HTMLSelectElement;
+    // Only the "None" option
+    expect(select.options.length).toBe(1);
+    expect(select.options[0].text).toBe('— None —');
+    // Run submission still works
+    fireEvent.click(screen.getByTestId('case-checkbox-bug-001'));
+    fireEvent.click(screen.getByTestId('btn-submit-run'));
+    await waitFor(() => {
+      expect(capturedBody).not.toBeUndefined();
+    });
+    expect((capturedBody as { target_version: unknown }).target_version).toBeNull();
   });
 });
 
@@ -213,6 +349,7 @@ function setupPresetMocks() {
       if (category === 'extension') return FAKE_PRESET_CASES_EXT;
       return [...FAKE_PRESET_CASES_BUG, ...FAKE_PRESET_CASES_EXT];
     }
+    if (path === '/admin/target-versions') return [];
     return [];
   });
 }

@@ -177,6 +177,13 @@ export default function RunsPage() {
               >
                 👤 {r.triggered_by ?? '—'}
               </span>
+              <span
+                data-testid={`runs-page-version-${r.id}`}
+                className="text-xs text-gray-500"
+                title="Target version"
+              >
+                🏷️ {r.target_version ?? '—'}
+              </span>
               <span className="text-xs text-gray-500 text-right">
                 {formatRelative(r.started_at)}
               </span>
