@@ -236,14 +236,22 @@ describe('AdminTargetVersionsPage', () => {
     expect(deleteCalls[0][0]).not.toContain('force=true');
   });
 
-  it('Delete referenced (409 with run_count): second confirm → DELETE ?force=true', async () => {
+  it('Delete referenced — nested FastAPI shape (actual prod shape): {detail:{detail,run_count}}', async () => {
+    // FastAPI HTTPException(detail={"detail": "...", "run_count": N})
+    // serializes as {"detail": {"detail": "...", "run_count": N}}. The
+    // page's readDetail must unwrap one level so the confirm message
+    // shows the real N (not 0).
     const confirmSpy = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(true);
     vi.stubGlobal('confirm', confirmSpy);
     mockFetch
       .mockResolvedValueOnce(mockJson(SEED)) // GET
       .mockResolvedValueOnce(
-        mockJson({ detail: 'referenced by 5 runs', run_count: 5 }, false, 409),
-      ) // DELETE (no force)
+        mockJson(
+          { detail: { detail: 'referenced by 5 runs', run_count: 5 } },
+          false,
+          409,
+        ),
+      ) // DELETE (no force) — nested shape
       .mockResolvedValueOnce({
         ok: true,
         status: 204,
@@ -264,7 +272,41 @@ describe('AdminTargetVersionsPage', () => {
     });
 
     expect(confirmSpy).toHaveBeenCalledTimes(2);
+    // The actual count 5 must appear (regression guard: previously
+    // showed "0 historical runs" because run_count was read from the
+    // wrong nesting level).
     expect(confirmSpy.mock.calls[1][0]).toMatch(/5 historical run/);
+  });
+
+  it('Delete referenced — flat shape (defensive): {detail,run_count} also works', async () => {
+    // If backend ever switches to JSONResponse-flat shape, readDetail
+    // must still extract run_count correctly.
+    const confirmSpy = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(true);
+    vi.stubGlobal('confirm', confirmSpy);
+    mockFetch
+      .mockResolvedValueOnce(mockJson(SEED)) // GET
+      .mockResolvedValueOnce(
+        mockJson({ detail: 'referenced by 7 runs', run_count: 7 }, false, 409),
+      ) // DELETE — flat shape
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 204,
+        statusText: 'No Content',
+        json: () => Promise.resolve(null),
+      })
+      .mockResolvedValueOnce(mockJson([]));
+
+    renderPage();
+    await waitFor(() => screen.getByTestId('admin-target-versions-row-1'));
+
+    fireEvent.click(screen.getByTestId('admin-target-versions-delete-1'));
+
+    await waitFor(() => {
+      const deleteCalls = mockFetch.mock.calls.filter((c) => c[1]?.method === 'DELETE');
+      expect(deleteCalls).toHaveLength(2);
+    });
+
+    expect(confirmSpy.mock.calls[1][0]).toMatch(/7 historical run/);
   });
 
   it('Edit name inline: PATCH fires with new name', async () => {
