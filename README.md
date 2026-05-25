@@ -26,13 +26,14 @@
 | `/cases/:id` | YAML 高亮 + 4-tuple 叙事 + Recent runs 区块（跨页 link 到 /runs/:id） |
 | `/cases/new` | 双入口编辑器（Tab A 描述生成 = M7 stub / Tab B 粘 YAML）→ Validate → Try → Save 三段闸门 + PR auto-merge |
 | `/runs` | 列 run + FilterBar（verdict chips + since + q 搜 version/triggered_by）+ "Includes case:" CaseIdCombobox 服务端过滤 (`?case_id=X` URL 持久化) |
-| `/runs/new` | 多选 case + target_version + 触发 POST /runs；支持 `?category=X&status=Y` URL preset（Dashboard quick-action 走这） |
+| `/runs/new` | 多选 case + target_version **下拉**（v1.19，源自 `/admin/target-versions` active 列表）+ 触发 POST /runs；支持 `?category=X&status=Y` URL preset（Dashboard quick-action 走这） |
 | `/runs/:id` | Run 实时进度 — SSE EventSource 推送 + 每 case 行 ▸ Artifacts 折叠（每 step stdout/stderr 下载） |
 | `/runs/diff?a=X&b=Y` | 两 run 并排 diff，分类 = pass→fail / fail→pass / new_case / removed_case / duration_jump (>1.5×) |
-| `/admin` | Skip list / External services / Delete case / Change password 四入口 |
+| `/admin` | Skip list / External services / Delete case / Target Versions / Change password 五入口 |
 | `/admin/skip-list` | 暂时禁用某 case CRUD — case_id 用 shadcn Combobox 选（防 typo），支持 until_date 自动过期 |
 | `/admin/external-services` | `external/<svc>.yml` read-only 浏览（YAML 内容 + size + mtime + inline parse_error）|
 | `/admin/cases` | 永久删 case（YAML 文件从磁盘删，case_results 历史保留），confirm dialog 引导用 Skip list 暂时禁用 |
+| `/admin/target-versions` | v1.19 — 维护 `Trigger New Run → Target version` 下拉 catalog（seed `SynxDB-4.5.0-build130`）；inline edit / active 软删 / at-most-one default / 硬删 refuses-if-referenced（？force=true 跳过；historical run.target_version Text 列保留 stale 字符串无 FK）|
 | `/admin/change-password` | 修改当前用户密码（3 字段表单 + 前端校验 + 成功后 1.5s reload）|
 
 ### 用户登录（v1.17 新增）
