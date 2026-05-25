@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -135,6 +136,28 @@ def _step_kind(step: dict[str, Any]) -> str:
 
 def _step_id(step: dict[str, Any], idx: int) -> str:
     return str(step.get("id") or f"step-{idx:02d}")
+
+
+# Path-separator + Windows-reserved chars that would corrupt
+# `Path(case_dir) / f"step-NN-{step_id}.txt"` into nested subdirs.
+# Whitespace + non-ASCII (e.g. Chinese) preserved — POSIX/UTF-8 filesystems
+# handle them fine; the only failure mode observed in dogfood run #26 was
+# the `/` in step names like `precondition: ES /_cluster/health ...` causing
+# `_cluster/` to become a directory under the case artifacts dir, hiding the
+# artifact from `list_case_artifacts`' non-recursive `iterdir()` listing.
+_ARTIFACT_NAME_ILLEGAL = re.compile(r'[\\/:*?"<>|]')
+
+
+def _sanitize_step_id_for_filename(step_id: str) -> str:
+    """Replace path-separator and other illegal filename chars so
+    `Path(case_dir) / f"step-NN-{step_id}.txt"` stays inside case_dir
+    instead of creating accidental subdirs.
+
+    Replacement char: underscore. Whitespace + Chinese / non-ASCII
+    preserved (filesystems handle UTF-8; the issue is ONLY path
+    separators and Windows-reserved chars).
+    """
+    return _ARTIFACT_NAME_ILLEGAL.sub("_", step_id)
 
 
 def _normalize_expect(raw: Any) -> dict[str, Any]:
@@ -359,15 +382,31 @@ async def _execute_one_step(
     expect = _normalize_expect(rendered.get("expect"))
     _apply_assertions(step_result, expect)
 
-    # --- write artifacts (stdout/stderr) to disk ---
+    # --- write artifacts (stdout/stderr/error) to disk ---
+    # Sanitize step_id for the filename — slashes in step names create
+    # accidental subdirectories that hide artifacts from the
+    # non-recursive `list_case_artifacts` listing (dogfood run #26
+    # `lg-xs-zombodb-partition-text-search` step 0 incident).
     if case_artifacts_dir is not None:
-        stdout_path = case_artifacts_dir / f"step-{idx:02d}-{step_id}.stdout.txt"
-        stderr_path = case_artifacts_dir / f"step-{idx:02d}-{step_id}.stderr.txt"
+        sanitized_id = _sanitize_step_id_for_filename(step_id)
+        stdout_path = case_artifacts_dir / f"step-{idx:02d}-{sanitized_id}.stdout.txt"
+        stderr_path = case_artifacts_dir / f"step-{idx:02d}-{sanitized_id}.stderr.txt"
         wrote_stdout = _write_artifact(stdout_path, step_result.stdout)
         wrote_stderr = _write_artifact(stderr_path, step_result.stderr)
         for p in (wrote_stdout, wrote_stderr):
             if p:
                 step_result.artifacts.append(p)
+        # Driver-level exception text (e.g. sql_driver._err -> step_result.error)
+        # is otherwise consumed by case-level aggregation only and never lands
+        # on disk. Persist it as a separate `.error.txt` artifact so the
+        # download endpoint can expose it. ERROR-status steps with no
+        # exception text get nothing — preserves the "no artifact = nothing
+        # to say" semantic (dogfood run #26 silent invisible error fix).
+        if step_result.error:
+            error_path = case_artifacts_dir / f"step-{idx:02d}-{sanitized_id}.error.txt"
+            wrote_error = _write_artifact(error_path, step_result.error)
+            if wrote_error:
+                step_result.artifacts.append(wrote_error)
 
     return step_result
 
