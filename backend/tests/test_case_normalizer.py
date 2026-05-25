@@ -227,3 +227,107 @@ class TestNormalizeCaseTopLevel:
         for s in out["setup"] + out["teardown"] + out["steps"]:
             assert "id" in s
             assert s["kind"] in VALID_KINDS
+
+
+class TestTimeoutSecToMs:
+    """`timeout_sec` → `timeout_ms` conversion.
+
+    Background (2026-05-25 dogfood, lg-bug-0011 v1): the orchestrator
+    (`backend/app/runner/orchestrator.py`) only reads `timeout_ms`, but
+    the existing case YAML convention in this repo (e.g.
+    `cases/bug-regression/lg-bug-0008-pax-toast-vacuum-analyze-crash.yaml`,
+    `lg-bug-0010-gplogfilter-stuck-or-error.yaml`) writes `timeout_sec`.
+    Without conversion every author who wrote `timeout_sec: 300` got the
+    60s `DEFAULT_TIMEOUTS_MS[kind]` fallback — a silent-noop bug. The
+    normalizer now folds `timeout_sec` into `timeout_ms`.
+    """
+
+    def test_timeout_sec_only_becomes_timeout_ms(self):
+        raw = {
+            "id": "x",
+            "steps": [
+                {"id": "s1", "kind": "sql", "sql": "select 1", "timeout_sec": 300},
+            ],
+        }
+        out = normalize_case(raw)
+        assert out["steps"][0]["timeout_ms"] == 300_000
+        assert "timeout_sec" not in out["steps"][0]
+
+    def test_timeout_ms_only_unchanged(self):
+        raw = {
+            "id": "x",
+            "steps": [
+                {"id": "s1", "kind": "sql", "sql": "select 1", "timeout_ms": 900_000},
+            ],
+        }
+        out = normalize_case(raw)
+        assert out["steps"][0]["timeout_ms"] == 900_000
+        assert "timeout_sec" not in out["steps"][0]
+
+    def test_both_present_timeout_ms_wins(self):
+        # timeout_ms is the explicit canonical key — it wins on conflict.
+        # timeout_sec is dropped from output regardless.
+        raw = {
+            "id": "x",
+            "steps": [
+                {
+                    "id": "s1",
+                    "kind": "sql",
+                    "sql": "select 1",
+                    "timeout_ms": 900_000,
+                    "timeout_sec": 30,
+                },
+            ],
+        }
+        out = normalize_case(raw)
+        assert out["steps"][0]["timeout_ms"] == 900_000
+        assert "timeout_sec" not in out["steps"][0]
+
+    def test_timeout_sec_on_dict_setup_item_converted(self):
+        # `_normalize_setup_teardown` routes dict items through
+        # `_normalize_one_step`, so dict-shape setup items also benefit.
+        raw = {
+            "id": "x",
+            "setup": [
+                {"id": "warmup", "kind": "shell", "cmd": "sleep 1", "timeout_sec": 120},
+            ],
+            "steps": [{"id": "s1", "kind": "sql", "sql": "select 1"}],
+        }
+        out = normalize_case(raw)
+        assert out["setup"][0]["timeout_ms"] == 120_000
+        assert "timeout_sec" not in out["setup"][0]
+
+    def test_timeout_sec_null_no_crash_no_key(self):
+        # null `timeout_sec` should be a no-op (don't add a bogus
+        # timeout_ms=0 key); still drop `timeout_sec` from output.
+        raw = {
+            "id": "x",
+            "steps": [
+                {"id": "s1", "kind": "sql", "sql": "select 1", "timeout_sec": None},
+            ],
+        }
+        out = normalize_case(raw)
+        assert "timeout_ms" not in out["steps"][0]
+        assert "timeout_sec" not in out["steps"][0]
+
+    def test_timeout_sec_always_removed_from_output(self):
+        # Cleanup check: even when timeout_ms is also present (the wins-
+        # on-conflict branch above), `timeout_sec` MUST NOT leak into the
+        # orchestrator-shaped dict.
+        raw = {
+            "id": "x",
+            "steps": [
+                {"id": "s1", "kind": "sql", "sql": "select 1", "timeout_sec": 45},
+                {
+                    "id": "s2",
+                    "kind": "shell",
+                    "cmd": "echo hi",
+                    "timeout_ms": 5000,
+                    "timeout_sec": 99,
+                },
+                {"id": "s3", "kind": "sql", "sql": "select 2"},
+            ],
+        }
+        out = normalize_case(raw)
+        for step in out["steps"]:
+            assert "timeout_sec" not in step
