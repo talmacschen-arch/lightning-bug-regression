@@ -57,7 +57,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -307,7 +307,7 @@ async def _execute_one_step(
     written to disk under case_artifacts_dir (if provided).
     """
     step_id = _step_id(step, idx)
-    started_iso = datetime.utcnow().isoformat()
+    started_iso = datetime.now(UTC).isoformat()
     t0 = time.monotonic()
 
     # --- Jinja render (errors here become case-level ERROR on this step) ---
@@ -423,7 +423,7 @@ def _make_error_result(
         step_id=step_id,
         driver=driver,
         started_at=started_iso,
-        ended_at=datetime.utcnow().isoformat(),
+        ended_at=datetime.now(UTC).isoformat(),
         duration_ms=int((time.monotonic() - t0) * 1000),
         error=error_msg,
     )
@@ -650,7 +650,7 @@ async def run_case(
             tr = _make_error_result(
                 f"teardown-{idx:02d}",
                 "unknown",
-                datetime.utcnow().isoformat(),
+                datetime.now(UTC).isoformat(),
                 time.monotonic(),
                 f"teardown unexpected exception: {type(e).__name__}: {e}",
             )

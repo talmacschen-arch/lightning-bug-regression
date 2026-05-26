@@ -30,7 +30,7 @@ import logging
 import os
 import re
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -53,6 +53,7 @@ from app.runner.external_deps_loader import (
 from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory, Run
+from app.utils.time import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,7 @@ async def _execute_run(
                 sess,
                 run_id,
                 status="done",
-                finished_at=datetime.utcnow(),
+                finished_at=datetime.now(UTC),
                 total=summary.total,
                 passed=summary.passed,
                 failed=summary.failed,
@@ -299,7 +300,7 @@ async def _execute_run(
                     sess,
                     run_id,
                     status="aborted",
-                    finished_at=datetime.utcnow(),
+                    finished_at=datetime.now(UTC),
                 )
         except Exception:  # noqa: BLE001
             logger.exception("failed to mark run %d aborted", run_id)
@@ -340,7 +341,7 @@ def create_run(
     override by explicitly sending `triggered_by` in the body (e.g. CI
     bots want a distinct name).
     """
-    started_at = datetime.utcnow()
+    started_at = datetime.now(UTC)
     categories = _load_categories()
     cases = _load_cases_from_disk(body.case_ids, categories)
 
@@ -393,7 +394,7 @@ def create_run(
     return CreateRunResponse(
         run_id=run_id,
         status="running",
-        started_at=started_at,
+        started_at=as_utc(started_at),
         location=f"/runs/{run_id}",
     )
 
@@ -416,8 +417,8 @@ def list_runs(
             RunSummary(
                 id=r.id,
                 status=r.status,
-                started_at=r.started_at,
-                finished_at=r.finished_at,
+                started_at=as_utc(r.started_at),
+                finished_at=as_utc(r.finished_at),
                 total=r.total,
                 passed=r.passed,
                 failed=r.failed,
@@ -442,8 +443,8 @@ def get_run(run_id: int) -> RunDetail:
         return RunDetail(
             id=run.id,
             status=run.status,
-            started_at=run.started_at,
-            finished_at=run.finished_at,
+            started_at=as_utc(run.started_at),
+            finished_at=as_utc(run.finished_at),
             total=run.total,
             passed=run.passed,
             failed=run.failed,

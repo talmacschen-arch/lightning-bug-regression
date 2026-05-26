@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import Engine, create_engine, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -338,7 +338,7 @@ def set_setting(session: Session, key: str, value: dict) -> None:
     """Upsert (key, value) into system_settings. Refreshes updated_at."""
     row = session.get(SystemSetting, key)
     serialized = json.dumps(value, sort_keys=True)
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     if row is None:
         row = SystemSetting(
             key=key,

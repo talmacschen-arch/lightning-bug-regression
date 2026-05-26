@@ -48,6 +48,7 @@ from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
 from app.storage.yaml_loader import CaseValidationError, CategoryMeta, load_case
+from app.utils.time import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -433,8 +434,8 @@ def get_case_recent_runs(case_id: str, limit: int = 10) -> list[CaseRecentRunOut
                 CaseRecentRunOut(
                     run_id=run.id,
                     run_status=run.status,
-                    started_at=run.started_at,
-                    finished_at=run.finished_at,
+                    started_at=as_utc(run.started_at),
+                    finished_at=as_utc(run.finished_at),
                     case_status=case_result.status,
                     duration_ms=case_result.duration_ms,
                 )
