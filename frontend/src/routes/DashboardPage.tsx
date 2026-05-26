@@ -34,7 +34,14 @@ interface DashboardData {
 }
 
 function formatRelative(dateStr: string): string {
-  const diffMs = Date.now() - new Date(dateStr).getTime();
+  // Backend serializes datetime.utcnow() as a naive ISO string (no `Z`
+  // / `+00:00` suffix). `new Date(<naive>)` interprets that as LOCAL
+  // time on the browser — for users in UTC+8 the result is off by 8h.
+  // Treat tz-less strings as UTC by appending Z; preserves correct
+  // parsing for any future tz-aware backend output.
+  const hasTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(dateStr);
+  const ms = new Date(hasTz ? dateStr : dateStr + 'Z').getTime();
+  const diffMs = Date.now() - ms;
   const diffM = Math.floor(diffMs / 60_000);
   if (diffM < 1) return 'just now';
   if (diffM < 60) return `${diffM}m ago`;
