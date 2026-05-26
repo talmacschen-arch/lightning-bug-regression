@@ -104,8 +104,16 @@ def create_run(
     started_at: datetime,
     triggered_by: str | None = None,
     target_version: str | None = None,
+    total: int | None = None,
 ) -> Run:
     """Insert a new `runs` row with status='running'.
+
+    ``total`` (added 2026-05-26): write the planned case count at row
+    creation so the progress bar on /runs/:id can render real
+    `done / total` immediately. Without this, `total` stayed None until
+    `finish_run()` and the UI fell back to `case_results.length` which
+    grew alongside done — visually "0 / <growing>". Optional for back-
+    compat (older callers that don't know the count yet pass None).
 
     Catches IntegrityError from the `uniq_runs_running` partial index and
     re-raises as `ActiveRunExists` (API layer → HTTP 409). Other
@@ -116,6 +124,7 @@ def create_run(
         triggered_by=triggered_by,
         target_version=target_version,
         status="running",
+        total=total,
     )
     session.add(run)
     try:
