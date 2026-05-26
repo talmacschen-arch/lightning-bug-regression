@@ -83,7 +83,11 @@ Quick start (two terminals):
   DATABASE_URL=sqlite:///$DB_PATH \\
   PGHOST=127.0.0.1 PGPORT=5432 PGUSER=gpadmin PGDATABASE=gpadmin \\
   LBR_REPO_ROOT=$REPO_ROOT \\
-  ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+  ./.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --loop asyncio
+  # \`--loop asyncio\` 强制走 stdlib asyncio 而非默认 uvloop。dogfood
+  # 2026-05-26: uvloop 的 subprocess.communicate() 在某些 detach-child
+  # 命令上（如 \`pxf cluster restart\` 触发 PXF JVM 重启）不返回，撞
+  # asyncio.wait_for timeout。stdlib asyncio 没这个问题。
 
   # terminal 2 (frontend)
   cd frontend
