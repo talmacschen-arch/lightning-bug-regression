@@ -355,6 +355,11 @@ def create_run(
                 started_at=started_at,
                 triggered_by=triggered_by,
                 target_version=body.target_version,
+                # Write total upfront so the UI progress bar can render
+                # real done/total ratios live, not 0 → 100% jump at finish
+                # (dogfood 2026-05-26: total stayed None during run; UI
+                # fell back to case_results.length growing alongside done).
+                total=len(cases),
             )
             run_id = run.id
     except sqlite_store.ActiveRunExists:

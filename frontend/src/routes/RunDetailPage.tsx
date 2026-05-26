@@ -160,14 +160,28 @@ function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
 
 function RunProgressBar({ run }: { run: RunDetail }) {
   const isTerminal = TERMINAL_RUN_STATUSES.has(run.status.toLowerCase());
+  // `run.total` is now written at create_run() time (post-2026-05-26 fix); for
+  // older / migrated rows where it's still None, fall back to case_results
+  // length so we degrade to "N / N" instead of "N / null".
   const total = run.total ?? run.case_results.length;
   if (total <= 0) return null;
 
-  const passed = run.passed ?? 0;
-  const failed = run.failed ?? 0;
-  const skipped = run.skipped ?? 0;
-  // errored is fresh in openapi types (PR #157); guard for older shape.
-  const errored = (run as RunDetail & { errored?: number | null }).errored ?? 0;
+  // Derive done + per-bucket counts from case_results, not from the run row's
+  // top-level passed/failed/skipped/errored — those are only written by
+  // finish_run() at terminal time. During a running run, the run row's
+  // counters stay at NULL/0 while case_results grows row-by-row as each case
+  // completes; deriving from case_results gives the live "done/total" UX.
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let errored = 0;
+  for (const cr of run.case_results) {
+    const s = (cr.status ?? '').toLowerCase();
+    if (s === 'pass') passed++;
+    else if (s === 'fail') failed++;
+    else if (s === 'skip') skipped++;
+    else if (s === 'error') errored++;
+  }
   const done = passed + failed + skipped + errored;
   const pending = Math.max(0, total - done);
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;

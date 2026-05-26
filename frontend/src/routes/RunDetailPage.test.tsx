@@ -302,15 +302,25 @@ describe('RunDetailPage', () => {
 
   // ---- M6-1 finishing touch: progress bar (2026-05-26) -------------------
 
-  it('progress bar renders during running run with partial completion', async () => {
+  it('progress bar renders during running run with partial completion (derived from case_results)', async () => {
+    // Post-2026-05-26 fix: progress bar reads case_results.length (not
+    // run.passed/failed/skipped/errored — those are NULL during run).
+    // Simulate 11 pass + 1 skip = 12 done out of 17 total.
     const partial = {
       ...fakeRunRunning,
       total: 17,
-      passed: 11,
-      failed: 0,
-      skipped: 1,
-      errored: 0,
-      case_results: [],
+      // run.passed/etc deliberately left at 0 — backend doesn't update
+      // them during a running run; only finish_run() writes them.
+      case_results: [
+        ...Array.from({ length: 11 }, (_, i) => ({
+          case_id: `bug-${100 + i}`, status: 'pass', duration_ms: 100,
+          skip_reason: null, expect_detail: null, artifacts_path: null,
+        })),
+        {
+          case_id: 'bug-skipped', status: 'skip', duration_ms: 0,
+          skip_reason: 'placeholder', expect_detail: null, artifacts_path: null,
+        },
+      ],
     };
     mockFetch.mockResolvedValue(mockJsonResponse(partial));
     renderWithRoute('42');
@@ -318,30 +328,27 @@ describe('RunDetailPage', () => {
       expect(screen.getByTestId('run-progress')).toBeInTheDocument();
     });
     const bar = screen.getByTestId('run-progress-bar') as HTMLProgressElement;
-    expect(bar.value).toBe(12); // 11 pass + 0 fail + 1 skip + 0 error
+    expect(bar.value).toBe(12); // 11 pass + 1 skip
     expect(bar.max).toBe(17);
     expect(screen.getByTestId('run-progress-counts')).toHaveTextContent('12 / 17 cases (71%)');
   });
 
   it('progress bar shows ETA only while running with done>0 and pending>0', async () => {
-    // started_at = 10s ago, 5 done out of 17 total → avg 2s/case × 12 pending = ~24s ETA
     const ts = new Date(Date.now() - 10_000).toISOString();
     const partial = {
       ...fakeRunRunning,
       started_at: ts,
       total: 17,
-      passed: 5,
-      failed: 0,
-      skipped: 0,
-      errored: 0,
-      case_results: [],
+      case_results: Array.from({ length: 5 }, (_, i) => ({
+        case_id: `bug-${i}`, status: 'pass', duration_ms: 1000,
+        skip_reason: null, expect_detail: null, artifacts_path: null,
+      })),
     };
     mockFetch.mockResolvedValue(mockJsonResponse(partial));
     renderWithRoute('42');
     await waitFor(() => {
       expect(screen.getByTestId('run-progress-eta')).toBeInTheDocument();
     });
-    // Don't pin exact value — just assert ETA is shown and uses ~Xs format.
     expect(screen.getByTestId('run-progress-eta').textContent).toMatch(/ETA ~\d+[sm]/);
   });
 
