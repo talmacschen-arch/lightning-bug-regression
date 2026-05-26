@@ -1,0 +1,203 @@
+id: lg-xs-pxf-hdfs-order-by-writable
+title: 9.6 [PXF+HDFS] order by insert 入可写外部表后实际存储乱序
+category: external_systems
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-9.6-pxf-hdfs-writable-order-by"
+  reported_at: "2026-05-26"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/728
+tags: [pxf, hdfs, writable_external_table, order_by, hadoop_simple]
+
+description: |
+  飞书 §9.6 (issue #728)：把 (select 常量) union all (内表 + ORDER BY date_dtm)
+  数据 INSERT 进 PXF-HDFS 可写外部表后，从可读外部表读回，期望
+  第一行首列 = 常量 'date_dtm'。如读回首行不是 'date_dtm'，证明
+  PXF 写入 HDFS 时把排序好的数据**随机化**了，BUG 复现。
+procedure: |
+  外围准备 1（本地 mdw 作 gpadmin）：
+    1) curl 验证 hadoop_simple NameNode 在线
+    2) scp 4 个 xml (core-site / hdfs-site / mapred-site / yarn-site)
+       从 hadoop_simple:$HADOOP_HOME/etc/hadoop/ 到 mdw:$PXF_HOME/servers/default/
+    3) pxf cluster sync + restart
+  外围准备 2（远端 hadoop_simple）：
+    4) ssh root@hadoop_simple → 清 + mkdir + chown gpadmin /test/write_ext/t04/
+  数据库测试阶段：
+    5) DROP + CREATE tmp_gpdb7_10 + INSERT 3 行测试数据
+    6) CREATE WRITABLE EXTERNAL TABLE ext_w (PROFILE=hdfs:csv)
+    7) INSERT INTO ext_w via UNION ALL + ORDER BY 'date_dtm'
+    8) CREATE READABLE EXTERNAL TABLE ext_r (同 LOCATION)
+    9) SELECT * FROM ext_r → 期望第一行第一列 = 'date_dtm'（BUG 断言）
+  teardown: DROP ext_r/ext_w/tmp_gpdb7_10
+expected: |
+  - 外围准备全部 exit_code=0
+  - 主测试步 SELECT scalar = 'date_dtm'（BUG 复现时此处偏离 → fail）
+
+applies_to: {}
+preconditions: {}
+external_deps: [hadoop_simple]
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "precondition-1: 验证 hadoop_simple NameNode 在线"
+    kind: shell
+    cmd: |
+      curl -m 10 -sS "http://{{ external.hadoop_simple.host }}:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeStatus"
+    timeout_ms: 30000
+    expect:
+      exit_code: 0
+      stdout_contains: ["NameNodeStatus"]
+      not_contains: ["Connection refused", "Connection timed out", "Failed to connect"]
+
+  - name: "prep-1: scp PXF config 4 xml from hadoop_simple → mdw PXF servers/default"
+    kind: shell
+    cmd: |
+      su - gpadmin -c '
+        set -e
+        : "${PXF_HOME:=/usr/local/pxf}"
+        mkdir -p "$PXF_HOME/servers/default/"
+        for f in core-site.xml hdfs-site.xml mapred-site.xml yarn-site.xml; do
+          scp -o StrictHostKeyChecking=no -o BatchMode=yes \
+            {{ external.hadoop_simple.extras.ssh_user }}@{{ external.hadoop_simple.host }}:{{ external.hadoop_simple.extras.HADOOP_HOME }}/etc/hadoop/$f \
+            "$PXF_HOME/servers/default/"
+        done
+        ls -l "$PXF_HOME/servers/default/" | head -10
+      '
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains: ["core-site.xml", "hdfs-site.xml", "mapred-site.xml", "yarn-site.xml"]
+      not_contains: ["No such file", "Permission denied", "ssh: connect"]
+
+  - name: "prep-2: pxf cluster sync"
+    kind: shell
+    cmd: su - gpadmin -c 'pxf cluster sync'
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL", "failed"]
+
+  - name: "prep-3: pxf cluster restart"
+    kind: shell
+    cmd: su - gpadmin -c 'pxf cluster restart'
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL", "failed to restart"]
+
+  - name: "prep-4: ssh hadoop_simple → 清 + mkdir + chown gpadmin HDFS /test/write_ext/t04/"
+    kind: shell
+    cmd: |
+      ssh -o StrictHostKeyChecking=no -o BatchMode=yes \
+        {{ external.hadoop_simple.extras.ssh_user }}@{{ external.hadoop_simple.host }} '
+        . /etc/profile
+        hdfs dfs -test -e /test/write_ext/t04/ && hdfs dfs -rm -r -skipTrash /test/write_ext/t04/ 2>&1 || true
+        hdfs dfs -mkdir -p /test/write_ext/t04/
+        hdfs dfs -chown gpadmin /test/write_ext/t04/
+        hdfs dfs -ls /test/write_ext/ 2>&1 | head -5
+      '
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains: ["/test/write_ext/t04"]
+      not_contains: ["No such file", "Permission denied", "command not found"]
+
+  - name: "prep-5: pg 端清理 + 建测试表 tmp_gpdb7_10 + 插 3 行"
+    kind: sql
+    sql: |
+      DROP EXTERNAL TABLE IF EXISTS EXT_R_TMP_GP7_10_04;
+      DROP EXTERNAL TABLE IF EXISTS EXT_W_TMP_GP7_10_04;
+      DROP TABLE IF EXISTS PUBLIC.tmp_gpdb7_10;
+      CREATE TABLE PUBLIC.tmp_gpdb7_10 (date_dtm TEXT, num TEXT, segnum TEXT) DISTRIBUTED BY (date_dtm);
+      INSERT INTO PUBLIC.tmp_gpdb7_10 VALUES ('z20260103','33','seg10');
+      INSERT INTO PUBLIC.tmp_gpdb7_10 VALUES ('z20260101','11','seg10');
+      INSERT INTO PUBLIC.tmp_gpdb7_10 VALUES ('z20260102','22','seg10');
+    timeout_ms: 60000
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "prep-6: 创建 PXF+HDFS 可写外部表 EXT_W_TMP_GP7_10_04"
+    kind: sql
+    sql: |
+      CREATE WRITABLE EXTERNAL TABLE EXT_W_TMP_GP7_10_04 (date_dtm TEXT, num TEXT, segnum TEXT)
+      LOCATION ('pxf://test/write_ext/t04?PROFILE=hdfs:csv')
+      ON ALL
+      FORMAT 'CSV'
+      ENCODING 'UTF8'
+      DISTRIBUTED BY (segnum);
+    timeout_ms: 60000
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "test-main: INSERT INTO ext_w via UNION ALL + ORDER BY 'date_dtm'"
+    kind: sql
+    sql: |
+      INSERT INTO EXT_W_TMP_GP7_10_04
+      WITH DATA AS (
+        SELECT 'date_dtm' AS date_dtm, 'num' AS num, 'seg10' AS segnum
+        UNION ALL
+        SELECT date_dtm::TEXT, num AS num, segnum AS segnum
+        FROM PUBLIC.tmp_gpdb7_10
+      )
+      SELECT date_dtm, num, segnum FROM DATA ORDER BY date_dtm;
+    timeout_ms: 120000
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "prep-7: 创建可读外部表 EXT_R_TMP_GP7_10_04"
+    kind: sql
+    sql: |
+      CREATE READABLE EXTERNAL TABLE EXT_R_TMP_GP7_10_04 (date_dtm TEXT, num TEXT, segnum TEXT)
+      LOCATION ('pxf://test/write_ext/t04?PROFILE=hdfs:csv')
+      ON ALL
+      FORMAT 'CSV'
+      ENCODING 'UTF8';
+    timeout_ms: 60000
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "test-assert: SELECT * 第一行首列必须 = 'date_dtm' (BUG 断言)"
+    kind: sql
+    sql: |
+      SELECT date_dtm, num, segnum FROM EXT_R_TMP_GP7_10_04
+    timeout_ms: 60000
+    expect:
+      scalar: "date_dtm"
+
+teardown:
+  - DROP EXTERNAL TABLE IF EXISTS EXT_R_TMP_GP7_10_04
+  - DROP EXTERNAL TABLE IF EXISTS EXT_W_TMP_GP7_10_04
+  - DROP TABLE IF EXISTS PUBLIC.tmp_gpdb7_10
+
+created_by: chenqiang
+created_at: "2026-05-26"
+notes: |
+  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.6。
+  关联 issue: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/728
+
+  **BUG 触发条件**：
+  1. PXF + HDFS 环境就绪 (external_deps: [hadoop_simple])
+  2. (select 常量行) UNION ALL (内表 SELECT ... ORDER BY date_dtm) → PXF-HDFS 可写外部表
+  3. 期望写盘物理顺序 = ORDER BY 后顺序，常量行 ('date_dtm','num','seg10') 排首位
+  4. 从同 LOCATION 可读外部表读回 SELECT * 取第一行首列：
+     - 'date_dtm' → 顺序正确 case PASS
+     - 其他值 (z20260101 / z20260102 / z20260103) → BUG 复现 case FAIL
+
+  **case 设计 (依赖 hadoop_simple)**：
+  - prep-1: scp 4 个 hadoop xml 用 for-loop 避免 sh brace-expansion 不可移植
+  - prep-4: 远端 ssh 命令开头 `. /etc/profile` 加载 HADOOP_HOME；chown gpadmin
+    必须 — root 建的 dir 默认 owner=root，PXF segment 以 gpadmin 跑写入被拒
+  - DISTRIBUTED BY(segnum) 来自飞书原文；3 行 segnum 全 'seg10' → 同 segment
+    → 排除分发因素纯测 PXF 写盘顺序
+  - sql_driver scalar = 多行结果第一行第一列；按 ORDER BY date_dtm ASC，
+    'date_dtm' < 'z20260101'，必须排首位
