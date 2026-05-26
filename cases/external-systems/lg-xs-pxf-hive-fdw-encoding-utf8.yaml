@@ -1,0 +1,240 @@
+id: lg-xs-pxf-hive-fdw-encoding-utf8
+title: 9.14 [PXF+Hive+FDW] encoding 'UTF8' 读取含非 ASCII 的 HIVE 表报 gpdbwritable formatter UTF8 错（误导性错误）
+category: external_systems
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "section-9.14-pxf-hive-fdw-encoding-utf8"
+  reported_at: "2026-05-26"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [pxf, hive, fdw, foreign_table, encoding, utf8, hadoop_simple]
+
+description: |
+  飞书 §9.14：使用 FDW 语法（gp_exttable_server + OPTIONS encoding 'UTF8'）
+  创建 PXF+HIVE 外部表，当 HIVE 表数据含非 ASCII 时，SELECT 报：
+    ERROR: gpdbwritable formatter can only import UTF8 formatted data.
+           Define the external table with ENCODING UTF8
+    CONTEXT: External table fdw_hive_sales_info_text
+  encoding 字面已是 UTF8，错误仍要求"用 UTF8" → 误导性强。
+  同一 HIVE 表用 Legacy 语法（CREATE EXTERNAL TABLE ... ENCODING 'UTF8'）查询正常，
+  对比测试钉死是 FDW path 问题。
+
+procedure: |
+  外围准备 1：PXF + Hadoop 配置
+    1) python3.11 + hmsclient 验证 hadoop_simple Hive Metastore 在线
+    2) scp 4 个 Hadoop xml (core/hdfs/mapred/yarn-site.xml)
+       从 hadoop_simple:$HADOOP_HOME/etc/hadoop/ → mdw:$PXF_HOME/servers/default/
+  外围准备 2：PXF + Hive 配置
+    3) cp 本机 /data0/hadoop201/hive-site.xml → mdw:$PXF_HOME/servers/default/
+    4) pxf cluster sync
+    5) pxf cluster restart
+  测试主体：
+    6) DROP + CREATE EXTERNAL TABLE ext_hive_sales_info_text (Legacy 语法)
+    7) DROP + CREATE FOREIGN TABLE fdw_hive_sales_info_text (FDW 语法)
+    8) psql -c 'SELECT * FROM ext_hive_sales_info_text'  → baseline 必须正常返回
+    9) psql -c 'SELECT * FROM fdw_hive_sales_info_text'  → BUG 在时报 gpdbwritable formatter UTF8 错
+  teardown：DROP ext_/fdw_ 两表
+expected: |
+  - 外围准备步全部 exit_code=0
+  - 步 8（Legacy SELECT，baseline）必须 exit_code=0 且无 ERROR
+  - 步 9（FDW SELECT，BUG 复现点）按"修复后期望"风格：
+    - 已修复：exit_code=0 且不含 "gpdbwritable formatter can only import UTF8"
+    - BUG 在：psql ON_ERROR_STOP exit=3 → step fail → case fail = 复现成功
+
+applies_to: {}
+preconditions: {}
+external_deps: [hadoop_simple]
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "precondition: 验证 hadoop_simple Hive Metastore (HMS) 在线"
+    kind: shell
+    cmd: |
+      python3.11 -c "
+      from hmsclient import HMSClient
+      try:
+          c = HMSClient(host='{{ external.hadoop_simple.host }}', port=9083)
+          c.open()
+          print('Metastore OK, databases:', c.get_all_databases())
+          c.close()
+      except Exception as e:
+          print(f'Metastore FAIL: {e}')
+          raise SystemExit(1)
+      "
+    timeout_ms: 30000
+    expect:
+      exit_code: 0
+      stdout_contains: ["Metastore OK"]
+      not_contains: ["Metastore FAIL"]
+
+  - name: "prep-1: scp 4 hadoop xml (core/hdfs/mapred/yarn-site.xml) → mdw PXF servers/default/"
+    kind: shell
+    cmd: |
+      su - gpadmin -c '
+        set -e
+        : "${PXF_HOME:=/usr/local/pxf}"
+        mkdir -p "$PXF_HOME/servers/default/"
+        for f in core-site.xml hdfs-site.xml mapred-site.xml yarn-site.xml; do
+          scp -o StrictHostKeyChecking=no -o BatchMode=yes \
+            {{ external.hadoop_simple.extras.ssh_user }}@{{ external.hadoop_simple.host }}:{{ external.hadoop_simple.extras.HADOOP_HOME }}/etc/hadoop/$f \
+            "$PXF_HOME/servers/default/"
+        done
+        ls -l "$PXF_HOME/servers/default/" | head -10
+      '
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains: ["core-site.xml", "hdfs-site.xml", "mapred-site.xml", "yarn-site.xml"]
+      not_contains: ["No such file", "Permission denied", "ssh: connect"]
+
+  - name: "prep-2: cp 本机 hive-site.xml → mdw PXF servers/default/"
+    kind: shell
+    cmd: |
+      su - gpadmin -c '
+        set -e
+        : "${PXF_HOME:=/usr/local/pxf}"
+        SRC=/data0/hadoop201/hive-site.xml
+        if [ ! -f "$SRC" ]; then
+          echo "MISSING: hive-site.xml not found at $SRC"
+          exit 1
+        fi
+        cp -f "$SRC" "$PXF_HOME/servers/default/"
+        ls -l "$PXF_HOME/servers/default/hive-site.xml"
+      '
+    timeout_ms: 30000
+    expect:
+      exit_code: 0
+      stdout_contains: ["hive-site.xml"]
+      not_contains: ["MISSING:", "Permission denied"]
+
+  - name: "prep-3: pxf cluster sync"
+    kind: shell
+    cmd: su - gpadmin -c 'pxf cluster sync'
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL", "failed"]
+
+  - name: "prep-4: pxf cluster restart"
+    kind: shell
+    cmd: su - gpadmin -c 'pxf cluster restart'
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL", "failed to restart"]
+
+  - name: "prep-5: DROP + CREATE Legacy EXTERNAL TABLE ext_hive_sales_info_text (ENCODING 'UTF8')"
+    kind: sql
+    sql: |
+      DROP EXTERNAL TABLE IF EXISTS public.ext_hive_sales_info_text;
+      CREATE READABLE EXTERNAL TABLE public.ext_hive_sales_info_text (
+        location          text,
+        month             text,
+        number_of_orders  int,
+        total_sales       float8
+      )
+      LOCATION ('pxf://hive.sales_info_text?PROFILE=Hive')
+      ON ALL
+      FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import')
+      ENCODING 'UTF8';
+    timeout_ms: 60000
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "prep-6: DROP + CREATE FDW FOREIGN TABLE fdw_hive_sales_info_text (OPTIONS encoding 'UTF8')"
+    kind: sql
+    sql: |
+      DROP FOREIGN TABLE IF EXISTS public.fdw_hive_sales_info_text;
+      CREATE FOREIGN TABLE public.fdw_hive_sales_info_text (
+        location          text,
+        month             text,
+        number_of_orders  int,
+        total_sales       float8
+      )
+      SERVER gp_exttable_server
+      OPTIONS (
+        formatter     'pxfwritable_import',
+        format        'custom',
+        format_type   'b',
+        location_uris 'pxf://hive.sales_info_text?PROFILE=Hive',
+        execute_on    'ALL_SEGMENTS',
+        log_errors    'f',
+        encoding      'UTF8',
+        writable      'false'
+      );
+    timeout_ms: 60000
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "test-baseline: psql -c 查询 Legacy ext_hive_sales_info_text 必须正常返回"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 \
+        -c 'SELECT * FROM public.ext_hive_sales_info_text' 2>&1"
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      not_contains:
+        - "ERROR"
+        - "FATAL"
+        - "gpdbwritable formatter can only import UTF8"
+
+  - name: "test-main: psql -c 查询 FDW fdw_hive_sales_info_text — BUG 复现点 (修复后必须正常)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 \
+        -c 'SELECT * FROM public.fdw_hive_sales_info_text' 2>&1"
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      not_contains:
+        - "ERROR"
+        - "gpdbwritable formatter can only import UTF8"
+        - "Define the external table with ENCODING UTF8"
+
+teardown:
+  - DROP FOREIGN TABLE  IF EXISTS public.fdw_hive_sales_info_text
+  - DROP EXTERNAL TABLE IF EXISTS public.ext_hive_sales_info_text
+
+created_by: chenqiang
+created_at: "2026-05-26"
+notes: |
+  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.14。
+
+  **BUG 描述（误导性错误信息）**：
+  - 用 FDW 语法（SERVER gp_exttable_server + OPTIONS encoding 'UTF8'）建 PXF+HIVE 外表
+  - HIVE 表 hive.sales_info_text 含非 ASCII 数据
+  - SELECT 报：
+      ERROR: gpdbwritable formatter can only import UTF8 formatted data.
+             Define the external table with ENCODING UTF8
+      CONTEXT: External table fdw_hive_sales_info_text
+  - encoding 字面已是 UTF8，错误仍要求"用 UTF8" → 误导
+  - 同一 HIVE 表用 Legacy 语法（ENCODING 'UTF8' 子句）查询正常 →
+    钉死问题在 FDW path 的 encoding 解析/传递链路
+
+  **case 设计要点**：
+  - 飞书原文明确："走 shell + psql -c方式测试查询（不要用sqldriver，会导致无法判断报错）"
+    → 两条核心 SELECT 都走 kind: shell + psql -c；setup DDL 走 kind: sql（tx-safe）
+  - sql_driver 不支持 expect.exit_code / stderr_contains / error 字段断言（assertions.py 没有对应 evaluator）；
+    要钉住"特定错误指纹"必须走 shell + stdout_contains (2>&1 合并 stderr→stdout)
+  - test-baseline（Legacy）必须 PASS — 若 fail 是环境问题（PXF/HMS 故障等），test-main 断言失效
+  - test-main（FDW）按"修复后期望"风格写：
+    BUG 在 → psql ON_ERROR_STOP exit=3 → step fail → case fail = 复现成功
+    已修复 → exit=0 + 无错误指纹 → case pass
+  - HMS 探活用 python3.11 — 本机 hmsclient 装在 3.11 site-packages，
+    /usr/bin/python3 默认 3.9 看不到（pip3 在 /usr/local/bin 对应 3.11，
+    解释器/包管理器不同套）
+  - hive-site.xml 来源 /data0/hadoop201/hive-site.xml — 案例作者本机预置；
+    缺失时 prep-2 显式 exit 1 + "MISSING:" 报错，不静默
+  - PXF_HOME 默认 fallback /usr/local/pxf，与 9.6 case 保持一致；
+    Lightning2 实际是 /usr/local/hashdata-lightning-pxf，由 .bashrc export 覆盖
