@@ -127,7 +127,7 @@ skill 在题 1 拿到答案后，把对应 category 的 `id_prefix` / `default_s
 
 | 检测关键词 | 追问 | 影响 |
 |-----------|------|------|
-| `CREATE FOREIGN TABLE` / `IMPORT FOREIGN SCHEMA` / FDW / dblink / datalake_fdw / hive_connector / PXF / zombodb | "外部数据源是否本机已部署？" | 若否，提示用户补 `external_deps: [<svc>]`（首版不支持自动 provision，让用户在 §3.1 外部依赖准备阶段搞定）；status 默认 `awaiting_env` 直到环境就绪 |
+| `CREATE FOREIGN TABLE` / `IMPORT FOREIGN SCHEMA` / FDW / dblink / datalake_fdw / hive_connector / PXF / zombodb | "外部数据源是否本机已部署？" | 若否，提示用户补 `external_deps: [<svc>]`（首版不支持自动 provision，让用户在 §3.1 外部依赖准备阶段搞定）；status 默认 `open`（v1.21 后 external_systems 主轴为 BUG 修复状态）；若外部服务确实尚未部署可标 `awaiting_env`（与 BUG 状态正交的辅助 lifecycle 值） |
 | `gphdfs.conf` / `gphive.conf` / `krb5.conf` / 服务端配置文件 | "需要写/改 master 上的配置文件吗？" | 提示用 cli step `cat >> "$DD/<file>" <<'YML' ... YML`（**追加 + grep -q guard**），**不要** `cat > ` 覆盖——preflight Run 112 教训：truncate 把 deployer 写的块清空，后续 case 全 fail |
 | `kinit` / `keytab` / `principal` / Kerberos | "kinit 用什么 principal / keytab 路径？" | step 用 `{{ external.<svc>.extras.client_principal }}` + `{{ external.<svc>.extras.client_keytab_local }}` 渲染；**避免** `_HOST` 占位（preflight 13_cdh_kerberos 教训：datalake_fdw 里 _HOST 替换不稳，直接写 FQDN） |
 | `beeline` / `sqlplus` / `mysql` 等远端 CLI | "需要 SSH 到外部主机执行吗？" | step 加 `host: '{{ external.<svc>.host }}'`，cmd 开头**显式 source profile.d**：`[ -f /etc/profile.d/<x>.sh ] && . /etc/profile.d/<x>.sh || true`（preflight 12_datalake_fdw_hive 教训：SSH 非交互不 source，beeline 找不到 HIVE_HOME） |
