@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,6 +32,7 @@ from app.api.auth import get_current_user
 from app.runner.step_kinds import STEP_KINDS
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
+from app.utils.time import as_utc
 
 logger = logging.getLogger(__name__)
 
@@ -344,7 +345,7 @@ def list_external_services() -> list[ExternalServiceOut]:
                 name=child.stem,
                 filename=child.name,
                 size_bytes=stat.st_size,
-                modified_at=datetime.fromtimestamp(stat.st_mtime),
+                modified_at=datetime.fromtimestamp(stat.st_mtime, UTC),
                 content=content,
                 parse_error=parse_error,
             )
@@ -403,7 +404,7 @@ def _tv_to_out(row) -> TargetVersionOut:  # type: ignore[no-untyped-def]
         is_active=bool(row.is_active),
         is_default=bool(row.is_default),
         notes=row.notes,
-        created_at=row.created_at,
+        created_at=as_utc(row.created_at),
     )
 
 

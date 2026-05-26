@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 import bcrypt
@@ -129,7 +129,7 @@ def get_current_user(
         if row is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
         # touch last_used_at — helps spot dead tokens if we ever want cleanup
-        row.last_used_at = datetime.utcnow()
+        row.last_used_at = datetime.now(UTC)
         user = sess.get(User, row.user_id)
         if user is None:
             # token outlived its user (shouldn't happen with CASCADE FK)
@@ -258,7 +258,7 @@ def change_password(
                 detail="current password is wrong",
             )
         u.password_hash = hash_password(payload.new_password)
-        u.password_changed_at = datetime.utcnow()
+        u.password_changed_at = datetime.now(UTC)
         sess.commit()
 
 
