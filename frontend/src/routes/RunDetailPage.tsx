@@ -189,7 +189,12 @@ function RunProgressBar({ run }: { run: RunDetail }) {
   // ETA = avg-per-done × pending (only when running, ≥1 done, parseable started_at)
   let eta: string | null = null;
   if (!isTerminal && done > 0 && pending > 0 && run.started_at) {
-    const elapsedMs = Date.now() - new Date(run.started_at).getTime();
+    // Same naive-ISO-as-UTC parse as formatRelative — backend's
+    // datetime.utcnow() ships without tz suffix; default JS parsing
+    // treats it as local time and yields ~8h skew on UTC+8 clients.
+    const ts = run.started_at;
+    const hasTz = /[zZ]|[+-]\d{2}:?\d{2}$/.test(ts);
+    const elapsedMs = Date.now() - new Date(hasTz ? ts : ts + 'Z').getTime();
     if (elapsedMs > 0) {
       const avgPerCase = elapsedMs / done;
       const etaMs = avgPerCase * pending;
