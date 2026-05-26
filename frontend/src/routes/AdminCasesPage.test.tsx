@@ -158,8 +158,12 @@ describe('AdminCasesPage', () => {
     expect(screen.getByTestId('admin-cases-row-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
   });
 
-  it('sends X-Admin-Password header when localStorage adminPassword set', async () => {
-    if (typeof localStorage !== 'undefined') localStorage.setItem('adminPassword', 'pw-2026');
+  it('sends Authorization: Bearer header from authHeaders() (v1.17 token-auth)', async () => {
+    // v1.17 user-login replaced ADMIN_PASSWORD env auth; legacy
+    // X-Admin-Password header path is gone. Dogfood 2026-05-26: Delete
+    // had been failing "missing or malformed Authorization header"
+    // because the legacy adminHeaders() helper never sent Bearer token.
+    if (typeof localStorage !== 'undefined') localStorage.setItem('authToken', 'tok-xyz');
     apiFetchMock
       .mockResolvedValueOnce(FAKE_CASES)
       .mockResolvedValueOnce([FAKE_CASES[1]]);
@@ -170,7 +174,9 @@ describe('AdminCasesPage', () => {
     fireEvent.click(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table'));
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
-    expect((mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers['X-Admin-Password']).toBe('pw-2026');
+    const headers = (mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers;
+    expect(headers['Authorization']).toBe('Bearer tok-xyz');
+    expect(headers['X-Admin-Password']).toBeUndefined();
   });
 
   it('shows error when DELETE returns non-2xx', async () => {
