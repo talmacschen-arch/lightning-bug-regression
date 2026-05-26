@@ -44,6 +44,7 @@ from sqlalchemy import select
 from app.runner import orchestrator
 from app.runner.case_normalizer import normalize_case
 from app.runner.dsn_builder import dsn_map_from_env
+from app.runner.external_deps_loader import collect_external_deps, load_external_context
 from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
@@ -637,6 +638,16 @@ async def try_case(req: TryRequest, request: Request) -> TryResponse:
     dsn_map = dsn_map_from_env([normalized])
     pool = SqlSessionPool(dsn_map)
 
+    # Load external_deps context the same way POST /runs does — without this
+    # Try would skip the loader and any `{{ external.<svc>.* }}` Jinja
+    # reference in the case YAML raises UndefinedError → step error driver=jinja.
+    # Dogfood 2026-05-26 lg-xs-pxf-hdfs case: Try precondition-1 errored 0ms
+    # because external.hadoop_simple was missing from the empty jinja_context.
+    # Always include `dut` for cases that reference {{ external.dut.host }}.
+    svc_names = sorted({"dut", *collect_external_deps([normalized])})
+    external_ctx = load_external_context(svc_names)
+    jinja_context: dict[str, Any] = {"external": external_ctx} if external_ctx else {}
+
     case_result: orchestrator.CaseExecutionResult
     try:
         with tempfile.TemporaryDirectory() as artdir:
@@ -648,7 +659,7 @@ async def try_case(req: TryRequest, request: Request) -> TryResponse:
                 normalized,
                 run_id=0,
                 artifacts_root=Path(artdir),
-                jinja_context={},
+                jinja_context=jinja_context,
                 dut_hosts=set(),
                 sql_pool=pool,
             )
