@@ -17,7 +17,7 @@ vi.mock('@/api/client', () => ({
 const FAKE_CASES = [
   { id: 'lg-bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const distributed row order', status: 'open', destructive: false, tags: null, error: null },
   { id: 'lg-ext-pgvector-ivfflat-basic', category: 'extension', title: 'pgvector IVFFLAT 索引基础', status: 'stable', destructive: false, tags: null, error: null },
-  { id: 'lg-xs-zombodb-partition-text-search', category: 'external_systems', title: 'ZomboDB 分区表全文搜索', status: 'stable', destructive: false, tags: null, error: null },
+  { id: 'lg-xs-zombodb-partition-text-search', category: 'external_systems', title: 'ZomboDB 分区表全文搜索', status: 'fixed', destructive: false, tags: null, error: null },
 ];
 
 beforeEach(() => {

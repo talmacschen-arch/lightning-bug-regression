@@ -252,7 +252,7 @@ function QuickActions({ categories }: QuickActionsProps) {
     .map((cat) => ({
       cat,
       // Use the category's default_status as the "interesting" preset target
-      // (open BUGs, stable extensions, awaiting_env external_systems).
+      // (open BUGs, stable extensions, open external_systems — v1.21 aligned).
       status: cat.default_status,
     }))
     // Hide categories without a sensible default (defensive)
