@@ -207,3 +207,45 @@ D. display_order = 30 OK 吗？
 E. external_deps 字段本 sprint **不**真消费（保持文档性质）OK 吗？
 
 5 项决策定后立即开 PR；预计 < 100 行净增。
+
+---
+
+## 9. 2026-05-26 status 语义补强（v1.21 修订）
+
+**触发**：用户在 lg-xs-pxf-hive-fdw-encoding-utf8 case 落库后指出 v1.10 设计的 `status: stable` 与项目主目的（BUG 回归测试）不符——external_systems 与 extension 拆分是因为**依赖外部服务进程**，但 case 本质仍是 BUG 复现（PXF / Hive / FDW / Zombodb 触发的 PG/Greenplum BUG），不是"扩展功能稳定性验证"。用户原话："external-systems 这个分类的 case 依赖外部系统，所以才单独出来的，要跟 bug_regression 一样表示 BUG 修复状态"。
+
+**问题根源**：v1.10 §2.3 决策点把 status_whitelist 锁定在"环境就绪度"单一维度 (`stable` / `awaiting_env` / `deprecated` / `stub`)——这与 `extension` 类别的语义同源（都是"功能稳定性"），但没考虑 external_systems case 实际承载的 BUG 复现意图。3 个已落库 case 都用 `stable`，但有的 BUG 已修复有的未修复，`stable` 无法区分。
+
+**v1.21 反转**：
+
+| 维度 | v1.10 设计 | v1.21 修订 |
+|---|---|---|
+| status_whitelist | `[stable, awaiting_env, deprecated, stub]` | `[open, fixed, wontfix, stub, awaiting_env]` |
+| default_status | `awaiting_env` | `open` |
+| 主轴语义 | 环境就绪度 | **BUG 修复状态**（与 bug_regression 对齐） |
+| 辅助语义 | — | `awaiting_env`（外部服务未部署占位，与 BUG 状态正交） |
+
+**3 个已落库 case 同步迁移**（在同一 atomic PR 内执行，避免 loader strict `not in whitelist` 检查破坏）：
+
+| Case | v1.10 status | v1.21 status | 真实 BUG 状态 |
+|---|---|---|---|
+| `lg-xs-pxf-hdfs-order-by-writable` | stable | **fixed** | BUG 已修复 |
+| `lg-xs-pxf-hive-fdw-encoding-utf8` | stable | **open** | BUG 未修复（dogfood 实测 baseline pass + main fail） |
+| `lg-xs-zombodb-partition-text-search` | stable | **fixed** | BUG 已修复（SynxDB-4.5.0-build130 + zombodb 3000.1.8 + ES 7.10.2 验证） |
+
+**实施清单**（1 个 atomic PR，~110 行净改动）：
+
+1. `backend/alembic/versions/0006_external_systems_status_realign.py` — UPDATE case_categories row（status_whitelist + default_status + description）
+2. 3 个 case YAML status 改
+3. `backend/tests/test_alembic_upgrade.py` — fixture 2 处改
+4. `frontend/src/routes/DashboardPage.test.tsx` — mock + 1 测试 invariant 反转 + quick action testid
+5. `frontend/src/components/FilterBar.test.tsx` + `CaseIdCombobox.test.tsx` — mock 改
+6. `frontend/src/routes/DashboardPage.tsx` — 1 行 quick-action 注释
+7. `design.md` §16.4 表格 + 关键差异 + 新增 "status 双轴语义" 段 + §0 v1.21 row
+8. 本 doc §9 追加
+
+**保留 awaiting_env 的理由**：用户选 D1.B 方案（兼顾两套语义），不选 D1.A "完全对齐 bug_regression 丢掉 awaiting_env"。awaiting_env 作为环境维度独立值仍有价值——未来某个 external_systems case 蓝图写好但 ES / Hive 集群尚未部署时，可标 awaiting_env 而不用 `open`（避免与 BUG 未修复混淆）。当前 3 个 case 没有 awaiting_env 实例，仅为未来预留。
+
+**v1.10 plug-and-play 决策保留**：本次改造仍是**纯数据层 + 测试 fixture 改动**，无业务代码改动；frontend Dashboard KPI tile / FilterBar / CaseIdCombobox 全部 data-driven，新白名单 5 个值自动渲染 5 行 status tile，无需 UI 逻辑改动。这印证 v1.10 §1 "plug-and-play 设计真做到了" 的论断在二次反转时仍成立。
+
+**经验教训**：v1.10 §2.3 status_whitelist 决策时 candidates A/B/C 都围绕"环境就绪度"维度，没把 bug_regression 当作可对齐参考——本质上把"依赖外部组件"和"BUG 复现"两个正交属性混在一个轴上。下次新增 category 时，决策点 status_whitelist 应明确：**这个 category 的 case 是 BUG 复现还是功能验证？** 前者对齐 bug_regression，后者对齐 extension。

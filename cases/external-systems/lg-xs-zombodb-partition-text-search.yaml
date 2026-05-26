@@ -1,7 +1,7 @@
 id: lg-xs-zombodb-partition-text-search
 title: ZomboDB + Synxdb 分区表全文搜索（ES 后端，含 6 类 ZQL 查询 + EXPLAIN）
 category: external_systems
-status: stable
+status: fixed
 severity: medium
 destructive: false
 
@@ -256,10 +256,11 @@ notes: |
   **teardown 不 DROP EXTENSION zombodb**：共享 extension，其他 case 或业务可能依赖。
   仅 DROP TABLE 自建数据。
 
-  **status: stable** 反映本 case 已在 SynxDB-4.5.0-build130 + zombodb 3000.1.8 +
-  ES 7.10.2 (192.168.195.203:9200) 上验证完整链路可用（cluster health green +
-  zombodb extension installed + ZQL 查询路径走 Bitmap Index Scan）。external_systems
-  category 首例 stable case（默认 awaiting_env，因外部环境真就绪所以直接 stable）。
+  **status: fixed** 反映本 case 关联 BUG 已在 SynxDB-4.5.0-build130 + zombodb 3000.1.8 +
+  ES 7.10.2 (192.168.195.203:9200) 上验证修复（cluster health green +
+  zombodb extension installed + ZQL 查询路径走 Bitmap Index Scan，分区表全文搜索通畅）。
+  v1.21 external_systems 类别 status_whitelist 加入 BUG 修复维度后，原 status:
+  stable 改为 status: fixed（与 bug_regression 语义对齐）。
 
   **首例 external_systems case 意义**：M4c milestone 第一例落地（design.md §13.10）。
   验证 M4c plan "case 蓝图可先写 awaiting_env" 之外的第二条路径——"环境真就绪时直接

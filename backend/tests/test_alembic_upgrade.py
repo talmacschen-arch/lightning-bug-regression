@@ -132,7 +132,7 @@ def test_case_categories_seeded(fresh_db_url: str) -> None:
     assert xs.name == "external_systems"
     assert xs.id_prefix == "lg-xs-"
     assert xs.dir_path == "external-systems"
-    assert xs.default_status == "awaiting_env"
+    assert xs.default_status == "open"
     assert xs.display_order == 30
     assert xs.is_active in (1, True)
 
@@ -144,7 +144,7 @@ def test_status_whitelist_is_valid_json_array(fresh_db_url: str) -> None:
     by_name = {r.name: json.loads(r.status_whitelist) for r in rows}
     assert by_name["bug_regression"] == ["open", "fixed", "wontfix", "stub"]
     assert by_name["extension"] == ["stable", "experimental", "deprecated", "stub"]
-    assert by_name["external_systems"] == ["stable", "awaiting_env", "deprecated", "stub"]
+    assert by_name["external_systems"] == ["open", "fixed", "wontfix", "stub", "awaiting_env"]
 
 
 def test_id_prefix_and_dir_path_are_unique(fresh_db_url: str) -> None:

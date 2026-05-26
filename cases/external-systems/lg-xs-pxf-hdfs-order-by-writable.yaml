@@ -1,7 +1,7 @@
 id: lg-xs-pxf-hdfs-order-by-writable
 title: 9.6 [PXF+HDFS] order by insert 入可写外部表后实际存储乱序
 category: external_systems
-status: stable
+status: fixed
 severity: medium
 destructive: false
 
