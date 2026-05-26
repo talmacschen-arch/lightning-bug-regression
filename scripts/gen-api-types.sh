@@ -14,7 +14,8 @@ PORT=8765
 echo "Starting uvicorn on port $PORT..."
 cd "$BACKEND_DIR"
 # Use python3.11 directly (uv may not be installed in all environments)
-python3.11 -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" &
+# --loop asyncio: 2026-05-26 uvloop+subprocess hang dogfood — stdlib loop is safer.
+python3.11 -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" --loop asyncio &
 UVICORN_PID=$!
 
 # Poll until /openapi.json is ready (up to 15 seconds)
