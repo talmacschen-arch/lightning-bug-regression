@@ -142,8 +142,11 @@ describe('AdminSkipListPage', () => {
     expect(mockFetch.mock.calls[1][1].method).toBe('DELETE');
   });
 
-  it('sends X-Admin-Password header when localStorage adminPassword set', async () => {
-    if (typeof localStorage !== 'undefined') localStorage.setItem('adminPassword', 'pw-2026');
+  it('sends Authorization: Bearer header from authHeaders() (v1.17 token-auth)', async () => {
+    // Dogfood 2026-05-26: legacy X-Admin-Password header path was
+    // disabled when v1.17 user-login replaced ADMIN_PASSWORD env auth.
+    // Skip List CRUD now uses authHeaders() → Authorization: Bearer.
+    if (typeof localStorage !== 'undefined') localStorage.setItem('authToken', 'tok-abc');
     mockFetch
       .mockResolvedValueOnce(mockJson([]))
       .mockResolvedValueOnce(mockJson({ id: 5, case_id: 'a', reason: 'b', applies_to_version: null, upstream_issue: null, until_date: null }, true, 201))
@@ -160,6 +163,8 @@ describe('AdminSkipListPage', () => {
     fireEvent.click(screen.getByTestId('skip-list-add-submit'));
     await waitFor(() => expect(mockFetch.mock.calls.length).toBeGreaterThan(1));
     const postCall = mockFetch.mock.calls[1];
-    expect(postCall[1].headers['X-Admin-Password']).toBe('pw-2026');
+    expect(postCall[1].headers['Authorization']).toBe('Bearer tok-abc');
+    // Legacy header gone
+    expect(postCall[1].headers['X-Admin-Password']).toBeUndefined();
   });
 });

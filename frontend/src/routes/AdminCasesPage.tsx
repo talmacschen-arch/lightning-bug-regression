@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/types';
+import { authHeaders } from '@/lib/auth';
 
 type CaseSummary = components['schemas']['CaseSummary'];
 
@@ -27,13 +28,9 @@ const API_BASE =
     ?.VITE_API_BASE_URL) ??
   'http://127.0.0.1:8000';
 
-function adminHeaders(extra?: Record<string, string>): HeadersInit {
-  const pw =
-    typeof localStorage !== 'undefined' ? localStorage.getItem('adminPassword') : null;
-  const h: Record<string, string> = { ...extra };
-  if (pw) h['X-Admin-Password'] = pw;
-  return h;
-}
+// v1.17+ Bearer-token auth (was X-Admin-Password header before;
+// backend's get_current_user dependency now requires Authorization:
+// Bearer <token>).
 
 const CONFIRM_MESSAGE = (caseId: string): string =>
   `Delete "${caseId}"?\n\n` +
@@ -70,7 +67,7 @@ export default function AdminCasesPage() {
         `${API_BASE}/admin/cases/${encodeURIComponent(caseId)}`,
         {
           method: 'DELETE',
-          headers: adminHeaders(),
+          headers: authHeaders(),
         },
       );
       if (!resp.ok && resp.status !== 204) {

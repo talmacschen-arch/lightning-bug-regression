@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { CaseIdCombobox } from '@/components/CaseIdCombobox';
+import { authHeaders } from '@/lib/auth';
 
 const API_BASE =
   ((import.meta as { env?: { VITE_API_BASE_URL?: string } }).env
@@ -23,11 +24,14 @@ interface SkipEntry {
   until_date: string | null;
 }
 
-function adminHeaders(extra?: Record<string, string>): HeadersInit {
-  const pw = typeof localStorage !== 'undefined' ? localStorage.getItem('adminPassword') : null;
-  const h: Record<string, string> = { ...extra };
-  if (pw) h['X-Admin-Password'] = pw;
-  return h;
+// Bearer-token auth (v1.17+). The previous adminHeaders() helper read
+// localStorage.adminPassword and set X-Admin-Password — that pathway was
+// removed when ADMIN_PASSWORD env-var auth got replaced by the user login
+// flow. Dogfood 2026-05-26: Delete on a skip-list entry returned
+// "missing or malformed Authorization header" because the legacy helper
+// never sent Authorization: Bearer <token>.
+function jsonHeaders(): HeadersInit {
+  return { 'Content-Type': 'application/json', ...(authHeaders() as Record<string, string>) };
 }
 
 export default function AdminSkipListPage() {
@@ -72,7 +76,7 @@ export default function AdminSkipListPage() {
       if (draft.until_date) body.until_date = draft.until_date;
       const resp = await fetch(`${API_BASE}/admin/skip-list`, {
         method: 'POST',
-        headers: adminHeaders({ 'Content-Type': 'application/json' }),
+        headers: jsonHeaders(),
         body: JSON.stringify(body),
       });
       if (!resp.ok) {
@@ -93,7 +97,7 @@ export default function AdminSkipListPage() {
     try {
       const resp = await fetch(`${API_BASE}/admin/skip-list/${id}`, {
         method: 'DELETE',
-        headers: adminHeaders(),
+        headers: authHeaders(),
       });
       if (!resp.ok && resp.status !== 204) {
         const detail = await resp.json().catch(() => null);
