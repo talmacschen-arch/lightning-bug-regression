@@ -1,7 +1,7 @@
 id: lg-xs-pxf-hive-fdw-encoding-utf8
 title: 9.14 [PXF+Hive+FDW] encoding 'UTF8' 读取含非 ASCII 的 HIVE 表报 gpdbwritable formatter UTF8 错（误导性错误）
 category: external_systems
-status: stable
+status: open
 severity: medium
 destructive: false
 

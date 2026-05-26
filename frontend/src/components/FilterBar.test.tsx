@@ -86,8 +86,8 @@ describe('FilterBar (M5-4)', () => {
         description: null,
         id_prefix: 'lg-xs-',
         dir_path: 'external-systems',
-        status_whitelist: ['stable', 'awaiting_env', 'deprecated', 'stub'],
-        default_status: 'awaiting_env',
+        status_whitelist: ['open', 'fixed', 'wontfix', 'stub', 'awaiting_env'],
+        default_status: 'open',
         display_order: 30,
       },
     ]);

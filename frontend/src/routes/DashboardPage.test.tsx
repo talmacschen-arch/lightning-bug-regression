@@ -46,8 +46,8 @@ const FAKE_CATEGORIES = [
     description: null,
     id_prefix: 'lg-xs-',
     dir_path: 'external-systems',
-    status_whitelist: ['stable', 'awaiting_env', 'deprecated', 'stub'],
-    default_status: 'awaiting_env',
+    status_whitelist: ['open', 'fixed', 'wontfix', 'stub', 'awaiting_env'],
+    default_status: 'open',
     display_order: 30,
   },
 ];
@@ -221,18 +221,23 @@ describe('DashboardPage (M5-2)', () => {
       expect(screen.getByTestId('dashboard-kpi-status-bug_regression-row-stub')).toBeInTheDocument();
     });
 
-    it('external_systems status tile uses its OWN whitelist (awaiting_env, not open)', async () => {
+    it('external_systems status tile shows BOTH BUG-fix axis (open/fixed/wontfix/stub) AND awaiting_env lifecycle value', async () => {
+      // v1.21: external_systems whitelist 加入 BUG 修复维度（open/fixed/wontfix/stub），
+      // 与 bug_regression 对齐；awaiting_env 保留作辅助 lifecycle 占位（外部服务未部署）。
+      // 5 行 status row 全部数据驱动渲染。
       setupMocks();
       renderPage();
       await waitFor(() => {
         expect(screen.getByTestId('dashboard-kpi-status-external_systems')).toBeInTheDocument();
       });
-      // status_whitelist = [stable, awaiting_env, deprecated, stub]
+      // status_whitelist = [open, fixed, wontfix, stub, awaiting_env]
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-open')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-fixed')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-wontfix')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-stub')).toBeInTheDocument();
       expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-awaiting_env')).toBeInTheDocument();
-      expect(screen.getByTestId('dashboard-kpi-status-external_systems-row-stable')).toBeInTheDocument();
-      // bug-specific status MUST NOT appear here
-      expect(screen.queryByTestId('dashboard-kpi-status-external_systems-row-open')).toBeNull();
-      expect(screen.queryByTestId('dashboard-kpi-status-external_systems-row-fixed')).toBeNull();
+      // 旧 'stable' 值已从白名单移除，不应再渲染
+      expect(screen.queryByTestId('dashboard-kpi-status-external_systems-row-stable')).toBeNull();
     });
 
     it('new category gets a status tile without code change (§14 R4b)', async () => {
@@ -392,7 +397,7 @@ describe('DashboardPage (M5-2)', () => {
       // Each category gets a quick-action button keyed by default_status
       expect(screen.getByTestId('dashboard-quick-action-bug_regression-open')).toBeInTheDocument();
       expect(screen.getByTestId('dashboard-quick-action-extension-stable')).toBeInTheDocument();
-      expect(screen.getByTestId('dashboard-quick-action-external_systems-awaiting_env')).toBeInTheDocument();
+      expect(screen.getByTestId('dashboard-quick-action-external_systems-open')).toBeInTheDocument();
       // "+ New case" was removed in favor of the Cases page header CTA
       // (PR #111). Dashboard quick-actions should NOT have it.
       expect(screen.queryByTestId('dashboard-quick-action-new-case')).toBeNull();
