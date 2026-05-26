@@ -49,9 +49,6 @@ export default function LoginPage() {
         className="bg-white p-6 rounded shadow w-80 space-y-3"
       >
         <h1 className="text-xl font-semibold">Lightning Bug Regression</h1>
-        <p className="text-xs text-gray-500">
-          初始账号 / 密码: <code>admin</code> / <code>admin</code>（登录后请改密码）
-        </p>
 
         <div className="space-y-1">
           <label htmlFor="login-username" className="text-xs text-gray-600">

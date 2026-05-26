@@ -48,11 +48,12 @@ describe('LoginPage', () => {
     expect(screen.getByTestId('login-submit')).toBeInTheDocument();
   });
 
-  it('shows initial credentials hint (admin/admin)', () => {
+  it('does NOT show initial credentials hint (removed 2026-05-26 per user request)', () => {
     renderAt();
     const text = screen.getByTestId('page-login').textContent ?? '';
-    expect(text).toContain('admin');
-    expect(text).toContain('初始账号');
+    // regression guard: hint must stay removed
+    expect(text).not.toContain('初始账号');
+    expect(text).not.toContain('登录后请改密码');
   });
 
   it('successful login stores token + navigates to /dashboard', async () => {
