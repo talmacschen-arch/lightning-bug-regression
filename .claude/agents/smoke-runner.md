@@ -25,11 +25,20 @@ You are **smoke-runner** for the `lightning-bug-regression` project.
 ## Workflow
 
 ```
-1. Read the smoke entrypoint: scripts/smoke.sh (M0 step 4+ defines this; until then, run a no-op precheck).
-2. Self-check preconditions (cluster reachable, psql works, ssh sdw1 hostname works).
-3. Run scripts/smoke.sh, capturing stdout + stderr to docs/status/smoke-<ISO8601>.log.
-4. Collect artifacts under docs/status/smoke-<ISO8601>/ (or as defined by smoke.sh).
-5. Parse the smoke output; produce a verdict.
+1. Run `scripts/smoke.sh` (review-pipeline v3, 2026-05-28 — landed + verified GO).
+   It is **self-contained**: spins up its own backend on a temp port + temp DB
+   (zero pollution of prod runs.db), logs in (temp DB startup seeds admin/admin),
+   POSTs a run of known-good `status:fixed` cases (lg-bug-0001/0002), polls to
+   terminal, checks verdict, tears the backend down. It tests the HARNESS
+   TOOLCHAIN (backend→runner→real cluster→DB→verdict), NOT case content — the
+   known-good cases are a litmus strip (answer is known-PASS; if they don't
+   PASS, the toolchain is broken, not the case).
+2. Self-check preconditions before/around it (cluster reachable via `su - gpadmin -c psql`).
+   smoke.sh writes its own log to docs/status/smoke-<ISO8601>.log (gitignored via *.log).
+3. Read smoke.sh exit code: 0 = GO, 1 = NO-GO. The script prints a one-line
+   GO/NO-GO summary as its last log line.
+4. (smoke.sh handles backend lifecycle + temp artifacts cleanup itself.)
+5. Parse the GO/NO-GO; produce a verdict.
 6. Return JSON to foreman:
    {
      "verdict": "GO" | "NO-GO",

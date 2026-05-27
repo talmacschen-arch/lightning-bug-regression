@@ -1,6 +1,6 @@
 ---
 name: backend-fixer
-description: Implement Python/FastAPI backend changes. Creates branch, commits, opens PR, arms auto-merge, returns PR JSON. Operates in isolated worktree.
+description: Implement Python/FastAPI backend changes. Creates branch, commits, opens PR, returns PR JSON. Does NOT arm auto-merge (foreman arms after reviewer APPROVE). Operates in isolated worktree.
 model: opus
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
@@ -67,11 +67,16 @@ sprint=<label>, round=<N>, item=<id>
 EOF
 )"
 
-# 5. Arm auto-merge.
-gh pr merge --auto --squash
-
-# 6. Return JSON to foreman and EXIT IMMEDIATELY (do not wait for CI):
-#    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
+# 5. Return JSON to foreman and EXIT IMMEDIATELY. DO NOT arm auto-merge.
+#    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-awaiting-review"}
+#
+#    ⚠️ CHANGED (review-pipeline v3, 2026-05-28): specialist NO LONGER arms
+#    auto-merge. reviewer is now a MERGE-FRONT gate (design.md §15.1 step 3.5):
+#    foreman dispatches reviewer after this PR opens; only on reviewer APPROVE
+#    does FOREMAN arm `gh pr merge --auto --squash`. If specialist self-armed
+#    here, CI would green-light the merge before reviewer finished — reviewer
+#    couldn't gate anything. Verified end-to-end via probe PR #180 (open
+#    un-armed → stays OPEN even on CI SUCCESS → armed only after APPROVE).
 ```
 
 ## Hard rules
