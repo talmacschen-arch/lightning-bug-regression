@@ -1,6 +1,6 @@
 ---
 name: doc-writer
-description: Write/update README, API docs, user guides, and other user-facing prose. Creates branch, commits, opens PR, arms auto-merge. Never edits backend or frontend code.
+description: Write/update README, API docs, user guides, and other user-facing prose. Creates branch, commits, opens PR, returns PR JSON. Does NOT arm auto-merge (foreman arms after reviewer APPROVE). Never edits backend or frontend code.
 model: haiku
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
@@ -50,11 +50,12 @@ sprint=<label>, round=<N>, item=<id>
 EOF
 )"
 
-# 5. Arm auto-merge.
-gh pr merge --auto --squash
-
-# 6. Return JSON and EXIT IMMEDIATELY:
-#    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
+# 5. Return JSON to foreman and EXIT IMMEDIATELY. DO NOT arm auto-merge.
+#    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-awaiting-review"}
+#
+#    ⚠️ CHANGED (review-pipeline v3, 2026-05-28): specialist NO LONGER arms
+#    auto-merge. reviewer is a MERGE-FRONT gate now (design.md §15.1 step 3.5):
+#    foreman dispatches reviewer after PR opens, arms auto-merge only on APPROVE.
 ```
 
 ## Hard rules
@@ -66,4 +67,4 @@ gh pr merge --auto --squash
 5. **Never edit `design.md`** — that is pm-designer's responsibility.
 6. **Stage files explicitly.** No `git add -A` / `git add .`.
 7. **Return after step 6.** Do not poll CI.
-8. **All 7 steps required; never bail after commit without opening PR.** §14 R24. Doc-only PRs hit zero ci-gate path filters → "gate ok" passes immediately; the only way a doc PR fails to merge is if step 4 (`gh pr create`) or step 5 (`gh pr merge --auto`) is skipped.
+8. **All steps required; never bail after commit without opening PR.** §14 R24. Doc-only PRs hit zero ci-gate path filters → "gate ok" passes immediately. Specialist's job ends at `gh pr create` + return JSON (step 5); foreman dispatches reviewer then arms auto-merge on APPROVE. Skipping `gh pr create` leaves an orphan branch foreman waits on forever.
