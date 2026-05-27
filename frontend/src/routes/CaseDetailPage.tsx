@@ -38,6 +38,52 @@ function formatDuration(ms: number | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// M6-D3 T2 — Per-version pass rate table
+// ---------------------------------------------------------------------------
+
+const NO_VERSION_LABEL = '(no version)';
+
+interface VersionPassRateTableProps {
+  runs: CaseRecentRunOut[];
+}
+
+function VersionPassRateTable({ runs }: VersionPassRateTableProps) {
+  if (runs.length === 0) return null;
+
+  // Group runs by target_version; null versions go under NO_VERSION_LABEL.
+  const versionMap = new Map<string, { pass: number; total: number }>();
+  for (const r of runs) {
+    const key = r.target_version ?? NO_VERSION_LABEL;
+    const entry = versionMap.get(key) ?? { pass: 0, total: 0 };
+    entry.total += 1;
+    if ((r.case_status ?? '').toLowerCase() === 'pass') {
+      entry.pass += 1;
+    }
+    versionMap.set(key, entry);
+  }
+
+  // Only show if there are multiple distinct version keys, or if any version
+  // has a real version string (not just the no-version fallback).
+  const entries = Array.from(versionMap.entries());
+  const hasVersioned = entries.some(([key]) => key !== NO_VERSION_LABEL);
+  if (!hasVersioned) return null;
+
+  return (
+    <div data-testid="version-pass-rate" className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+      {entries.map(([ver, { pass, total }]) => (
+        <span key={ver} data-testid={`version-pass-rate-${ver}`}>
+          <span className="font-medium">{ver}</span>
+          {': '}
+          <span className={pass === total ? 'text-green-700' : 'text-red-700'}>
+            {pass}/{total}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // M6-D3 T1 — CaseTimeline sparkline card
 // ---------------------------------------------------------------------------
 
@@ -86,7 +132,8 @@ function CaseTimeline({ runs }: CaseTimelineProps) {
               const colorCls = caseStatusColor(status);
               const relTime = formatRelativeUtc(r.started_at);
               const dur = formatDuration(r.duration_ms);
-              const tooltip = `Run #${r.run_id} · ${relTime}${dur ? ` · ${dur}` : ''}`;
+              const ver = r.target_version ?? null;
+              const tooltip = `Run #${r.run_id} · ${relTime}${dur ? ` · ${dur}` : ''}${ver ? ` · ${ver}` : ''}`;
               return (
                 <button
                   key={r.run_id}
@@ -100,6 +147,7 @@ function CaseTimeline({ runs }: CaseTimelineProps) {
             })}
           </div>
         )}
+        <VersionPassRateTable runs={ordered} />
       </CardContent>
     </Card>
   );
