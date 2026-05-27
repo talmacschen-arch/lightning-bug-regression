@@ -1,47 +1,120 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { formatRelativeUtc } from '@/lib/time';
 
 type CaseDetail = components['schemas']['CaseDetail'];
 type CaseRecentRunOut = components['schemas']['CaseRecentRunOut'];
 
 // ---------------------------------------------------------------------------
-// M5-3 — RecentRuns section: list of last N runs that touched this case
+// Status → Tailwind color map — data-driven per §14 R4b (no hardcoded category
+// strings; unknown statuses fall back to gray).
 // ---------------------------------------------------------------------------
 
-function formatRelative(dateStr: string): string {
-  const diffMs = Date.now() - new Date(dateStr).getTime();
-  const diffM = Math.floor(diffMs / 60_000);
-  if (diffM < 1) return 'just now';
-  if (diffM < 60) return `${diffM}m ago`;
-  const diffH = Math.floor(diffM / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  return `${Math.floor(diffH / 24)}d ago`;
+const CASE_STATUS_COLOR: Record<string, string> = {
+  pass: 'bg-green-500',
+  fail: 'bg-red-500',
+  skip: 'bg-gray-400',
+  error: 'bg-orange-500',
+};
+
+function caseStatusColor(status: string | null | undefined): string {
+  return CASE_STATUS_COLOR[(status ?? '').toLowerCase()] ?? 'bg-gray-300';
 }
 
-function CaseRecentRuns({ caseId }: { caseId: string }) {
-  const [runs, setRuns] = useState<CaseRecentRunOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch('/cases/{case_id}/recent-runs', 'get', {
-      path: { case_id: caseId },
-    })
-      .then((data) => {
-        if (!cancelled) setRuns(data as CaseRecentRunOut[]);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [caseId]);
+function formatDuration(ms: number | null | undefined): string {
+  if (ms == null) return '';
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  return `${(s / 60).toFixed(1)}m`;
+}
 
+// ---------------------------------------------------------------------------
+// M6-D3 T1 — CaseTimeline sparkline card
+// ---------------------------------------------------------------------------
+
+interface CaseTimelineProps {
+  runs: CaseRecentRunOut[];
+}
+
+function CaseTimeline({ runs }: CaseTimelineProps) {
+  const navigate = useNavigate();
+
+  // oldest→newest: API returns most-recent-first, so reverse.
+  const ordered = [...runs].reverse();
+
+  const n = ordered.length;
+  const passCount = ordered.filter((r) => (r.case_status ?? '').toLowerCase() === 'pass').length;
+  const failCount = ordered.filter((r) => (r.case_status ?? '').toLowerCase() === 'fail').length;
+  const skipCount = ordered.filter((r) => (r.case_status ?? '').toLowerCase() === 'skip').length;
+
+  // Last failure: most-recent run (from original order, so last item in reversed)
+  // that is fail/error — find from newest-first (original API order).
+  const lastFailRun = runs.find(
+    (r) => (r.case_status ?? '').toLowerCase() === 'fail' || (r.case_status ?? '').toLowerCase() === 'error',
+  );
+
+  return (
+    <Card data-testid="case-timeline">
+      <CardHeader>
+        <CardTitle className="text-base">
+          <span data-testid="case-timeline-summary">
+            {`最近 ${n} 次：${passCount} pass / ${failCount} fail / ${skipCount} skip`}
+            {lastFailRun != null && (
+              <span className="ml-3 text-sm font-normal text-red-600">
+                {`上次失败：Run #${lastFailRun.run_id}（${formatRelativeUtc(lastFailRun.started_at)}）`}
+              </span>
+            )}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {ordered.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No runs yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {ordered.map((r) => {
+              const status = (r.case_status ?? '').toLowerCase();
+              const colorCls = caseStatusColor(status);
+              const relTime = formatRelativeUtc(r.started_at);
+              const dur = formatDuration(r.duration_ms);
+              const tooltip = `Run #${r.run_id} · ${relTime}${dur ? ` · ${dur}` : ''}`;
+              return (
+                <button
+                  key={r.run_id}
+                  data-testid={`case-timeline-cell-${r.run_id}`}
+                  title={tooltip}
+                  onClick={() => navigate(`/runs/${r.run_id}`)}
+                  className={`w-5 h-5 rounded-sm ${colorCls} hover:opacity-75 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-500 cursor-pointer`}
+                  aria-label={tooltip}
+                />
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// M5-3 — RecentRuns list card (now receives data from parent)
+// ---------------------------------------------------------------------------
+
+interface CaseRecentRunsProps {
+  runs: CaseRecentRunOut[] | null;
+  error: string | null;
+}
+
+function CaseRecentRuns({ runs, error }: CaseRecentRunsProps) {
   if (error) {
     return (
       <Card data-testid="case-recent-runs-error" className="border-red-200">
@@ -83,9 +156,7 @@ function CaseRecentRuns({ caseId }: { caseId: string }) {
   return (
     <Card data-testid="case-recent-runs">
       <CardHeader>
-        <CardTitle className="text-base">
-          Recent runs ({runs.length})
-        </CardTitle>
+        <CardTitle className="text-base">Recent runs ({runs.length})</CardTitle>
       </CardHeader>
       <CardContent>
         <ul className="space-y-2">
@@ -108,7 +179,7 @@ function CaseRecentRuns({ caseId }: { caseId: string }) {
                 <span className="text-xs text-gray-500">{r.duration_ms}ms</span>
               )}
               <span className="text-xs text-gray-500 ml-auto">
-                {formatRelative(r.started_at)}
+                {formatRelativeUtc(r.started_at)}
               </span>
             </li>
           ))}
@@ -155,6 +226,11 @@ export default function CaseDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
+  // Lifted from CaseRecentRuns — single fetch, shared by both CaseTimeline and
+  // CaseRecentRuns so the endpoint is only called once.
+  const [recentRuns, setRecentRuns] = useState<CaseRecentRunOut[] | null>(null);
+  const [recentRunsError, setRecentRunsError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -179,6 +255,29 @@ export default function CaseDetailPage() {
             setNotFound(true);
           }
         }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  // Fetch recent-runs once, feed both CaseTimeline and CaseRecentRuns.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+
+    setRecentRuns(null);
+    setRecentRunsError(null);
+
+    apiFetch('/cases/{case_id}/recent-runs', 'get', {
+      path: { case_id: id },
+    })
+      .then((data) => {
+        if (!cancelled) setRecentRuns(data as CaseRecentRunOut[]);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setRecentRunsError(e instanceof Error ? e.message : String(e));
       });
 
     return () => {
@@ -343,8 +442,13 @@ export default function CaseDetailPage() {
         </Card>
       )}
 
+      {/* M6-D3 T1 — Case timeline sparkline (above Recent runs) */}
+      {recentRuns !== null && recentRunsError === null && (
+        <CaseTimeline runs={recentRuns} />
+      )}
+
       {/* M5-3 — Recent runs that touched this case */}
-      <CaseRecentRuns caseId={caseDetail.id} />
+      <CaseRecentRuns runs={recentRuns} error={recentRunsError} />
 
       {/* Error notice for invalid YAML cases */}
       {caseDetail.error && (
