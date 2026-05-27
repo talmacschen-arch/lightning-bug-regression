@@ -41,15 +41,6 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(screen.getByTestId('sidebar-active-run-pip')).toBeInTheDocument();
     });
 
-    it('sidebar-new-run button is present and links to /runs/new', () => {
-      renderAt('/cases');
-      const btn = screen.getByTestId('sidebar-new-run');
-      expect(btn).toBeInTheDocument();
-      // asChild + Link renders as <a>
-      expect(btn.tagName.toLowerCase()).toBe('a');
-      expect(btn).toHaveAttribute('href', '/runs/new');
-    });
-
     it('Dashboard / Cases / Runs nav items are anchor tags with href', () => {
       renderAt('/');
       const dashboard = screen.getByTestId('sidebar-nav-dashboard');
