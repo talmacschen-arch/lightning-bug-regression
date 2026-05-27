@@ -33,7 +33,7 @@ const fakeCaseDetail = {
   error: null,
 };
 
-// Helper: build a CaseRecentRunOut row
+// Helper: build a CaseRecentRunOut row (no target_version)
 function makeRun(
   run_id: number,
   case_status: string,
@@ -47,6 +47,26 @@ function makeRun(
     finished_at: null,
     case_status,
     duration_ms: duration_ms ?? null,
+    target_version: null,
+  };
+}
+
+// Helper: build a CaseRecentRunOut row WITH target_version
+function makeRunV(
+  run_id: number,
+  case_status: string,
+  started_at: string,
+  target_version: string | null,
+  duration_ms?: number | null,
+): object {
+  return {
+    run_id,
+    run_status: 'done',
+    started_at,
+    finished_at: null,
+    case_status,
+    duration_ms: duration_ms ?? null,
+    target_version,
   };
 }
 
@@ -463,5 +483,154 @@ describe('CaseTimeline — timeline hidden when runs are loading', () => {
 
     // CaseTimeline should not be visible yet (runs === null)
     expect(screen.queryByTestId('case-timeline')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M6-D3 T2 — tooltip version number + per-version pass rate (verify wiring)
+// ---------------------------------------------------------------------------
+
+describe('CaseTimeline — T2 version number in tooltip', () => {
+  it('tooltip contains target_version when present', async () => {
+    const recentRuns = [makeRunV(10, 'pass', '2026-05-28T10:00:00', 'v4.5.0')];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-timeline-cell-10')).toBeInTheDocument();
+    });
+
+    const cell = screen.getByTestId('case-timeline-cell-10');
+    const tooltip = cell.getAttribute('title') ?? '';
+    expect(tooltip).toContain('v4.5.0');
+    // Ensure literal "null" is not rendered
+    expect(tooltip).not.toContain('null');
+  });
+
+  it('tooltip does NOT contain "null" or version segment when target_version is null', async () => {
+    // makeRun uses null target_version
+    const recentRuns = [makeRun(5, 'pass', '2026-05-28T10:00:00')];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-timeline-cell-5')).toBeInTheDocument();
+    });
+
+    const cell = screen.getByTestId('case-timeline-cell-5');
+    const tooltip = cell.getAttribute('title') ?? '';
+    expect(tooltip).not.toContain('null');
+    // Should not end with "· " (trailing separator without version)
+    expect(tooltip).not.toMatch(/· $/);
+  });
+
+  it('tooltip includes version for versioned run but omits version segment for null-version run', async () => {
+    const recentRuns = [
+      makeRunV(2, 'pass', '2026-05-28T10:00:00', 'v4.6.0'),
+      makeRunV(1, 'fail', '2026-05-28T09:00:00', null),
+    ];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-timeline-cell-2')).toBeInTheDocument();
+    });
+
+    const cell2 = screen.getByTestId('case-timeline-cell-2');
+    expect(cell2.getAttribute('title')).toContain('v4.6.0');
+
+    const cell1 = screen.getByTestId('case-timeline-cell-1');
+    expect(cell1.getAttribute('title')).not.toContain('null');
+  });
+});
+
+describe('CaseTimeline — T2 per-version pass rate table', () => {
+  it('shows correct pass/total for each version', async () => {
+    // v4.5.0: 3 pass / 3 total; v4.6.0: 2 pass / 3 total
+    // API returns newest-first, so we put newest first:
+    const recentRuns = [
+      makeRunV(9, 'fail', '2026-05-28T09:00:00', 'v4.6.0'),
+      makeRunV(8, 'pass', '2026-05-28T08:00:00', 'v4.6.0'),
+      makeRunV(7, 'pass', '2026-05-28T07:00:00', 'v4.6.0'),
+      makeRunV(6, 'pass', '2026-05-28T06:00:00', 'v4.5.0'),
+      makeRunV(5, 'pass', '2026-05-28T05:00:00', 'v4.5.0'),
+      makeRunV(4, 'pass', '2026-05-28T04:00:00', 'v4.5.0'),
+    ];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('version-pass-rate')).toBeInTheDocument();
+    });
+
+    // v4.5.0: 3/3
+    const v450 = screen.getByTestId('version-pass-rate-v4.5.0');
+    expect(v450.textContent).toContain('3/3');
+
+    // v4.6.0: 2/3
+    const v460 = screen.getByTestId('version-pass-rate-v4.6.0');
+    expect(v460.textContent).toContain('2/3');
+  });
+
+  it('groups null target_version under "(no version)" label (not as "null")', async () => {
+    const recentRuns = [
+      makeRunV(3, 'pass', '2026-05-28T09:00:00', 'v4.5.0'),
+      makeRunV(2, 'fail', '2026-05-28T08:00:00', null),
+      makeRunV(1, 'pass', '2026-05-28T07:00:00', null),
+    ];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('version-pass-rate')).toBeInTheDocument();
+    });
+
+    // The "(no version)" bucket should exist and show 1/2 (1 pass, 1 fail)
+    const noVer = screen.getByTestId('version-pass-rate-(no version)');
+    expect(noVer.textContent).toContain('1/2');
+    // Must not render literal "null" anywhere in the table
+    expect(screen.getByTestId('version-pass-rate').textContent).not.toContain('null');
+  });
+
+  it('does not render version table when all runs have null target_version', async () => {
+    // Only null versions → no versioned data → table should be hidden
+    const recentRuns = [
+      makeRun(2, 'pass', '2026-05-28T09:00:00'),
+      makeRun(1, 'fail', '2026-05-28T08:00:00'),
+    ];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-timeline')).toBeInTheDocument();
+    });
+
+    // Table should not render when there is no actual version data
+    expect(screen.queryByTestId('version-pass-rate')).not.toBeInTheDocument();
+  });
+
+  it('per-version counts cover both "covers multiple versions" claim per version', async () => {
+    // 3 versions, each asserting correct individual counts (not just "table renders")
+    const recentRuns = [
+      makeRunV(6, 'fail', '2026-05-28T06:00:00', 'v3.0'),
+      makeRunV(5, 'pass', '2026-05-28T05:00:00', 'v3.0'),
+      makeRunV(4, 'fail', '2026-05-28T04:00:00', 'v2.0'),
+      makeRunV(3, 'fail', '2026-05-28T03:00:00', 'v2.0'),
+      makeRunV(2, 'pass', '2026-05-28T02:00:00', 'v1.0'),
+      makeRunV(1, 'pass', '2026-05-28T01:00:00', 'v1.0'),
+    ];
+    setupTwoFetches(recentRuns);
+    renderWithRoute('/cases/:id', '/cases/CASE-001');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('version-pass-rate')).toBeInTheDocument();
+    });
+
+    // v1.0: 2 pass / 2 total
+    expect(screen.getByTestId('version-pass-rate-v1.0').textContent).toContain('2/2');
+    // v2.0: 0 pass / 2 total
+    expect(screen.getByTestId('version-pass-rate-v2.0').textContent).toContain('0/2');
+    // v3.0: 1 pass / 2 total
+    expect(screen.getByTestId('version-pass-rate-v3.0').textContent).toContain('1/2');
   });
 });
