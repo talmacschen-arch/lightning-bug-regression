@@ -1,61 +1,35 @@
 {
-  "session_id": "m1-cleanup-p1-2026-05-24T0315Z",
-  "started_at": "2026-05-24T03:15:00+08:00",
-  "last_heartbeat": "2026-05-24T03:28:00+08:00",
-  "sprint_label": "M1-cleanup-p1",
+  "session_id": "smoke-pipeline-test-2026-05-28T0300Z",
+  "started_at": "2026-05-28T03:00:00+08:00",
+  "last_heartbeat": "2026-05-28T03:40:00+08:00",
+  "sprint_label": "smoke-pipeline-test",
   "round": 3,
   "round_budget": 10,
   "wall_budget_hours": 2,
-  "status": "done",
-  "note": "foreman session 又一次没返 final JSON 就 exit (R25 第 3 次违反，spec 硬化 commit 126bba3 5 min 前刚加但本 session 仍犯)。output 最后一行 'P1-sql done — PR #23 open, auto-merge armed. Waiting on P1-yaml (agent adc24589961a5157a).' 是 mid-flight 中间态。两个 PR 实际都 merged 了 (PR #23 + #24)，foreman 没观察到 P1-yaml merge 就退。state.json 由人手 reality-reconciliation 写。",
+  "status": "completed",
   "items_done": [
     {
-      "name": "P1-sql",
-      "evidence": "PR #23 squash-merged as 7735132 at 2026-05-23T19:25:44Z — sql_driver autocommit branch 加 SET statement_timeout 在 conn.autocommit = True 之前；§14 R5 超时分层对称恢复",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/23",
-      "merged_at": "2026-05-23T19:25:44Z",
-      "merge_commit": "7735132"
-    },
-    {
-      "name": "P1-yaml",
-      "evidence": "PR #24 squash-merged as 85af102 at 2026-05-23T19:26:26Z — yaml_loader 三合一：(R-4) _parse_expect dead code 删除；(R-5) _parse_setup_teardown 严格 reject list[dict]；(R-6) step alias 优先级 name>id + kind>driver 交换",
-      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/24",
-      "merged_at": "2026-05-23T19:26:26Z",
-      "merge_commit": "85af102"
-    },
-    {
-      "name": "M1-cleanup-p1-dogfood-rerun",
-      "evidence": "docs/m1-cleanup-p1-dogfood-2026-05-23-1927.md — 5/5 PASS 不退化，验证 R-4/R-5/R-6/R-7 都不破现有 case 加载和 DDL 执行路径",
-      "pr_url": null,
-      "merged_at": "2026-05-24T03:27:55+08:00",
-      "merge_commit": null
+      "name": "doc-pipeline-section",
+      "specialist": "doc-writer",
+      "pr_url": "https://github.com/talmacschen-arch/lightning-bug-regression/pull/183",
+      "pr_number": 183,
+      "pr_state": "merged",
+      "ci_gate_conclusion": "SUCCESS",
+      "reviewer_verdict": "APPROVE",
+      "smoke_verdict": "GO",
+      "merge_commit": "e41e88a09ad2baa8b82125222cab8f7593e31b16",
+      "merged_at": "2026-05-27T19:13:10Z",
+      "smoke_note": "smoke-runner 后置验收未由 foreman 跑完(foreman fire-and-forget 后台 dispatch 后即退出, r25_violation)。人工补跑 scripts/smoke.sh @ 2026-05-28T03:38Z 对 e41e88a 验收: GO (passed=2 failed=0 errored=0, 真集群链路通)。基线确立。"
     }
   ],
   "item_in_progress": null,
   "items_remaining": [],
-  "needs_human": [
-    {
-      "kind": "design_decision",
-      "summary": "R25 (foreman 不返 final JSON 就 exit) 连续 3 个 session 违反——M1-followup / M1-cleanup / M1-cleanup-p1。commit 126bba3 (5 min 前) 刚做的 spec 硬化（hard rule 8 + Loop step 8）没起效。建议：是否要求外层 Bash 包装强制 capture JSON / 还是接受 foreman 这条规则一直执行不好 / 还是改设计让 final JSON 是 mid-round 也写 state.json 兜底。",
-      "blocking_item": null,
-      "first_seen_at": "2026-05-24T03:28:00+08:00",
-      "attempt_count": 3,
-      "symptom_hash": "foreman:no-final-json-on-exit"
-    }
-  ],
+  "needs_human": [],
   "last_failures": [
     {
-      "item": "M1-cleanup-p1",
-      "specialist": "foreman",
-      "symptom_hash": "foreman:no-final-json-on-exit",
-      "count": 3,
-      "detail": "spec hardening commit 126bba3 加 hard rule 8 「EVERY exit path 必须 print final JSON to stdout」5 分钟后开本 sprint，foreman 仍只输出 1 行中间态 'P1-sql done. Waiting on P1-yaml.' 就 exit。模型不遵守自己 system prompt 里加的新规则。两个 PR 实际都成功 merge，所以工作没破，但 reality-reconciliation 还得人手做（第 3 次）。"
+      "kind": "orchestration-bug",
+      "summary": "foreman 在 merge 后把 smoke-runner '后台 dispatch' 后立即退出(exit 0, 397s < smoke 480s+),未等 GO/NO-GO,未 emit final JSON(r25_violation=true)。smoke 验收实际从未由编排跑完。根因待修(step 2)。",
+      "evidence": "docs/foreman-runs/smoke-pipeline-test-20260527T190750Z.json"
     }
-  ],
-  "previous_session": {
-    "id": "m1-cleanup-2026-05-24T0244Z",
-    "sprint": "M1-cleanup",
-    "status": "done",
-    "items_done": 4
-  }
+  ]
 }
