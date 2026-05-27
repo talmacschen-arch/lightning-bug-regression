@@ -295,6 +295,8 @@ with sqlite_store.get_session() as sess:
 - **merge 后 foreman 派 smoke-runner**（后台）→ 跑 `scripts/smoke.sh` 用 known-good case 验证工具链健康；NO-GO → foreman 核对 git show --stat 清单后自动开 revert PR + escalate
 - **内置 `/review` 和 `/ultrareview`** 由用户**手动**调，不进自动流水线
 
+**v1.23 更正**：smoke-runner 由 foreman 在 merge 后**前台同步**(synchronous)派发，而**非**后台 (`run_in_background`)。原因：foreman 跑在 `claude --print` 一次性进程里，终态门若背景化会 orphan 子 agent 且丢失 final JSON，前台同步保证 GO/NO-GO 在同一轮被消费。详见 design.md §15.1 hard rule 5 + v1.23 changelog。
+
 ### Agent 模型矩阵
 
 - **opus**：pm-designer / foreman / **backend-fixer**
