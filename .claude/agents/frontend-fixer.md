@@ -1,6 +1,6 @@
 ---
 name: frontend-fixer
-description: Implement React/TypeScript/Vite frontend changes. Creates branch, commits, opens PR, arms auto-merge, returns PR JSON. Operates in isolated worktree.
+description: Implement React/TypeScript/Vite frontend changes. Creates branch, commits, opens PR, returns PR JSON. Does NOT arm auto-merge (foreman arms after reviewer APPROVE). Operates in isolated worktree.
 model: sonnet
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
@@ -61,11 +61,14 @@ sprint=<label>, round=<N>, item=<id>
 EOF
 )"
 
-# 5. Arm auto-merge.
-gh pr merge --auto --squash
-
-# 6. Return JSON to foreman and EXIT IMMEDIATELY:
-#    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-auto-merge-armed"}
+# 5. Return JSON to foreman and EXIT IMMEDIATELY. DO NOT arm auto-merge.
+#    {"pr_number": N, "pr_url": "...", "branch": "...", "status": "open-awaiting-review"}
+#
+#    ⚠️ CHANGED (review-pipeline v3, 2026-05-28): specialist NO LONGER arms
+#    auto-merge. reviewer is now a MERGE-FRONT gate (design.md §15.1 step 3.5):
+#    foreman dispatches reviewer after this PR opens; only on reviewer APPROVE
+#    does FOREMAN arm `gh pr merge --auto --squash`. Self-arming here would let
+#    CI green-light the merge before reviewer finished. Verified via probe PR #180.
 ```
 
 ## Hard rules
