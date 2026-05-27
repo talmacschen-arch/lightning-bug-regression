@@ -46,6 +46,17 @@ export default function RunNewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const presetCategory = searchParams.get('category');
   const presetStatus = searchParams.get('status');
+  // M6-D1: explicit case_id list from ?case_ids= (comma-separated) and ?from_run= source hint
+  const presetCaseIdsRaw = searchParams.get('case_ids');
+  const presetFromRun = searchParams.get('from_run');
+  const presetTargetVersionParam = searchParams.get('target_version');
+  // Split + deduplicate; empty string handled by filtering
+  const presetCaseIdList: string[] = presetCaseIdsRaw
+    ? presetCaseIdsRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : [];
 
   const [categories, setCategories] = useState<CategoryOut[]>([]);
   const [casesByCategory, setCasesByCategory] = useState<Record<string, CaseSummary[]>>({});
@@ -60,10 +71,20 @@ export default function RunNewPage() {
   // to a NEW preset (?category=…&status=…) triggers re-apply, but the
   // same URL stays sticky after the user edits selection.
   const [appliedPresetKey, setAppliedPresetKey] = useState<string | null>(null);
-  const presetKey =
-    presetCategory || presetStatus
-      ? `${presetCategory ?? ''}|${presetStatus ?? ''}`
-      : null;
+  // M6-D1: separate notice state for deleted cases and stale target_version
+  const [skippedCount, setSkippedCount] = useState<number>(0);
+  const [staleVersionNotice, setStaleVersionNotice] = useState<string | null>(null);
+  // Preset key: case_ids list takes priority over category/status
+  const presetKey: string | null = (() => {
+    if (presetCaseIdList.length > 0) {
+      // Use the raw param string as key (stable; changes when user navigates to new rerun URL)
+      return `case_ids:${presetCaseIdsRaw ?? ''}|from_run:${presetFromRun ?? ''}`;
+    }
+    if (presetCategory || presetStatus) {
+      return `${presetCategory ?? ''}|${presetStatus ?? ''}`;
+    }
+    return null;
+  })();
 
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<ConflictError | null>(null);
@@ -152,11 +173,19 @@ export default function RunNewPage() {
     };
   }, []);
 
-  // M5-5 — Apply URL preset (?category=X&status=Y) after cases load.
-  // Pre-selects all cases whose category & status match the preset.
-  // Both params optional: only category → all in category;
-  //                       only status → all with that status anywhere;
-  //                       both → AND-filter
+  // M5-5 / M6-D1 — Apply URL preset after cases load.
+  //
+  // Priority: case_ids (explicit list) > category/status (filter)
+  //
+  // case_ids path:
+  //   - Intersect with cases that actually exist on disk (allCases).
+  //   - Dropped ids are counted in skippedCount for the banner.
+  //   - Guard: re-entry prevented via appliedPresetKey.
+  //
+  // category/status path (M5-5):
+  //   - Both params optional: only category → all in category;
+  //     only status → all with that status anywhere; both → AND-filter.
+  //
   // Re-applies if presetKey changes (e.g., user navigates to a NEW preset
   // via Dashboard Quick Action without page reload).
   useEffect(() => {
@@ -165,13 +194,28 @@ export default function RunNewPage() {
     if (appliedPresetKey === presetKey) return;
 
     const allCases = categories.flatMap((cat) => casesByCategory[cat.name] ?? []);
-    const matched = allCases
-      .filter((c) => (presetCategory ? c.category === presetCategory : true))
-      .filter((c) => (presetStatus ? c.status === presetStatus : true))
-      .map((c) => c.id);
 
-    setSelected(new Set(matched));
-    setAppliedPresetKey(presetKey);
+    if (presetCaseIdsRaw && presetCaseIdsRaw.length > 0) {
+      // M6-D1: explicit case_ids preset — intersect with disk-existing cases
+      const parsedIds = presetCaseIdsRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const existingIds = new Set(allCases.map((c) => c.id));
+      const surviving = parsedIds.filter((id) => existingIds.has(id));
+      const dropped = parsedIds.length - surviving.length;
+      setSelected(new Set(surviving));
+      setSkippedCount(dropped);
+      setAppliedPresetKey(presetKey);
+    } else {
+      // M5-5: category/status filter preset
+      const matched = allCases
+        .filter((c) => (presetCategory ? c.category === presetCategory : true))
+        .filter((c) => (presetStatus ? c.status === presetStatus : true))
+        .map((c) => c.id);
+      setSelected(new Set(matched));
+      setAppliedPresetKey(presetKey);
+    }
   }, [
     loading,
     categories,
@@ -180,13 +224,35 @@ export default function RunNewPage() {
     presetStatus,
     presetKey,
     appliedPresetKey,
+    presetCaseIdsRaw,
   ]);
 
-  // M5-5 — Clear the URL preset (also empties selection).
+  // M6-D1 — Apply ?target_version= preselect after version options load.
+  // If the passed value exists in the active version dropdown → preselect it.
+  // If NOT (stale/renamed/deleted) → fall back to default + show notice.
+  useEffect(() => {
+    if (presetTargetVersionParam === null) return;
+    if (versionOptions.length === 0 && !versionLoadError) return; // still loading
+    const exists = versionOptions.some((v) => v.name === presetTargetVersionParam);
+    if (exists) {
+      setTargetVersion(presetTargetVersionParam);
+      setStaleVersionNotice(null);
+    } else {
+      // Fall back to default (already set in the versions fetch effect)
+      setStaleVersionNotice(
+        `Version "${presetTargetVersionParam}" is no longer available — using default`,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionOptions, versionLoadError, presetTargetVersionParam]);
+
+  // M5-5 / M6-D1 — Clear the URL preset (also empties selection).
   function clearPreset() {
     setSearchParams({}, { replace: true });
     setSelected(new Set());
     setAppliedPresetKey(null);
+    setSkippedCount(0);
+    setStaleVersionNotice(null);
   }
 
   // Keep indeterminate state on DOM checkboxes (React does not support indeterminate as a prop)
@@ -321,8 +387,9 @@ export default function RunNewPage() {
 
   // M5-5 — Find matched cases count for banner display (does not affect
   // selection state; selection is committed via the effect above).
+  // Only used when NOT in case_ids preset mode.
   const presetMatchedCount =
-    presetKey !== null
+    presetKey !== null && presetCaseIdList.length === 0
       ? categories
           .flatMap((cat) => casesByCategory[cat.name] ?? [])
           .filter((c) => (presetCategory ? c.category === presetCategory : true))
@@ -333,8 +400,52 @@ export default function RunNewPage() {
     <div data-testid="page-run-new" className="p-4 space-y-4">
       <h1 className="text-2xl font-semibold">Trigger New Run</h1>
 
+      {/* M6-D1 — Rerun banner (case_ids present) */}
+      {presetKey !== null && presetCaseIdList.length > 0 && (
+        <div
+          data-testid="preset-banner"
+          className="flex flex-col gap-1 px-3 py-2 rounded border border-blue-200 bg-blue-50 text-sm"
+        >
+          <div className="flex items-center gap-3">
+            <span data-testid="preset-banner-label">
+              {presetFromRun
+                ? (
+                  <>
+                    <strong>Re-run from Run #{presetFromRun}</strong>:{' '}
+                    <span data-testid="preset-banner-count">
+                      {selected.size} case{selected.size === 1 ? '' : 's'}
+                    </span>
+                  </>
+                )
+                : (
+                  <>
+                    <strong>Preset</strong>:{' '}
+                    <span data-testid="preset-banner-count">
+                      {selected.size} case{selected.size === 1 ? '' : 's'}
+                    </span>
+                  </>
+                )
+              }
+            </span>
+            <button
+              type="button"
+              data-testid="preset-banner-clear"
+              className="ml-auto text-xs underline text-blue-700"
+              onClick={clearPreset}
+            >
+              Clear preset
+            </button>
+          </div>
+          {skippedCount > 0 && (
+            <span data-testid="preset-banner-skipped" className="text-amber-700 text-xs">
+              {skippedCount} case(s) from Run #{presetFromRun ?? '?'} no longer exist — skipped
+            </span>
+          )}
+        </div>
+      )}
+
       {/* M5-5 — Preset banner shown when URL has ?category=…&status=… */}
-      {presetKey !== null && (
+      {presetKey !== null && presetCaseIdList.length === 0 && (
         <div
           data-testid="preset-banner"
           className="flex items-center gap-3 px-3 py-2 rounded border border-blue-200 bg-blue-50 text-sm"
@@ -365,6 +476,16 @@ export default function RunNewPage() {
           >
             Clear preset
           </button>
+        </div>
+      )}
+
+      {/* M6-D1 — Stale target_version notice */}
+      {staleVersionNotice !== null && (
+        <div
+          data-testid="stale-version-notice"
+          className="px-3 py-2 rounded border border-amber-200 bg-amber-50 text-sm text-amber-800"
+        >
+          {staleVersionNotice}
         </div>
       )}
 
