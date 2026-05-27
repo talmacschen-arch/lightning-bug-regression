@@ -283,6 +283,18 @@ with sqlite_store.get_session() as sess:
 5. **reporter**（OS crontab @ 12:00 / 20:00）独立 fire，写 `docs/status/<ts>.md`
 6. 你查 `docs/status/` 目录看进度 + 处理 needs-human 决策项
 
+### Review 流水线（v1.22）
+
+**新流程**（2026-05-28）：
+
+- **specialist 开 PR 时不自武装 auto-merge**，返回 `open-awaiting-review` 状态
+- **foreman 派 reviewer**（merge 前置闸门）→ 跑 §14 + 6 域审查
+- **reviewer APPROVE** → foreman 武装 `gh pr merge --auto --squash`
+- **reviewer REQUEST_CHANGES** → foreman 派 fix，重新审查；REJECT 则停止
+- **CI 全绿** → GitHub 自动 squash merge 到 main
+- **merge 后 foreman 派 smoke-runner**（后台）→ 跑 `scripts/smoke.sh` 用 known-good case 验证工具链健康；NO-GO → foreman 核对 git show --stat 清单后自动开 revert PR + escalate
+- **内置 `/review` 和 `/ultrareview`** 由用户**手动**调，不进自动流水线
+
 ### Agent 模型矩阵
 
 - **opus**：pm-designer / foreman / **backend-fixer**
