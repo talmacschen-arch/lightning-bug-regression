@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/types';
@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { useFilters } from '@/lib/useFilters';
 
 type CategoryOut = components['schemas']['CategoryOut'];
 type CaseSummary = components['schemas']['CaseSummary'];
@@ -37,77 +38,131 @@ function statusVariant(
 interface CasesListProps {
   category: CategoryOut;
   cases: CaseSummary[];
+  /** Currently selected tag filters (client-side OR multi-select) */
+  selectedTags: string[];
+  /** All available tags for this category's loaded cases */
+  availableTags: string[];
+  onTagToggle: (tag: string) => void;
+  /** The current search query, for the empty state message */
+  q: string;
 }
 
-function CasesList({ category, cases }: CasesListProps) {
-  if (cases.length === 0) {
-    return (
-      <div
-        data-testid={`cases-empty-${category.name}`}
-        className="pt-8 text-center text-sm text-muted-foreground"
-      >
-        No cases found in this category.
-      </div>
-    );
+function CasesList({ category, cases, selectedTags, availableTags, onTagToggle, q }: CasesListProps) {
+  // Apply client-side tag filter (OR across selected tags) after server q
+  const filtered =
+    selectedTags.length === 0
+      ? cases
+      : cases.filter(
+          (c) =>
+            c.tags !== null &&
+            c.tags !== undefined &&
+            c.tags.some((t) => selectedTags.includes(t)),
+        );
+
+  const isEmpty = filtered.length === 0;
+
+  // Build empty message
+  let emptyMsg = 'No cases found in this category.';
+  if (q || selectedTags.length > 0) {
+    const parts: string[] = [];
+    if (q) parts.push(`"${q}"`);
+    if (selectedTags.length > 0) parts.push(`tags: ${selectedTags.join(', ')}`);
+    emptyMsg = `No cases match ${parts.join(' + ')}`;
   }
 
   return (
-    <div
-      data-testid={`cases-list-${category.name}`}
-      className="space-y-3 pt-4"
-    >
-      {cases.map((c) => (
-        <Card key={c.id} data-testid={`case-card-${c.id}`}>
-          <CardContent className="pt-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span
-                    data-testid={`case-id-${c.id}`}
-                    className="text-xs font-mono text-muted-foreground"
-                  >
-                    {c.id}
-                  </span>
-                  <Badge
-                    variant={statusVariant(c.status, category)}
-                    data-testid={`case-status-${c.id}`}
-                  >
-                    {c.status}
-                  </Badge>
-                </div>
-                {c.title !== null && c.title !== undefined && (
-                  <p
-                    data-testid={`case-title-${c.id}`}
-                    className="mt-1 text-sm font-medium truncate"
-                  >
-                    {c.title}
-                  </p>
-                )}
-                {c.tags !== null && c.tags !== undefined && c.tags.length > 0 && (
-                  <div
-                    data-testid={`case-tags-${c.id}`}
-                    className="mt-2 flex flex-wrap gap-1"
-                  >
-                    {c.tags.map((tag) => (
+    <div>
+      {/* Tag chips — rendered only when there are tags available */}
+      {availableTags.length > 0 && (
+        <div
+          data-testid={`cases-tag-filters-${category.name}`}
+          className="mt-4 flex flex-wrap gap-1"
+        >
+          {availableTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              data-testid={`cases-tag-filter-${tag}`}
+              onClick={() => onTagToggle(tag)}
+              className={[
+                'inline-flex items-center rounded-sm px-2 py-0.5 text-xs transition-colors',
+                selectedTags.includes(tag)
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80',
+              ].join(' ')}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isEmpty ? (
+        <div
+          data-testid="cases-search-empty"
+          className="pt-8 text-center text-sm text-muted-foreground"
+        >
+          {emptyMsg}
+        </div>
+      ) : (
+        <div
+          data-testid={`cases-list-${category.name}`}
+          className="space-y-3 pt-4"
+        >
+          {filtered.map((c) => (
+            <Card key={c.id} data-testid={`case-card-${c.id}`}>
+              <CardContent className="pt-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span
-                        key={tag}
-                        className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                        data-testid={`case-id-${c.id}`}
+                        className="text-xs font-mono text-muted-foreground"
                       >
-                        {tag}
+                        {c.id}
                       </span>
-                    ))}
+                      <Badge
+                        variant={statusVariant(c.status, category)}
+                        data-testid={`case-status-${c.id}`}
+                      >
+                        {c.status}
+                      </Badge>
+                    </div>
+                    {c.title !== null && c.title !== undefined && (
+                      <p
+                        data-testid={`case-title-${c.id}`}
+                        className="mt-1 text-sm font-medium truncate"
+                      >
+                        {c.title}
+                      </p>
+                    )}
+                    {c.tags !== null && c.tags !== undefined && c.tags.length > 0 && (
+                      <div
+                        data-testid={`case-tags-${c.id}`}
+                        className="mt-2 flex flex-wrap gap-1"
+                      >
+                        {c.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              {/* Latest run result placeholder — to be filled by M2-8 detail */}
-              <div
-                data-testid={`case-latest-run-${c.id}`}
-                className="text-xs text-muted-foreground shrink-0"
-              />
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+                  {/* Latest run result placeholder — to be filled by M2-8 detail */}
+                  <div
+                    data-testid={`case-latest-run-${c.id}`}
+                    className="text-xs text-muted-foreground shrink-0"
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -123,75 +178,149 @@ interface TabPanelState {
 // ---- page ------------------------------------------------------------------
 
 export default function CasesPage() {
+  const { filters, setFilter } = useFilters();
+
+  // Local input value (debounced before writing to URL via setFilter)
+  const [inputQ, setInputQ] = useState(filters.q);
+
+  // Keep inputQ in sync when `filters.q` changes externally (e.g. browser
+  // back/forward navigation). Use a ref to detect "external" changes only.
+  const prevUrlQ = useRef(filters.q);
+  useEffect(() => {
+    if (filters.q !== prevUrlQ.current) {
+      setInputQ(filters.q);
+      prevUrlQ.current = filters.q;
+    }
+  }, [filters.q]);
+
+  // Debounce: after 300ms of no typing, push inputQ to URL
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setInputQ(value);
+      if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        prevUrlQ.current = value;
+        setFilter('q', value);
+      }, 300);
+    },
+    [setFilter],
+  );
+
+  // The "committed" q used for server requests is always filters.q (URL-synced)
+  const serverQ = filters.q;
+
   const [categories, setCategories] = useState<CategoryOut[] | null>(null);
   const [activeTab, setActiveTab] = useState<string>('');
   const [catLoading, setCatLoading] = useState(true);
   const [catError, setCatError] = useState<string | null>(null);
 
-  // Per-category fetch state keyed by category name
+  // Per-category+q fetch state keyed by "${categoryName}::${q}"
+  // q participates in the cache key so that changing q invalidates loaded
+  // data and triggers a re-fetch (design: §M6-D4).
   const [tabStates, setTabStates] = useState<Record<string, TabPanelState>>({});
 
-  const fetchCasesForCategory = useCallback(
-    (categoryName: string) => {
-      // Only fetch if not already loading/loaded
-      setTabStates((prev) => {
-        if (prev[categoryName]?.cases !== null && prev[categoryName]?.cases !== undefined) {
-          return prev; // already loaded
-        }
-        return {
-          ...prev,
-          [categoryName]: { loading: true, error: null, cases: null },
-        };
-      });
+  // Mirror tabStates in a ref for synchronous cache-hit checks inside
+  // fetchCasesForCategory. setTabStates is async-batched, so we cannot
+  // use prev inside the updater to gate the apiFetch call — the fetch
+  // would already have been issued before React processes the updater.
+  const tabStatesRef = useRef<Record<string, TabPanelState>>({});
+  // Keep ref in sync whenever state updates.
+  useEffect(() => {
+    tabStatesRef.current = tabStates;
+  });
 
-      apiFetch('/cases', 'get', { query: { category: categoryName } })
+  // Client-side tag selection state (per-tab, OR multi-select)
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  // Reset tag selection when the active tab or server q changes
+  useEffect(() => {
+    setSelectedTags([]);
+  }, [activeTab, serverQ]);
+
+  const cacheKey = useCallback(
+    (categoryName: string, q: string) => `${categoryName}::${q}`,
+    [],
+  );
+
+  const fetchCasesForCategory = useCallback(
+    (categoryName: string, q: string) => {
+      const key = `${categoryName}::${q}`;
+      // Synchronous cache-hit check via ref — skip fetch if already loaded.
+      const cached = tabStatesRef.current[key];
+      if (cached?.cases !== null && cached?.cases !== undefined) {
+        return; // already loaded for this category+q combo
+      }
+
+      // Mark as loading immediately so the UI shows the spinner.
+      setTabStates((prev) => ({
+        ...prev,
+        [key]: { loading: true, error: null, cases: null },
+      }));
+      // Also update ref synchronously so rapid double-calls don't double-fetch.
+      tabStatesRef.current = {
+        ...tabStatesRef.current,
+        [key]: { loading: true, error: null, cases: null },
+      };
+
+      const query: Record<string, string> = { category: categoryName };
+      if (q) query.q = q;
+
+      apiFetch('/cases', 'get', { query })
         .then((data) => {
-          setTabStates((prev) => ({
-            ...prev,
-            [categoryName]: { loading: false, error: null, cases: data as CaseSummary[] },
-          }));
+          const loaded: TabPanelState = { loading: false, error: null, cases: data as CaseSummary[] };
+          setTabStates((prev) => ({ ...prev, [key]: loaded }));
+          tabStatesRef.current = { ...tabStatesRef.current, [key]: loaded };
         })
         .catch((err: unknown) => {
-          setTabStates((prev) => ({
-            ...prev,
-            [categoryName]: {
-              loading: false,
-              error: err instanceof Error ? err.message : String(err),
-              cases: null,
-            },
-          }));
+          const errState: TabPanelState = {
+            loading: false,
+            error: err instanceof Error ? err.message : String(err),
+            cases: null,
+          };
+          setTabStates((prev) => ({ ...prev, [key]: errState }));
+          tabStatesRef.current = { ...tabStatesRef.current, [key]: errState };
         });
     },
     [],
   );
 
   const retryCasesForCategory = useCallback(
-    (categoryName: string) => {
-      setTabStates((prev) => ({
-        ...prev,
-        [categoryName]: { loading: true, error: null, cases: null },
-      }));
+    (categoryName: string, q: string) => {
+      const key = `${categoryName}::${q}`;
+      const errState0: TabPanelState = { loading: true, error: null, cases: null };
+      setTabStates((prev) => ({ ...prev, [key]: errState0 }));
+      tabStatesRef.current = { ...tabStatesRef.current, [key]: errState0 };
 
-      apiFetch('/cases', 'get', { query: { category: categoryName } })
+      const query: Record<string, string> = { category: categoryName };
+      if (q) query.q = q;
+
+      apiFetch('/cases', 'get', { query })
         .then((data) => {
-          setTabStates((prev) => ({
-            ...prev,
-            [categoryName]: { loading: false, error: null, cases: data as CaseSummary[] },
-          }));
+          const loaded: TabPanelState = { loading: false, error: null, cases: data as CaseSummary[] };
+          setTabStates((prev) => ({ ...prev, [key]: loaded }));
+          tabStatesRef.current = { ...tabStatesRef.current, [key]: loaded };
         })
         .catch((err: unknown) => {
-          setTabStates((prev) => ({
-            ...prev,
-            [categoryName]: {
-              loading: false,
-              error: err instanceof Error ? err.message : String(err),
-              cases: null,
-            },
-          }));
+          const errState: TabPanelState = {
+            loading: false,
+            error: err instanceof Error ? err.message : String(err),
+            cases: null,
+          };
+          setTabStates((prev) => ({ ...prev, [key]: errState }));
+          tabStatesRef.current = { ...tabStatesRef.current, [key]: errState };
         });
     },
     [],
   );
+
+  // Re-fetch active tab whenever serverQ changes (and we have a tab selected)
+  useEffect(() => {
+    if (activeTab) {
+      fetchCasesForCategory(activeTab, serverQ);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverQ]);
 
   const fetchCategories = useCallback(() => {
     setCatLoading(true);
@@ -205,7 +334,7 @@ export default function CasesPage() {
         if (cats.length > 0) {
           const first = cats[0].name;
           setActiveTab(first);
-          fetchCasesForCategory(first);
+          fetchCasesForCategory(first, serverQ);
         }
       })
       .catch((err: unknown) => {
@@ -214,6 +343,10 @@ export default function CasesPage() {
       .finally(() => {
         setCatLoading(false);
       });
+    // fetchCasesForCategory is stable (no deps that change); serverQ is read
+    // at call time and passed explicitly — no need to re-run fetchCategories
+    // when serverQ changes (the serverQ effect above handles tab re-fetch).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchCasesForCategory]);
 
   useEffect(() => {
@@ -223,10 +356,29 @@ export default function CasesPage() {
   const handleTabChange = useCallback(
     (value: string) => {
       setActiveTab(value);
-      fetchCasesForCategory(value);
+      fetchCasesForCategory(value, serverQ);
     },
-    [fetchCasesForCategory],
+    [fetchCasesForCategory, serverQ],
   );
+
+  // Collect unique tags for the current tab's loaded cases (for the chip bar)
+  const activeState = activeTab ? tabStates[cacheKey(activeTab, serverQ)] : undefined;
+  const availableTags = useMemo(() => {
+    const cases = activeState?.cases ?? [];
+    const seen = new Set<string>();
+    for (const c of cases) {
+      if (c.tags) {
+        for (const t of c.tags) seen.add(t);
+      }
+    }
+    return Array.from(seen).sort();
+  }, [activeState]);
+
+  const handleTagToggle = useCallback((tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+    );
+  }, []);
 
   if (catLoading) {
     return (
@@ -286,6 +438,19 @@ export default function CasesPage() {
           <Link to="/cases/new">+ New Case</Link>
         </Button>
       </div>
+
+      {/* Search input — debounced ~300ms, synced to URL ?q= */}
+      <div className="mb-4">
+        <input
+          type="search"
+          data-testid="cases-search-input"
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          placeholder="Search cases by id, title, description, tags…"
+          value={inputQ}
+          onChange={(e) => handleInputChange(e.target.value)}
+        />
+      </div>
+
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
@@ -303,7 +468,8 @@ export default function CasesPage() {
           ))}
         </TabsList>
         {categories.map((cat) => {
-          const state = tabStates[cat.name];
+          const key = cacheKey(cat.name, serverQ);
+          const state = tabStates[key];
           return (
             <TabsContent key={cat.name} value={cat.name}>
               {state === undefined || state.loading ? (
@@ -326,14 +492,21 @@ export default function CasesPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => retryCasesForCategory(cat.name)}
+                    onClick={() => retryCasesForCategory(cat.name, serverQ)}
                     data-testid={`cases-retry-${cat.name}`}
                   >
                     Retry
                   </Button>
                 </div>
               ) : (
-                <CasesList category={cat} cases={state.cases ?? []} />
+                <CasesList
+                  category={cat}
+                  cases={state.cases ?? []}
+                  selectedTags={cat.name === activeTab ? selectedTags : []}
+                  availableTags={cat.name === activeTab ? availableTags : []}
+                  onTagToggle={handleTagToggle}
+                  q={serverQ}
+                />
               )}
             </TabsContent>
           );

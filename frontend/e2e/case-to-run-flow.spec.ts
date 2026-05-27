@@ -152,7 +152,7 @@ test.describe('M2-9 case → run → result happy path', () => {
 
     // Extra: click extension tab to exercise empty-state path, then switch back
     await page.click('[data-testid="tab-extension"]');
-    await page.waitForSelector('[data-testid="cases-empty-extension"]');
+    await page.waitForSelector('[data-testid="cases-search-empty"]');
     await page.click('[data-testid="tab-bug_regression"]');
 
     // 3. Click bug_regression tab (already done via back-click above, but explicit for clarity)
