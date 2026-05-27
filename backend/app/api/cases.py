@@ -95,6 +95,7 @@ class CaseRecentRunOut(BaseModel):
     finished_at: datetime | None = None
     case_status: str | None = None  # this case's result in that run
     duration_ms: int | None = None
+    target_version: str | None = None  # run's target version (M6-D3 Tier2)
 
 
 class ValidateRequest(BaseModel):
@@ -411,10 +412,10 @@ def get_case(case_id: str) -> CaseDetail:
     "/cases/{case_id}/recent-runs",
     response_model=list[CaseRecentRunOut],
 )
-def get_case_recent_runs(case_id: str, limit: int = 10) -> list[CaseRecentRunOut]:
+def get_case_recent_runs(case_id: str, limit: int = 20) -> list[CaseRecentRunOut]:
     """List most recent runs that touched this case (M5-3 cross-page link).
 
-    Returns up to `limit` (default 10) `(case_result, run)` rows joined
+    Returns up to `limit` (default 20) `(case_result, run)` rows joined
     on `case_results.run_id = runs.id`, ordered by `runs.started_at` DESC.
     Empty list when the case has never appeared in any run — that's not
     an error.
@@ -439,6 +440,7 @@ def get_case_recent_runs(case_id: str, limit: int = 10) -> list[CaseRecentRunOut
                     finished_at=as_utc(run.finished_at),
                     case_status=case_result.status,
                     duration_ms=case_result.duration_ms,
+                    target_version=run.target_version,
                 )
             )
     return out
