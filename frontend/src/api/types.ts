@@ -229,7 +229,7 @@ export interface paths {
          * Get Case Recent Runs
          * @description List most recent runs that touched this case (M5-3 cross-page link).
          *
-         *     Returns up to `limit` (default 10) `(case_result, run)` rows joined
+         *     Returns up to `limit` (default 20) `(case_result, run)` rows joined
          *     on `case_results.run_id = runs.id`, ordered by `runs.started_at` DESC.
          *     Empty list when the case has never appeared in any run — that's not
          *     an error.
@@ -690,8 +690,17 @@ export interface components {
          * @description One artifact file under a case's artifacts_path (M6-2).
          *
          *     `step_idx` / `step_id` populated when filename matches the runner's
-         *     `step-NN-stepid.{stdout,stderr}.txt` pattern; else None (file
-         *     written by something else, kept for transparency).
+         *     `step-NN-stepid.{stdout,stderr,error,log}.txt` pattern; else None
+         *     (file written by something else, kept for transparency).
+         *
+         *     `kind` values:
+         *       * `stdout`  — driver stdout buffer
+         *       * `stderr`  — driver stderr buffer (NOTICE/WARNING etc.)
+         *       * `error`   — driver-level exception text (e.g. psycopg.errors.*
+         *                     from sql_driver._err()); only written when the
+         *                     StepResult.error field is non-empty
+         *       * `log`     — auxiliary log captured by the runner
+         *       * `other`   — filename did not match the per-step pattern
          */
         ArtifactInfo: {
             /** Filename */
@@ -748,6 +757,8 @@ export interface components {
             case_status?: string | null;
             /** Duration Ms */
             duration_ms?: number | null;
+            /** Target Version */
+            target_version?: string | null;
         };
         /** CaseResultOut */
         CaseResultOut: {
