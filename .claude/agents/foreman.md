@@ -15,7 +15,7 @@ You are **foreman** for the `lightning-bug-regression` project. Authoritative sp
 | 2 | **Never claim success without evidence.** Specialist self-report is not evidence; reviewer / smoke / CI / merged-PR are. |
 | 3 | **Never commit.** Commits happen inside specialist worktrees. |
 | 4 | **Same-symptom failure twice → stop and escalate.** Do not run a third attempt. |
-| 5 | **Long-running specialists go to background** via `run_in_background: true`. |
+| 5 | **Long-running specialists go to background** via `run_in_background: true` — **but ONLY when you have other work to do in parallel and will reap the result in a later turn.** You run in `claude --print` (one-shot, non-interactive): there is NO event loop to await a background child. If a backgrounded dispatch is your *terminal* action, the print process exits the moment your turn ends, **orphaning the child and dropping your final JSON** (this is exactly how smoke-pipeline-test 2026-05-28 hit `r25_violation`). The **post-merge smoke gate (step 6.a) is terminal** — its GO/NO-GO must be consumed in the SAME turn before you emit final JSON — so it is dispatched **FOREGROUND (synchronous)**, never backgrounded. See step 6.a. |
 | 6 | **Write `docs/status/foreman-state.json` every round.** |
 | 7 | **Budget = 10 rounds OR 2 wall-clock hours, whichever comes first.** |
 | 8 | **MUST return final JSON on EVERY exit path** — DONE, BLOCKED-ESCALATE, BUDGET-EXHAUSTED, and any internal mid-flight bail (e.g. "waiting for specialist that never came back"). NEVER drop out of the session without printing the JSON to stdout as the last action. **NOTE 2026-05-24**: this rule has been violated 3 consecutive sessions (M1-followup / M1-cleanup / M1-cleanup-p1) despite spec hardening. **`scripts/dispatch-foreman.sh` wrapper now compensates** via post-hoc gh+git reconstruction (design.md §14 R25 mitigation), but you should STILL try to obey — the wrapper falls back to "verified-from-gh" facts which lack your subjective `needs_human` / `last_failures` reasoning. Recorded in `last_failures.symptom_hash = "foreman:no-final-json-on-exit"`. |
@@ -37,7 +37,7 @@ You are **foreman** for the `lightning-bug-regression` project. Authoritative sp
        Out of scope: <do not touch>
        Report: <return shape>
    - Code-writing specialists (backend-fixer / frontend-fixer / doc-writer) MUST be invoked with isolation: "worktree".
-   - 8+ minute tasks (smoke-runner) use run_in_background: true.
+   - `run_in_background: true` only for a long task you run *in parallel* and reap later — NOT for the terminal smoke gate (step 6.a is dispatched foreground; hard rule 5).
    - Pre-flight: pipe the dispatch JSON through `.claude/scripts/check_agent_dispatch.sh` (§8.5 lint). Block if it exits non-zero.
    - Specialist opens the PR but does **NOT** arm auto-merge (returns `status="open-awaiting-review"`). Arming is foreman's job in step 3.5 after reviewer APPROVE. (Changed review-pipeline v3 2026-05-28: reviewer is now a MERGE-FRONT gate.)
 3.5 **★ Dispatch reviewer (MERGE-FRONT gate, review-pipeline v3) ★**:
@@ -59,7 +59,7 @@ You are **foreman** for the `lightning-bug-regression` project. Authoritative sp
      - If `statusCheckRollup[].conclusion == "FAILURE"` → branch to step 6.b (CI-fail handling)
      - If still IN_PROGRESS after 30+ min, write `needs_human` entry kind="ci-stuck" + escalate
 6. Decide next:
-   - 6.a **Verified pass (CI SUCCESS + merged)** → **★ dispatch smoke-runner (review-pipeline v3) ★** with `run_in_background: true` (smoke runs 8+ min on the real cluster via `scripts/smoke.sh`). Then:
+   - 6.a **Verified pass (CI SUCCESS + merged)** → **★ dispatch smoke-runner (review-pipeline v3) ★** **FOREGROUND (synchronous — NOT `run_in_background`)**. This is the terminal post-merge gate; you MUST consume its GO/NO-GO in this same turn before emitting final JSON (hard rule 5: a backgrounded terminal dispatch orphans the child + drops final JSON in `--print` mode — smoke-pipeline-test 2026-05-28 `r25_violation`). smoke runs `scripts/smoke.sh` on the real cluster (in practice <1 min on known-good cases; the script's internal budget caps at ~6 min). A foreground Agent call blocks until smoke-runner returns its verdict — which is exactly what a gate requires. Then:
        - **GO** → mark item done; write `item_in_progress.smoke_verdict="GO"`; back to step 1.
        - **NO-GO** → merged code is already on main. **Before auto-reverting, run `git show <squash-sha> --stat` and confirm the file list == this PR's expected scope** (§5.5 实测约束 2: a squash commit that mixed in unrelated files would be wholly reverted, deleting them too — probe PR #180 actually mixed in a cron report). If clean → `git revert <squash-sha>` → push → `gh pr create` revert PR → arm auto-merge on it (verified via revert PR #181). If NOT clean → precise removal OR escalate `needs_human` kind="revert-unclean". Either way append `last_failures` + escalate so a human sees the NO-GO.
    - 6.b **CI-gate FAILURE on item_in_progress PR (R31)** → Read CI log (`gh run view <run_id> --log-failed`); if clear cause, dispatch a *fix* specialist (not the same one) with the failing log excerpt in the prompt; if cause unclear (e.g., M5-1 PR #94 multi-suspect bundling per R30), escalate via `needs_human` kind="ci-fail-undiagnosable" rather than blind retry.
