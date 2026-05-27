@@ -22,6 +22,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation, NavLink, useNavigate } from 'react-router-dom';
 import { fetchMe, logout, type MeResponse } from '@/lib/auth';
+import { Button } from '@/components/ui/button';
 
 interface NavItemProps {
   to: string;
@@ -98,6 +99,11 @@ export function Layout() {
         <Link to="/" className="sidebar-brand">
           Lightning Bug Regression
         </Link>
+        <Button asChild data-testid="sidebar-new-run" className="sidebar-new-run-btn">
+          <Link to="/runs/new">
+            <span aria-hidden="true">▶</span>{' '}New Run
+          </Link>
+        </Button>
         <nav className="sidebar-nav">
           <NavItem to="/dashboard" label="Dashboard" testId="sidebar-nav-dashboard" />
           <NavItem to="/cases" label="Cases" testId="sidebar-nav-cases" />
