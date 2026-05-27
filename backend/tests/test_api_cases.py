@@ -279,12 +279,17 @@ def test_list_empty_when_no_categories_directories_exist(
 def _seed_runs_and_results(
     sess: Session,
     runs_and_results: list[tuple[str, list[tuple[str, str | None]]]],
+    *,
+    target_versions: list[str | None] | None = None,
 ) -> None:
     """Helper: seed `runs` + `case_results` for the recent-runs endpoint test.
 
     `runs_and_results` is a list of (run_status, [(case_id, case_status), ...])
     pairs in chronological order. Each call adds a run with a `started_at`
     spaced 1 hour apart so ordering is deterministic.
+
+    `target_versions`, when given, sets `runs.target_version` per run by index
+    (same length as `runs_and_results`); otherwise each run's version is None.
     """
     import datetime as dt
 
@@ -296,6 +301,7 @@ def _seed_runs_and_results(
             started_at=base + dt.timedelta(hours=i),
             finished_at=base + dt.timedelta(hours=i, minutes=10),
             status=run_status,
+            target_version=(target_versions[i] if target_versions else None),
             total=len(rows),
             passed=sum(1 for _, s in rows if s == "pass"),
             failed=sum(1 for _, s in rows if s == "fail"),
@@ -378,20 +384,70 @@ def test_recent_runs_only_returns_rows_for_the_requested_case_id(
 def test_recent_runs_respects_limit_parameter(
     client_with_real_cases: TestClient,
 ) -> None:
-    """`?limit=N` clamps the result; default is 10."""
+    """`?limit=N` clamps the result; default is 20 (M6-D3 Tier2 multi-version)."""
     case_id = "lg-bug-0004-ctas-rowcount-zero"
     with sqlite_store.get_session() as sess:
         _seed_runs_and_results(
             sess,
-            [("pass", [(case_id, "pass")]) for _ in range(15)],
+            [("pass", [(case_id, "pass")]) for _ in range(25)],
         )
 
-    # default limit=10
+    # default limit=20
     resp_default = client_with_real_cases.get(f"/cases/{case_id}/recent-runs")
     assert resp_default.status_code == 200
-    assert len(resp_default.json()) == 10
+    assert len(resp_default.json()) == 20
 
     # explicit limit=3
     resp_three = client_with_real_cases.get(f"/cases/{case_id}/recent-runs?limit=3")
     assert resp_three.status_code == 200
     assert len(resp_three.json()) == 3
+
+
+def test_recent_runs_includes_target_version(
+    client_with_real_cases: TestClient,
+) -> None:
+    """A run with a specific target_version → that exact value in the response row.
+
+    Wiring assertion for M6-D3 Tier2: the endpoint must surface
+    `runs.target_version` per row so the frontend can build the
+    cross-version trend view.
+    """
+    case_id = "lg-bug-0005-lc-ctype-upper"
+    with sqlite_store.get_session() as sess:
+        _seed_runs_and_results(
+            sess,
+            [
+                ("pass", [(case_id, "pass")]),  # 00:00 (oldest)
+                ("fail", [(case_id, "fail")]),  # 01:00 (newest)
+            ],
+            target_versions=["v4.5.0", "v4.6.0"],
+        )
+
+    resp = client_with_real_cases.get(f"/cases/{case_id}/recent-runs")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 2
+    # Newest first → v4.6.0 then v4.5.0; assert the exact wiring per row.
+    assert rows[0]["target_version"] == "v4.6.0"
+    assert rows[0]["case_status"] == "fail"
+    assert rows[1]["target_version"] == "v4.5.0"
+    assert rows[1]["case_status"] == "pass"
+
+
+def test_recent_runs_target_version_null_does_not_raise(
+    client_with_real_cases: TestClient,
+) -> None:
+    """A run with NULL target_version → field is null in the response, no error."""
+    case_id = "lg-bug-0007-orca-sort-pathkey"
+    with sqlite_store.get_session() as sess:
+        # No target_versions kwarg → run.target_version stays None.
+        _seed_runs_and_results(
+            sess,
+            [("pass", [(case_id, "pass")])],
+        )
+
+    resp = client_with_real_cases.get(f"/cases/{case_id}/recent-runs")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["target_version"] is None
