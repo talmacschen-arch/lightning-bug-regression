@@ -470,6 +470,77 @@ describe('RunDetailPage', () => {
     expect(dlLink.getAttribute('href')).toContain('/artifacts/step-00-setup.stdout.txt');
   });
 
+  it('retry after error: collapse then re-expand with successful fetch renders content (error div gone)', async () => {
+    // Call order: [0] run, [1] artifacts list, [2] file text → 500 error,
+    // [3] file text → success on retry.
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone)) // run detail
+      .mockResolvedValueOnce(mockJsonResponse(FAKE_ARTIFACTS_FOR_VIEW)) // artifacts list
+      .mockResolvedValueOnce({
+        // first fetch: server error
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve(''),
+        json: () => Promise.resolve({}),
+      })
+      .mockResolvedValueOnce({
+        // second fetch on retry: success
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('retry content line'),
+        json: () => {
+          throw new Error('should not call json');
+        },
+      });
+
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+
+    // Open artifacts panel
+    act(() => screen.getByTestId('artifacts-toggle-bug-001').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-list-bug-001')).toBeInTheDocument();
+    });
+
+    // First View click → fetch fails → error div shown
+    act(() => screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt').click());
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('artifact-view-error-bug-001-step-00-setup.stdout.txt'),
+      ).toBeInTheDocument();
+    });
+    // Content must not be shown on failure
+    expect(
+      screen.queryByTestId('artifact-content-bug-001-step-00-setup.stdout.txt'),
+    ).toBeNull();
+
+    // Collapse by clicking Hide
+    act(() => screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt').click());
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('artifact-view-error-bug-001-step-00-setup.stdout.txt'),
+      ).toBeNull();
+    });
+
+    // Re-expand → triggers retry fetch which succeeds
+    act(() => screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt').click());
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('artifact-content-bug-001-step-00-setup.stdout.txt'),
+      ).toBeInTheDocument();
+    });
+    // Content correct
+    expect(
+      screen.getByTestId('artifact-content-bug-001-step-00-setup.stdout.txt'),
+    ).toHaveTextContent('retry content line');
+    // Error div must be gone (stale errorCache was cleared)
+    expect(
+      screen.queryByTestId('artifact-view-error-bug-001-step-00-setup.stdout.txt'),
+    ).toBeNull();
+  });
+
   it('size_bytes > 512KB shows "Download instead" instead of fetching content', async () => {
     const LARGE_ARTIFACT = [
       {

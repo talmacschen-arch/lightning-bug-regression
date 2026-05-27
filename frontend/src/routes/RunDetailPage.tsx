@@ -138,13 +138,18 @@ function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
       return;
     }
 
-    // First expand: mark loading + expanded, then fetch
+    // First expand (or retry after error): clear any stale error, mark loading +
+    // expanded, then fetch. Without clearing errorCache here, a successful retry
+    // would leave both contentError and content defined, rendering both the error
+    // div and the content <pre> simultaneously.
     setViewState((prev) => {
       const loadingSet = new Set(prev.loadingSet);
       loadingSet.add(filename);
       const expandedSet = new Set(prev.expandedSet);
       expandedSet.add(filename);
-      return { ...prev, loadingSet, expandedSet };
+      const errorCache = new Map(prev.errorCache);
+      errorCache.delete(filename);
+      return { ...prev, loadingSet, expandedSet, errorCache };
     });
 
     const url = `${API_BASE}/runs/${runId}/cases/${encodeURIComponent(caseId)}/artifacts/${encodeURIComponent(filename)}`;
