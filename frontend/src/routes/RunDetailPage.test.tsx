@@ -6,6 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import RunDetailPage from './RunDetailPage';
 
+// --- mock useNavigate for M6-D1 rerun button navigation ------------------
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  };
+});
+
 const mockFetch = vi.fn();
 
 // --- mock EventSource --------------------------------------------------------
@@ -53,6 +63,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', mockFetch);
   vi.stubGlobal('EventSource', MockEventSource);
   mockFetch.mockReset();
+  mockNavigate.mockReset();
   esInstances.length = 0;
 });
 
@@ -670,5 +681,124 @@ describe('RunDetailPage', () => {
       expect(screen.getByTestId('run-status-badge')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('run-progress')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M6-D1 — Re-run buttons (btn-rerun-all / btn-rerun-failed)
+// ---------------------------------------------------------------------------
+
+// A run fixture with pass/fail/error/skip results to test the exact wiring.
+// This asserts "covers fail/error" claim: only fail+error go into failed URL,
+// not pass or skip.
+const fakeRunMixed = {
+  id: 77,
+  status: 'done',
+  started_at: '2026-01-01T00:00:00Z',
+  finished_at: '2026-01-01T00:05:00Z',
+  total: 5,
+  passed: 1,
+  failed: 2,
+  skipped: 1,
+  target_version: 'v5.2.0',
+  triggered_by: null,
+  case_results: [
+    { case_id: 'bug-pass', status: 'pass', duration_ms: 100, skip_reason: null, expect_detail: null, artifacts_path: null },
+    { case_id: 'bug-fail-1', status: 'fail', duration_ms: 200, skip_reason: null, expect_detail: null, artifacts_path: null },
+    { case_id: 'bug-error-1', status: 'error', duration_ms: 300, skip_reason: null, expect_detail: null, artifacts_path: null },
+    { case_id: 'bug-skip', status: 'skip', duration_ms: 0, skip_reason: 'skipped', expect_detail: null, artifacts_path: null },
+    { case_id: 'bug-fail-2', status: 'fail', duration_ms: 150, skip_reason: null, expect_detail: null, artifacts_path: null },
+  ],
+};
+
+describe('RunDetailPage M6-D1 — Re-run buttons', () => {
+  it('btn-rerun-all and btn-rerun-failed are rendered for a terminal run', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunMixed));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-rerun-all')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('btn-rerun-failed')).toBeInTheDocument();
+  });
+
+  it('Re-run all navigates with ALL case_ids (wiring: every case in run.case_results)', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunMixed));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-rerun-all')).toBeInTheDocument();
+    });
+
+    screen.getByTestId('btn-rerun-all').click();
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    const url = mockNavigate.mock.calls[0][0] as string;
+    const params = new URLSearchParams(url.split('?')[1]);
+
+    const caseIds = params.get('case_ids')!.split(',').sort();
+    expect(caseIds).toEqual(
+      ['bug-pass', 'bug-fail-1', 'bug-error-1', 'bug-skip', 'bug-fail-2'].sort(),
+    );
+    expect(params.get('from_run')).toBe('77');
+    expect(params.get('target_version')).toBe('v5.2.0');
+  });
+
+  it('Re-run failed navigates with EXACTLY fail+error ids (not pass, not skip — covers wiring claim)', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunMixed));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-rerun-failed')).toBeInTheDocument();
+    });
+
+    screen.getByTestId('btn-rerun-failed').click();
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    const url = mockNavigate.mock.calls[0][0] as string;
+    const params = new URLSearchParams(url.split('?')[1]);
+
+    const caseIds = params.get('case_ids')!.split(',').sort();
+    // Must contain bug-fail-1, bug-error-1, bug-fail-2 — NOT bug-pass, NOT bug-skip
+    expect(caseIds).toEqual(['bug-error-1', 'bug-fail-1', 'bug-fail-2'].sort());
+    expect(params.get('from_run')).toBe('77');
+    expect(params.get('target_version')).toBe('v5.2.0');
+  });
+
+  it('Re-run failed is disabled when there are zero failures', async () => {
+    // A run with all-pass results → failedCaseIds is empty
+    const allPassRun = {
+      ...fakeRunMixed,
+      failed: 0,
+      case_results: [
+        { case_id: 'bug-a', status: 'pass', duration_ms: 100, skip_reason: null, expect_detail: null, artifacts_path: null },
+        { case_id: 'bug-b', status: 'pass', duration_ms: 120, skip_reason: null, expect_detail: null, artifacts_path: null },
+      ],
+    };
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(allPassRun));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-rerun-failed')).toBeInTheDocument();
+    });
+
+    const btn = screen.getByTestId('btn-rerun-failed') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    // Should not navigate when disabled
+    btn.click();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('Re-run all is not disabled even when no failures', async () => {
+    const allPassRun = {
+      ...fakeRunMixed,
+      failed: 0,
+      case_results: [
+        { case_id: 'bug-a', status: 'pass', duration_ms: 100, skip_reason: null, expect_detail: null, artifacts_path: null },
+      ],
+    };
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(allPassRun));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('btn-rerun-all')).toBeInTheDocument();
+    });
+    const btn = screen.getByTestId('btn-rerun-all') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 });

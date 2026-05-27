@@ -449,3 +449,144 @@ describe('RunNewPage M5-5 — URL preset (?category=X&status=Y)', () => {
     expect(screen.getByTestId('preset-banner-status')).toHaveTextContent('stable');
   });
 });
+
+// ---------------------------------------------------------------------------
+// M6-D1 — ?case_ids= preselect channel + stale target_version
+// ---------------------------------------------------------------------------
+
+describe('RunNewPage M6-D1 — case_ids preselect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupPresetMocks();
+  });
+
+  it('case_ids all existing: all are selected, banner shows Re-run from Run #X, Trigger counts match', async () => {
+    // bug-001 and bug-002 exist in FAKE_PRESET_CASES_BUG
+    renderAtUrl('/runs/new?case_ids=bug-001,bug-002&from_run=42');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // Banner shows from_run context
+    expect(screen.getByTestId('preset-banner-label')).toHaveTextContent('Re-run from Run #42');
+    // Count shows selected (2)
+    expect(screen.getByTestId('preset-banner-count')).toHaveTextContent('2 cases');
+    // Both checkboxes are checked
+    const c1 = screen.getByTestId('case-checkbox-bug-001') as HTMLInputElement;
+    const c2 = screen.getByTestId('case-checkbox-bug-002') as HTMLInputElement;
+    expect(c1.checked).toBe(true);
+    expect(c2.checked).toBe(true);
+    // Trigger button shows "2 cases"
+    expect(screen.getByTestId('btn-submit-run')).toHaveTextContent('Trigger Run (2 cases)');
+  });
+
+  it('case_ids with 1 deleted id: deleted id NOT in selected, banner shows skipped, Trigger counts only survivors', async () => {
+    // bug-001 exists; bug-deleted-xyz does not exist in FAKE_PRESET_CASES_BUG/EXT
+    renderAtUrl('/runs/new?case_ids=bug-001,bug-deleted-xyz&from_run=55');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // bug-001 selected, bug-deleted-xyz NOT in list (not rendered)
+    const c1 = screen.getByTestId('case-checkbox-bug-001') as HTMLInputElement;
+    expect(c1.checked).toBe(true);
+    // No checkbox rendered for the deleted case (it doesn't exist in allCases)
+    expect(screen.queryByTestId('case-checkbox-bug-deleted-xyz')).toBeNull();
+    // Banner shows skipped notice
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner-skipped')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('preset-banner-skipped')).toHaveTextContent(
+      '1 case(s) from Run #55 no longer exist — skipped',
+    );
+    // Trigger button counts only the 1 surviving case
+    expect(screen.getByTestId('btn-submit-run')).toHaveTextContent('Trigger Run (1 case)');
+  });
+
+  it('case_ids: all deleted → selected is empty, all ids skipped in banner', async () => {
+    renderAtUrl('/runs/new?case_ids=gone-001,gone-002&from_run=60');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner-skipped')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('preset-banner-skipped')).toHaveTextContent(
+      '2 case(s) from Run #60 no longer exist — skipped',
+    );
+    // Trigger button disabled (0 selected)
+    const btn = screen.getByTestId('btn-submit-run') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('case_ids takes priority over category/status when both present in URL', async () => {
+    // Even with ?category=bug_regression, the case_ids channel wins
+    renderAtUrl('/runs/new?case_ids=bug-001&from_run=77&category=extension');
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-banner')).toBeInTheDocument();
+    });
+    // Only bug-001 is selected (not all extension cases)
+    const c1 = screen.getByTestId('case-checkbox-bug-001') as HTMLInputElement;
+    const cExt = screen.getByTestId('case-checkbox-ext-001') as HTMLInputElement;
+    expect(c1.checked).toBe(true);
+    expect(cExt.checked).toBe(false);
+    // Banner is the rerun variant (from_run present)
+    expect(screen.getByTestId('preset-banner-label')).toHaveTextContent('Re-run from Run #77');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M6-D1 — ?target_version= preselect + stale version fallback
+// ---------------------------------------------------------------------------
+
+function setupVersionPresetMocks(versions: { id: number; name: string; is_default: boolean }[]) {
+  mockApiFetch.mockImplementation(async (path: string, _method: string, init?: { query?: Record<string, string | number | undefined> }) => {
+    if (path === '/admin/categories') return FAKE_CATEGORIES;
+    if (path === '/cases') {
+      const category = init?.query?.['category'];
+      if (category === 'bug_regression') return FAKE_CASES_BUG;
+      if (category === 'extension') return FAKE_CASES_EXT;
+      return [...FAKE_CASES_BUG, ...FAKE_CASES_EXT];
+    }
+    if (path === '/admin/target-versions') return versions;
+    return [];
+  });
+}
+
+describe('RunNewPage M6-D1 — target_version preselect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('valid target_version in URL: version is preselected in dropdown, no stale notice', async () => {
+    setupVersionPresetMocks(FAKE_VERSION_OPTIONS);
+    renderAtUrl('/runs/new?case_ids=bug-001&from_run=10&target_version=SynxDB-4.6.0-build42');
+    await waitFor(() => {
+      expect(screen.getByTestId('case-checkbox-bug-001')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      const sel = screen.getByTestId('input-target-version') as HTMLSelectElement;
+      expect(sel.value).toBe('SynxDB-4.6.0-build42');
+    });
+    // No stale notice
+    expect(screen.queryByTestId('stale-version-notice')).toBeNull();
+  });
+
+  it('stale target_version (not in active list): falls back to default, shows stale notice', async () => {
+    setupVersionPresetMocks(FAKE_VERSION_OPTIONS);
+    renderAtUrl('/runs/new?case_ids=bug-001&from_run=10&target_version=SynxDB-3.0.0-old');
+    await waitFor(() => {
+      expect(screen.getByTestId('case-checkbox-bug-001')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('stale-version-notice')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('stale-version-notice')).toHaveTextContent(
+      'SynxDB-3.0.0-old',
+    );
+    expect(screen.getByTestId('stale-version-notice')).toHaveTextContent(
+      'no longer available',
+    );
+    // Falls back to default (SynxDB-4.5.0-build130 is_default=true)
+    const sel = screen.getByTestId('input-target-version') as HTMLSelectElement;
+    expect(sel.value).toBe('SynxDB-4.5.0-build130');
+  });
+});
