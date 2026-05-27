@@ -433,6 +433,41 @@ describe('DashboardPage (M5-2)', () => {
     });
   });
 
+  describe('Dashboard header CTA (dashboard-new-run)', () => {
+    it('renders dashboard-new-run button that links to /runs/new', async () => {
+      setupMocks();
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('page-dashboard')).toBeInTheDocument();
+      });
+      const btn = screen.getByTestId('dashboard-new-run');
+      expect(btn).toBeInTheDocument();
+      // Button renders as <a> (asChild + Link) with correct href
+      expect(btn.tagName.toLowerCase()).toBe('a');
+      expect(btn).toHaveAttribute('href', '/runs/new');
+    });
+
+    it('QuickActions section renders before KPI row (correct DOM order)', async () => {
+      setupMocks();
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('page-dashboard')).toBeInTheDocument();
+      });
+      const page = screen.getByTestId('page-dashboard');
+      const children = Array.from(page.children);
+      const quickActionsIdx = children.findIndex(
+        (el) => el.getAttribute('data-testid') === 'dashboard-quick-actions',
+      );
+      const kpiRowIdx = children.findIndex(
+        (el) => el.getAttribute('data-testid') === 'dashboard-kpi-row',
+      );
+      // Quick start section must appear before the first KPI row
+      expect(quickActionsIdx).toBeGreaterThanOrEqual(0);
+      expect(kpiRowIdx).toBeGreaterThanOrEqual(0);
+      expect(quickActionsIdx).toBeLessThan(kpiRowIdx);
+    });
+  });
+
   // Suppress unused-import warning for `act`
   void act;
 });

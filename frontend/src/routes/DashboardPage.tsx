@@ -22,6 +22,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/types';
 import { runVerdict, verdictToBadgeClass } from '@/lib/runVerdict';
+import { Button } from '@/components/ui/button';
 
 type CategoryOut = components['schemas']['CategoryOut'];
 type CaseSummary = components['schemas']['CaseSummary'];
@@ -260,7 +261,7 @@ function QuickActions({ categories }: QuickActionsProps) {
 
   return (
     <div data-testid="dashboard-quick-actions" className="dashboard-section">
-      <div className="dashboard-section-title">Quick actions</div>
+      <div className="dashboard-section-title">Quick start</div>
       <div className="dashboard-quick-actions-row">
         {presets.map(({ cat, status }) => (
           <button
@@ -346,7 +347,16 @@ export default function DashboardPage() {
 
   return (
     <div data-testid="page-dashboard" className="dashboard">
-      <h1 className="dashboard-title">Dashboard</h1>
+      <div className="dashboard-header">
+        <h1 className="dashboard-title">Dashboard</h1>
+        <Button asChild data-testid="dashboard-new-run">
+          <Link to="/runs/new">
+            <span aria-hidden="true">▶</span>{' '}New Run
+          </Link>
+        </Button>
+      </div>
+
+      <QuickActions categories={data.categories} />
 
       {/* KPI tiles row 1: per-category counts + recent runs */}
       <div
@@ -380,7 +390,6 @@ export default function DashboardPage() {
       </div>
 
       <RecentActivity runs={data.recentRuns} />
-      <QuickActions categories={data.categories} />
     </div>
   );
 }
