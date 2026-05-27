@@ -17,7 +17,7 @@
  * cost is bounded (≤1 fetch per case completion).
  */
 import { useEffect, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 
@@ -390,6 +390,7 @@ function CaseResultRow({ runId, result }: { runId: number; result: CaseResultOut
 
 export default function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -530,25 +531,67 @@ export default function RunDetailPage() {
     return <div data-testid="run-detail-error">Error: {error ?? 'Run not found'}</div>;
   }
 
+  // --- M6-D1 rerun button helpers -------------------------------------------
+  // Capture narrowed run in a local variable so the helper function can
+  // safely reference it without TypeScript seeing it as possibly null.
+  const runData = run;
+  const allCaseIds = runData.case_results.map((r) => r.case_id);
+  const failedCaseIds = runData.case_results
+    .filter((r) => {
+      const s = (r.status ?? '').toLowerCase();
+      return s === 'fail' || s === 'error';
+    })
+    .map((r) => r.case_id);
+
+  function buildRerunUrl(caseIds: string[]): string {
+    const params = new URLSearchParams();
+    params.set('case_ids', caseIds.join(','));
+    params.set('from_run', String(runData.id));
+    if (runData.target_version) {
+      params.set('target_version', runData.target_version);
+    }
+    return `/runs/new?${params.toString()}`;
+  }
+
   return (
     <div data-testid="page-run-detail" className="p-6 space-y-4">
-      <h1 data-testid="run-detail-title">Run #{run.id}</h1>
-      <span
-        data-testid="run-status-badge"
-        data-status={run.status}
-        className="inline-block px-3 py-1 rounded text-sm font-semibold"
-      >
-        {run.status.toUpperCase()}
-      </span>
-      {streamMode !== 'idle' && (
+      <div className="flex items-center gap-4 flex-wrap">
+        <h1 data-testid="run-detail-title" className="text-2xl font-semibold">Run #{run.id}</h1>
         <span
-          data-testid="run-stream-mode"
-          data-mode={streamMode}
-          className="ml-2 text-xs text-gray-500"
+          data-testid="run-status-badge"
+          data-status={run.status}
+          className="inline-block px-3 py-1 rounded text-sm font-semibold"
         >
-          {streamMode === 'sse' ? 'live' : 'polling'}
+          {run.status.toUpperCase()}
         </span>
-      )}
+        {streamMode !== 'idle' && (
+          <span
+            data-testid="run-stream-mode"
+            data-mode={streamMode}
+            className="ml-2 text-xs text-gray-500"
+          >
+            {streamMode === 'sse' ? 'live' : 'polling'}
+          </span>
+        )}
+        {/* M6-D1 rerun buttons */}
+        <button
+          type="button"
+          data-testid="btn-rerun-all"
+          className="px-3 py-1 rounded border border-gray-300 bg-white text-sm hover:bg-gray-50"
+          onClick={() => navigate(buildRerunUrl(allCaseIds))}
+        >
+          Re-run all
+        </button>
+        <button
+          type="button"
+          data-testid="btn-rerun-failed"
+          className="px-3 py-1 rounded border border-gray-300 bg-white text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={failedCaseIds.length === 0}
+          onClick={() => navigate(buildRerunUrl(failedCaseIds))}
+        >
+          Re-run failed
+        </button>
+      </div>
       {run.target_version && (
         <div>
           <span className="text-sm text-gray-500">Version: </span>
