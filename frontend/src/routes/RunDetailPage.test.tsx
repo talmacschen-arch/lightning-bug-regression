@@ -75,9 +75,30 @@ const fakeRunDone = {
   target_version: '5.1.0',
   triggered_by: null,
   case_results: [
-    { case_id: 'bug-001', status: 'pass', duration_ms: 1000, skip_reason: null, expect_detail: null, artifacts_path: '/tmp/art/99/bug-001' },
-    { case_id: 'bug-002', status: 'pass', duration_ms: 1100, skip_reason: null, expect_detail: null, artifacts_path: '/tmp/art/99/bug-002' },
-    { case_id: 'bug-003', status: 'pass', duration_ms: 1050, skip_reason: null, expect_detail: null, artifacts_path: null },
+    {
+      case_id: 'bug-001',
+      status: 'pass',
+      duration_ms: 1000,
+      skip_reason: null,
+      expect_detail: null,
+      artifacts_path: '/tmp/art/99/bug-001',
+    },
+    {
+      case_id: 'bug-002',
+      status: 'pass',
+      duration_ms: 1100,
+      skip_reason: null,
+      expect_detail: null,
+      artifacts_path: '/tmp/art/99/bug-002',
+    },
+    {
+      case_id: 'bug-003',
+      status: 'pass',
+      duration_ms: 1050,
+      skip_reason: null,
+      expect_detail: null,
+      artifacts_path: null,
+    },
   ],
 };
 
@@ -99,7 +120,14 @@ const fakeRunRunningWithOneCase = {
   ...fakeRunRunning,
   passed: 1,
   case_results: [
-    { case_id: 'bug-001', status: 'pass', duration_ms: 500, skip_reason: null, expect_detail: null, artifacts_path: null },
+    {
+      case_id: 'bug-001',
+      status: 'pass',
+      duration_ms: 500,
+      skip_reason: null,
+      expect_detail: null,
+      artifacts_path: null,
+    },
   ],
 };
 
@@ -181,7 +209,13 @@ describe('RunDetailPage', () => {
 
     renderWithRoute('42');
     await waitFor(() => expect(esInstances.length).toBe(1));
-    act(() => esInstances[0].__emit({ type: 'run_done', run_id: 42, summary: { total: 3, passed: 3, failed: 0, skipped: 0 } }));
+    act(() =>
+      esInstances[0].__emit({
+        type: 'run_done',
+        run_id: 42,
+        summary: { total: 3, passed: 3, failed: 0, skipped: 0 },
+      }),
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId('run-status-badge')).toHaveTextContent('DONE');
@@ -231,8 +265,20 @@ describe('RunDetailPage', () => {
   it('clicking artifacts toggle lazy-fetches + shows file list', async () => {
     // First call: initial GET for run. Second call: artifacts list for bug-001.
     const FAKE_ARTIFACTS = [
-      { filename: 'step-00-setup.stdout.txt', size_bytes: 1024, kind: 'stdout', step_idx: 0, step_id: 'setup' },
-      { filename: 'step-01-main.stderr.txt', size_bytes: 32, kind: 'stderr', step_idx: 1, step_id: 'main' },
+      {
+        filename: 'step-00-setup.stdout.txt',
+        size_bytes: 1024,
+        kind: 'stdout',
+        step_idx: 0,
+        step_id: 'setup',
+      },
+      {
+        filename: 'step-01-main.stderr.txt',
+        size_bytes: 32,
+        kind: 'stderr',
+        step_idx: 1,
+        step_id: 'main',
+      },
       { filename: 'summary.json', size_bytes: 50, kind: 'other', step_idx: null, step_id: null },
     ];
     mockFetch
@@ -256,14 +302,18 @@ describe('RunDetailPage', () => {
     });
 
     // All 3 files render
-    expect(screen.getByTestId('artifact-item-bug-001-step-00-setup.stdout.txt')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('artifact-item-bug-001-step-00-setup.stdout.txt'),
+    ).toBeInTheDocument();
     expect(screen.getByTestId('artifact-item-bug-001-step-01-main.stderr.txt')).toBeInTheDocument();
     expect(screen.getByTestId('artifact-item-bug-001-summary.json')).toBeInTheDocument();
 
     // Download links point to backend endpoint
     const dl = screen.getByTestId('artifact-download-bug-001-step-00-setup.stdout.txt');
     expect(dl.tagName).toBe('A');
-    expect(dl.getAttribute('href')).toContain('/runs/99/cases/bug-001/artifacts/step-00-setup.stdout.txt');
+    expect(dl.getAttribute('href')).toContain(
+      '/runs/99/cases/bug-001/artifacts/step-00-setup.stdout.txt',
+    );
     expect(dl.getAttribute('download')).toBe('step-00-setup.stdout.txt');
   });
 
@@ -282,14 +332,12 @@ describe('RunDetailPage', () => {
   });
 
   it('artifacts fetch error shows inline error', async () => {
-    mockFetch
-      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone))
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        statusText: 'Server Error',
-        json: () => Promise.resolve({}),
-      });
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunDone)).mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Server Error',
+      json: () => Promise.resolve({}),
+    });
     renderWithRoute('99');
     await waitFor(() => {
       expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
@@ -298,6 +346,171 @@ describe('RunDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('artifacts-error-bug-001')).toBeInTheDocument();
     });
+  });
+
+  // ---- M6-D2 artifact inline view -----------------------------------------
+
+  const FAKE_ARTIFACTS_FOR_VIEW = [
+    {
+      filename: 'step-00-setup.stdout.txt',
+      size_bytes: 1024,
+      kind: 'stdout',
+      step_idx: 0,
+      step_id: 'setup',
+    },
+    {
+      filename: 'step-01-main.stderr.txt',
+      size_bytes: 32,
+      kind: 'stderr',
+      step_idx: 1,
+      step_id: 'main',
+    },
+  ];
+
+  it('View button renders file text on first click; re-expand does NOT re-fetch', async () => {
+    // Call order: [0] initial run GET, [1] artifacts list, [2] file text fetch
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone)) // run detail
+      .mockResolvedValueOnce(mockJsonResponse(FAKE_ARTIFACTS_FOR_VIEW)) // artifacts list
+      .mockResolvedValueOnce({
+        // file text
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('hello world\nline2'),
+        json: () => {
+          throw new Error('should not call json');
+        },
+      });
+
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+
+    // Open artifacts panel
+    act(() => screen.getByTestId('artifacts-toggle-bug-001').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-list-bug-001')).toBeInTheDocument();
+    });
+
+    // View button present
+    const viewBtn = screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt');
+    expect(viewBtn).toBeInTheDocument();
+    // Content not visible yet
+    expect(screen.queryByTestId('artifact-content-bug-001-step-00-setup.stdout.txt')).toBeNull();
+
+    // Click View → fetch fires, content appears
+    act(() => viewBtn.click());
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('artifact-content-bug-001-step-00-setup.stdout.txt'),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId('artifact-content-bug-001-step-00-setup.stdout.txt'),
+    ).toHaveTextContent('hello world');
+
+    // Collapse by clicking Hide
+    act(() => screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt').click());
+    await waitFor(() => {
+      expect(screen.queryByTestId('artifact-content-bug-001-step-00-setup.stdout.txt')).toBeNull();
+    });
+
+    // Re-expand — should NOT trigger a second fetch (cache hit)
+    act(() => screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt').click());
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('artifact-content-bug-001-step-00-setup.stdout.txt'),
+      ).toBeInTheDocument();
+    });
+
+    // Total fetch calls: [0] run, [1] artifacts list, [2] file text — no 4th call
+    // The file text fetch (call index 2) must have been called exactly once
+    const allCalls = mockFetch.mock.calls;
+    const fileTextCalls = allCalls.filter((args: unknown[]) => {
+      const url = args[0] as string;
+      return typeof url === 'string' && url.includes('/artifacts/step-00-setup.stdout.txt');
+    });
+    expect(fileTextCalls).toHaveLength(1);
+  });
+
+  it('fetch failure on View shows error; Download link still works', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone)) // run detail
+      .mockResolvedValueOnce(mockJsonResponse(FAKE_ARTIFACTS_FOR_VIEW)) // artifacts list
+      .mockResolvedValueOnce({
+        // file text → error
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve(''),
+        json: () => Promise.resolve({}),
+      });
+
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+    act(() => screen.getByTestId('artifacts-toggle-bug-001').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-list-bug-001')).toBeInTheDocument();
+    });
+
+    // Click View
+    act(() => screen.getByTestId('artifact-view-bug-001-step-00-setup.stdout.txt').click());
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('artifact-view-error-bug-001-step-00-setup.stdout.txt'),
+      ).toBeInTheDocument();
+    });
+    // Content must NOT appear
+    expect(screen.queryByTestId('artifact-content-bug-001-step-00-setup.stdout.txt')).toBeNull();
+    // Download link must still be present and functional
+    const dlLink = screen.getByTestId('artifact-download-bug-001-step-00-setup.stdout.txt');
+    expect(dlLink).toBeInTheDocument();
+    expect(dlLink.getAttribute('href')).toContain('/artifacts/step-00-setup.stdout.txt');
+  });
+
+  it('size_bytes > 512KB shows "Download instead" instead of fetching content', async () => {
+    const LARGE_ARTIFACT = [
+      {
+        filename: 'big-stdout.txt',
+        size_bytes: 600 * 1024,
+        kind: 'stdout',
+        step_idx: 0,
+        step_id: 'run',
+      },
+    ];
+    mockFetch
+      .mockResolvedValueOnce(mockJsonResponse(fakeRunDone)) // run detail
+      .mockResolvedValueOnce(mockJsonResponse(LARGE_ARTIFACT)); // artifacts list (no 3rd call expected)
+
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-toggle-bug-001')).toBeInTheDocument();
+    });
+    act(() => screen.getByTestId('artifacts-toggle-bug-001').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifacts-list-bug-001')).toBeInTheDocument();
+    });
+
+    // Click View on the large file
+    act(() => screen.getByTestId('artifact-view-bug-001-big-stdout.txt').click());
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-too-large-bug-001-big-stdout.txt')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('artifact-too-large-bug-001-big-stdout.txt')).toHaveTextContent(
+      'Download instead',
+    );
+    // No content pre rendered
+    expect(screen.queryByTestId('artifact-content-bug-001-big-stdout.txt')).toBeNull();
+
+    // No fetch call for the file text — only 2 calls total (run + artifacts list)
+    const allCalls = mockFetch.mock.calls;
+    const fileTextCalls = allCalls.filter((args: unknown[]) => {
+      const url = args[0] as string;
+      return typeof url === 'string' && url.includes('/artifacts/big-stdout.txt');
+    });
+    expect(fileTextCalls).toHaveLength(0);
   });
 
   // ---- M6-1 finishing touch: progress bar (2026-05-26) -------------------
@@ -313,12 +526,20 @@ describe('RunDetailPage', () => {
       // them during a running run; only finish_run() writes them.
       case_results: [
         ...Array.from({ length: 11 }, (_, i) => ({
-          case_id: `bug-${100 + i}`, status: 'pass', duration_ms: 100,
-          skip_reason: null, expect_detail: null, artifacts_path: null,
+          case_id: `bug-${100 + i}`,
+          status: 'pass',
+          duration_ms: 100,
+          skip_reason: null,
+          expect_detail: null,
+          artifacts_path: null,
         })),
         {
-          case_id: 'bug-skipped', status: 'skip', duration_ms: 0,
-          skip_reason: 'placeholder', expect_detail: null, artifacts_path: null,
+          case_id: 'bug-skipped',
+          status: 'skip',
+          duration_ms: 0,
+          skip_reason: 'placeholder',
+          expect_detail: null,
+          artifacts_path: null,
         },
       ],
     };
@@ -340,8 +561,12 @@ describe('RunDetailPage', () => {
       started_at: ts,
       total: 17,
       case_results: Array.from({ length: 5 }, (_, i) => ({
-        case_id: `bug-${i}`, status: 'pass', duration_ms: 1000,
-        skip_reason: null, expect_detail: null, artifacts_path: null,
+        case_id: `bug-${i}`,
+        status: 'pass',
+        duration_ms: 1000,
+        skip_reason: null,
+        expect_detail: null,
+        artifacts_path: null,
       })),
     };
     mockFetch.mockResolvedValue(mockJsonResponse(partial));

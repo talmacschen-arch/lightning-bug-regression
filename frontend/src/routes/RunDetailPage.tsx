@@ -33,8 +33,7 @@ function isRunTerminal(status: string): boolean {
 // --- M6-2 artifacts -------------------------------------------------------
 
 const API_BASE =
-  ((import.meta as { env?: { VITE_API_BASE_URL?: string } }).env
-    ?.VITE_API_BASE_URL) ??
+  (import.meta as { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ??
   'http://127.0.0.1:8000';
 
 interface ArtifactInfo {
@@ -51,11 +50,30 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
+const VIEW_SIZE_LIMIT = 512 * 1024; // 512 KB
+
+interface ArtifactViewState {
+  // filename → fetched text content
+  contentCache: Map<string, string>;
+  // filenames currently being fetched
+  loadingSet: Set<string>;
+  // filename → error message
+  errorCache: Map<string, string>;
+  // filenames whose inline view is expanded
+  expandedSet: Set<string>;
+}
+
 function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<ArtifactInfo[] | null>(null);
   const [loadingArtifacts, setLoadingArtifacts] = useState(false);
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const [viewState, setViewState] = useState<ArtifactViewState>(() => ({
+    contentCache: new Map(),
+    loadingSet: new Set(),
+    errorCache: new Map(),
+    expandedSet: new Set(),
+  }));
 
   async function loadOnce() {
     if (items !== null || loadingArtifacts) return;
@@ -83,6 +101,78 @@ function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
     if (next) void loadOnce();
   }
 
+  function handleViewToggle(artifact: ArtifactInfo) {
+    const { filename, size_bytes } = artifact;
+
+    // Large file guard: never fetch, just toggle expanded to show the guard message
+    if (size_bytes > VIEW_SIZE_LIMIT) {
+      setViewState((prev) => {
+        const expandedSet = new Set(prev.expandedSet);
+        if (expandedSet.has(filename)) {
+          expandedSet.delete(filename);
+        } else {
+          expandedSet.add(filename);
+        }
+        return { ...prev, expandedSet };
+      });
+      return;
+    }
+
+    // Toggle collapse
+    if (viewState.expandedSet.has(filename)) {
+      setViewState((prev) => {
+        const expandedSet = new Set(prev.expandedSet);
+        expandedSet.delete(filename);
+        return { ...prev, expandedSet };
+      });
+      return;
+    }
+
+    // Expand: if already cached or loading, just expand
+    if (viewState.contentCache.has(filename) || viewState.loadingSet.has(filename)) {
+      setViewState((prev) => {
+        const expandedSet = new Set(prev.expandedSet);
+        expandedSet.add(filename);
+        return { ...prev, expandedSet };
+      });
+      return;
+    }
+
+    // First expand: mark loading + expanded, then fetch
+    setViewState((prev) => {
+      const loadingSet = new Set(prev.loadingSet);
+      loadingSet.add(filename);
+      const expandedSet = new Set(prev.expandedSet);
+      expandedSet.add(filename);
+      return { ...prev, loadingSet, expandedSet };
+    });
+
+    const url = `${API_BASE}/runs/${runId}/cases/${encodeURIComponent(caseId)}/artifacts/${encodeURIComponent(filename)}`;
+    void fetch(url)
+      .then((resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.text();
+      })
+      .then((text) => {
+        setViewState((prev) => {
+          const contentCache = new Map(prev.contentCache);
+          contentCache.set(filename, text);
+          const loadingSet = new Set(prev.loadingSet);
+          loadingSet.delete(filename);
+          return { ...prev, contentCache, loadingSet };
+        });
+      })
+      .catch((e: unknown) => {
+        setViewState((prev) => {
+          const errorCache = new Map(prev.errorCache);
+          errorCache.set(filename, e instanceof Error ? e.message : String(e));
+          const loadingSet = new Set(prev.loadingSet);
+          loadingSet.delete(filename);
+          return { ...prev, errorCache, loadingSet };
+        });
+      });
+  }
+
   return (
     <div className="ml-6 mt-1 mb-2">
       <button
@@ -104,46 +194,91 @@ function CaseArtifacts({ runId, caseId }: { runId: number; caseId: string }) {
             </div>
           )}
           {artifactsError !== null && (
-            <div
-              data-testid={`artifacts-error-${caseId}`}
-              className="text-xs text-red-600"
-            >
+            <div data-testid={`artifacts-error-${caseId}`} className="text-xs text-red-600">
               Failed to load: {artifactsError}
             </div>
           )}
           {items !== null && items.length === 0 && (
-            <div
-              data-testid={`artifacts-empty-${caseId}`}
-              className="text-xs text-gray-500"
-            >
+            <div data-testid={`artifacts-empty-${caseId}`} className="text-xs text-gray-500">
               No artifact files (steps produced empty stdout/stderr).
             </div>
           )}
           {items !== null && items.length > 0 && (
-            <ul data-testid={`artifacts-list-${caseId}`} className="space-y-0.5">
-              {items.map((a) => (
-                <li
-                  key={a.filename}
-                  data-testid={`artifact-item-${caseId}-${a.filename}`}
-                  className="flex items-center gap-2 text-xs"
-                >
-                  <span className="font-mono">{a.filename}</span>
-                  <span className="text-gray-500">{formatBytes(a.size_bytes)}</span>
-                  {a.kind !== 'other' && (
-                    <span className="px-1 py-px rounded bg-gray-100 text-gray-600 text-[10px]">
-                      {a.kind}
-                    </span>
-                  )}
-                  <a
-                    href={`${API_BASE}/runs/${runId}/cases/${encodeURIComponent(caseId)}/artifacts/${encodeURIComponent(a.filename)}`}
-                    download={a.filename}
-                    data-testid={`artifact-download-${caseId}-${a.filename}`}
-                    className="text-blue-700 hover:underline"
+            <ul data-testid={`artifacts-list-${caseId}`} className="space-y-1">
+              {items.map((a) => {
+                const downloadUrl = `${API_BASE}/runs/${runId}/cases/${encodeURIComponent(caseId)}/artifacts/${encodeURIComponent(a.filename)}`;
+                const isExpanded = viewState.expandedSet.has(a.filename);
+                const isLoading = viewState.loadingSet.has(a.filename);
+                const content = viewState.contentCache.get(a.filename);
+                const contentError = viewState.errorCache.get(a.filename);
+                const isTooLarge = a.size_bytes > VIEW_SIZE_LIMIT;
+
+                return (
+                  <li
+                    key={a.filename}
+                    data-testid={`artifact-item-${caseId}-${a.filename}`}
+                    className="text-xs"
                   >
-                    Download
-                  </a>
-                </li>
-              ))}
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono">{a.filename}</span>
+                      <span className="text-gray-500">{formatBytes(a.size_bytes)}</span>
+                      {a.kind !== 'other' && (
+                        <span className="px-1 py-px rounded bg-gray-100 text-gray-600 text-[10px]">
+                          {a.kind}
+                        </span>
+                      )}
+                      <a
+                        href={downloadUrl}
+                        download={a.filename}
+                        data-testid={`artifact-download-${caseId}-${a.filename}`}
+                        className="text-blue-700 hover:underline"
+                      >
+                        Download
+                      </a>
+                      <button
+                        type="button"
+                        data-testid={`artifact-view-${caseId}-${a.filename}`}
+                        onClick={() => handleViewToggle(a)}
+                        className="text-blue-700 hover:underline"
+                      >
+                        {isExpanded ? 'Hide' : 'View'}
+                      </button>
+                    </div>
+                    {isExpanded && isTooLarge && (
+                      <div
+                        data-testid={`artifact-too-large-${caseId}-${a.filename}`}
+                        className="mt-1 text-gray-500"
+                      >
+                        Large file ({formatBytes(a.size_bytes)}) — Download instead
+                      </div>
+                    )}
+                    {isExpanded && !isTooLarge && isLoading && (
+                      <div
+                        data-testid={`artifact-view-loading-${caseId}-${a.filename}`}
+                        className="mt-1 text-gray-500"
+                      >
+                        Loading…
+                      </div>
+                    )}
+                    {isExpanded && !isTooLarge && contentError !== undefined && (
+                      <div
+                        data-testid={`artifact-view-error-${caseId}-${a.filename}`}
+                        className="mt-1 text-red-600"
+                      >
+                        Failed to load: {contentError}
+                      </div>
+                    )}
+                    {isExpanded && !isTooLarge && content !== undefined && (
+                      <pre
+                        data-testid={`artifact-content-${caseId}-${a.filename}`}
+                        className="mt-1 font-mono text-xs whitespace-pre max-h-96 overflow-auto bg-gray-50 p-2 rounded border border-gray-200"
+                      >
+                        {content}
+                      </pre>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -204,12 +339,7 @@ function RunProgressBar({ run }: { run: RunDetail }) {
 
   return (
     <div data-testid="run-progress" className="space-y-1">
-      <progress
-        data-testid="run-progress-bar"
-        value={done}
-        max={total}
-        className="w-full h-2"
-      />
+      <progress data-testid="run-progress-bar" value={done} max={total} className="w-full h-2" />
       <div className="text-xs text-gray-600 flex flex-wrap items-baseline gap-x-3">
         <span data-testid="run-progress-counts" className="font-mono">
           {done} / {total} cases ({pct}%)
@@ -248,9 +378,7 @@ function CaseResultRow({ runId, result }: { runId: number; result: CaseResultOut
           <span className="text-xs text-gray-500">{result.duration_ms}ms</span>
         )}
       </div>
-      {result.artifacts_path && (
-        <CaseArtifacts runId={runId} caseId={result.case_id} />
-      )}
+      {result.artifacts_path && <CaseArtifacts runId={runId} caseId={result.case_id} />}
     </div>
   );
 }
@@ -419,7 +547,9 @@ export default function RunDetailPage() {
       {run.target_version && (
         <div>
           <span className="text-sm text-gray-500">Version: </span>
-          <span data-testid="run-target-version" className="font-mono text-sm">{run.target_version}</span>
+          <span data-testid="run-target-version" className="font-mono text-sm">
+            {run.target_version}
+          </span>
         </div>
       )}
       <RunProgressBar run={run} />
