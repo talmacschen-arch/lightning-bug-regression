@@ -277,7 +277,6 @@ export default function CaseNewPage() {
     }
   }
 
-  const isAnyInFlight = validating || trying || submitting;
   const isGenerating = llmStatus === 'loading';
 
   // Validate button disabled when: in-flight, OR draft is loaded but checkbox not yet checked
@@ -313,6 +312,9 @@ export default function CaseNewPage() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
+            <p data-testid="llm-feature-unavailable-hint" className="text-xs text-muted-foreground">
+              ℹ️ 此功能暂未启用（需 ANTHROPIC_API_KEY 配置）。请用「粘贴 YAML」标签 或 终端 /add-test-case skill 路径。
+            </p>
 
             {/* LLM status indicators */}
             {llmStatus === 'idle' && (
@@ -366,7 +368,7 @@ export default function CaseNewPage() {
               type="button"
               data-testid="btn-generate-real"
               onClick={() => void handleGenerate()}
-              disabled={isAnyInFlight || isGenerating || !description.trim()}
+              disabled={true}
             >
               {isGenerating ? '生成中…' : '从描述生成'}
             </Button>
