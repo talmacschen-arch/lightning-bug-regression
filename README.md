@@ -229,6 +229,7 @@ env vars 说明:
 | `PGHOST` / `PGPORT` / `PGUSER` / `PGDATABASE` | psycopg → 集群 PG 连接 | 可选（被 `external/dut.yml` per-field 覆盖；都不设走默认 `127.0.0.1/gpadmin/gpadmin`） |
 | `GH_TOKEN` | `/cases/submit` endpoint 内部 `gh pr create` / `gh pr merge --auto --squash` | **`/cases/new` 必须** |
 | `LBR_REPO_ROOT` | `/cases/submit` `subprocess.run(cwd=...)` 显式 repo root | 推荐 |
+| `ANTHROPIC_API_KEY` | `POST /cases/generate-draft` (§5.4 / §13.13 M7) 调 Anthropic SDK 真生成 YAML 草稿。缺失时该 endpoint 返 503，不影响其它路径 | **`/cases/new` 入口 A（"从描述生成"）必须**；skill 路径 + Tab B 粘贴不需要 |
 
 > `ADMIN_PASSWORD` env (M6-4 PR #115 落地的) 在 v1.17 已**删除** — 现走用户登录模块 (`/auth/login` admin/admin → Bearer token)，env var 形式无法接入新 auth 流程。
 
