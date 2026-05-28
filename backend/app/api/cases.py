@@ -37,10 +37,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.api.auth import get_current_user
+from app.api.llm_prompt import build_system_blocks, build_user_message
 from app.runner import orchestrator
 from app.runner.case_normalizer import normalize_case
 from app.runner.dsn_builder import dsn_map_from_env
@@ -145,6 +147,31 @@ class SubmitResponse(BaseModel):
     pr_url: str
     pr_number: int
     branch: str
+
+
+# M7 LLM-draft generation (design.md §5.4 / §13.13 v1.25 amendment)
+
+
+class GenerateDraftRequest(BaseModel):
+    """Request shape for ``POST /cases/generate-draft`` (M7-1)."""
+
+    description: str
+    category: str | None = None
+
+
+class GenerateDraftResponse(BaseModel):
+    """Response shape for ``POST /cases/generate-draft`` (M7-1).
+
+    Note ``yaml_draft`` may be the empty string when all retries failed
+    schema validation; in that case ``attempts == 3`` and
+    ``validation_errors_during_retry`` is non-empty. This is a business
+    state, NOT an HTTP error — the endpoint returns 200 so the frontend
+    can surface the errors to the user.
+    """
+
+    yaml_draft: str
+    attempts: int
+    validation_errors_during_retry: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -981,6 +1008,247 @@ def submit_case(req: SubmitRequest, request: Request) -> SubmitResponse:
     )
 
     return SubmitResponse(pr_url=pr_url, pr_number=pr_number, branch=req.branch_name)
+
+
+# ---------------------------------------------------------------------------
+# POST /cases/generate-draft (M7-1, design.md §5.4 / §13.13 v1.25 amendment)
+# ---------------------------------------------------------------------------
+
+# Constants pulled out as module-level so tests can introspect them
+# without re-deriving from prose.
+_GENERATE_DRAFT_MAX_DESCRIPTION_BYTES = 8 * 1024  # 8 KB — §13.13 amendment B
+_GENERATE_DRAFT_MAX_TOKENS = 2000  # §13.13 amendment B
+_GENERATE_DRAFT_MODEL = "claude-opus-4-7"  # §13.13 amendment D1
+_GENERATE_DRAFT_MAX_RETRIES_ON_SCHEMA_INVALID = 2  # §13.13 amendment C-1
+
+
+def _categories_for_prompt() -> tuple[list[str], dict[str, list[str]]]:
+    """Return (allowed_categories, status_whitelist_by_category).
+
+    Reads active ``case_categories`` — the same source ``/admin/categories``
+    uses (§14 R4b: no hardcoded category list in the prompt).
+    """
+    allowed: list[str] = []
+    sw_map: dict[str, list[str]] = {}
+    with sqlite_store.get_session() as sess:
+        stmt = (
+            select(CaseCategory)
+            .where(CaseCategory.is_active.is_(True))
+            .order_by(CaseCategory.display_order.asc())
+        )
+        for row in sess.scalars(stmt).all():
+            allowed.append(row.name)
+            try:
+                wl = json.loads(row.status_whitelist)
+                if isinstance(wl, list):
+                    sw_map[row.name] = [str(s) for s in wl]
+            except (json.JSONDecodeError, TypeError):
+                # corrupted row — skip from prompt, surfaces visibly in
+                # the LLM's output when it can't find the whitelist.
+                continue
+    return allowed, sw_map
+
+
+def _strip_yaml_fences(text: str) -> str:
+    """Strip markdown code-fence wrappers if the model emits them despite
+    being told not to. Defensive — Anthropic models occasionally add
+    ```yaml … ``` despite the explicit "no fences" instruction.
+
+    Only strips a single leading + trailing fence block; bare YAML text
+    passes through unchanged.
+    """
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    # Drop the first line (``` or ```yaml) and the trailing ``` if present.
+    lines = s.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _extract_response_text(message: object) -> str:
+    """Pull the text content out of an Anthropic ``Message`` object.
+
+    The SDK returns a ``Message`` with ``.content`` as a list of content
+    blocks; the first ``TextBlock`` carries the model's reply text.
+    Returns the empty string if no text block is present (shouldn't
+    happen in practice but defensive).
+    """
+    content = getattr(message, "content", None)
+    if not content:
+        return ""
+    for block in content:
+        # TextBlock has .type=="text" and .text=<str>
+        if getattr(block, "type", None) == "text":
+            return getattr(block, "text", "") or ""
+    return ""
+
+
+@router.post(
+    "/cases/generate-draft",
+    response_model=GenerateDraftResponse,
+    dependencies=[Depends(get_current_user)],  # §13.13 amendment A — Bearer auth required
+)
+def generate_draft(req: GenerateDraftRequest) -> GenerateDraftResponse:
+    """Generate a §4.1-shaped YAML case draft from a free-text description.
+
+    Design.md §5.4 + §13.13 v1.25 amendment. The endpoint is a thin
+    contract layer:
+
+    1. Validate `len(description) <= 8 KB` (413 on overflow).
+    2. Resolve allowed categories + status_whitelists from
+       ``case_categories`` and build the system prompt via
+       :mod:`app.api.llm_prompt`.
+    3. Call ``anthropic.Anthropic().messages.create`` with
+       ``max_tokens=2000``, ``model="claude-opus-4-7"``.
+       a. On a 5xx / 429 / timeout / network error → no retry, raise
+          mapped HTTPException immediately (retrying just burns more
+          quota).
+       b. On a successful call whose body fails ``yaml_loader.load_case``
+          + ``case_normalizer.normalize_case`` validation → retry with
+          the previous validation error embedded in the next prompt's
+          user-turn (capped at 2 retries, so 3 calls total).
+    4. After max retries, return 200 with empty ``yaml_draft`` and the
+       accumulated validation errors — that's a business state, not a
+       5xx.
+
+    §14 R26: validation goes through the same modules ``POST /cases/validate``
+    uses (``_validate_yaml_text``). No inline schema check — if the
+    contract drifts there, this endpoint inherits it for free.
+    """
+    # 1. size cap (§13.13 amendment B)
+    desc_bytes = len(req.description.encode("utf-8"))
+    if desc_bytes > _GENERATE_DRAFT_MAX_DESCRIPTION_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"description is {desc_bytes} bytes; max allowed is "
+                f"{_GENERATE_DRAFT_MAX_DESCRIPTION_BYTES} (8 KB)"
+            ),
+        )
+
+    # 2. ANTHROPIC_API_KEY presence (§13.13 amendment D3 / error map 503)
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ANTHROPIC_API_KEY env var is not set on the backend. "
+                "This endpoint is unavailable until the operator configures "
+                "the key (see README 'env vars 说明')."
+            ),
+        )
+
+    # 3. build prompt blocks (cached prefix) + first user-turn.
+    allowed_categories, status_whitelist_by_category = _categories_for_prompt()
+    system_blocks = build_system_blocks(
+        allowed_categories=allowed_categories,
+        status_whitelist_by_category=status_whitelist_by_category,
+    )
+
+    # Import lazily so unit tests that monkeypatch the SDK at module
+    # scope (or that lack the dep) still load cases.py.
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    previous_error: str | None = None
+    validation_errors_during_retry: list[str] = []
+    attempts = 0
+    yaml_draft: str = ""
+
+    # 4. retry loop — at most (1 + _MAX_RETRIES_ON_SCHEMA_INVALID) calls.
+    for attempt in range(1, _GENERATE_DRAFT_MAX_RETRIES_ON_SCHEMA_INVALID + 2):
+        attempts = attempt
+        user_msg_text = build_user_message(
+            description=req.description,
+            category=req.category,
+            previous_validation_error=previous_error,
+        )
+
+        t0 = time.monotonic()
+        try:
+            message = client.messages.create(
+                model=_GENERATE_DRAFT_MODEL,
+                max_tokens=_GENERATE_DRAFT_MAX_TOKENS,
+                system=system_blocks,
+                messages=[{"role": "user", "content": user_msg_text}],
+            )
+        except anthropic.APITimeoutError as e:
+            logger.warning(
+                "/cases/generate-draft: anthropic API timeout (no retry per §13.13 C-2): %s", e
+            )
+            raise HTTPException(status_code=504, detail="Anthropic SDK timed out") from e
+        except anthropic.RateLimitError as e:
+            logger.warning(
+                "/cases/generate-draft: anthropic 429 rate-limit (no retry per §13.13 C-2): %s", e
+            )
+            raise HTTPException(status_code=429, detail="Anthropic API rate-limited") from e
+        except anthropic.APIStatusError as e:
+            # Catches 5xx (InternalServerError) + other non-rate-limit 4xx.
+            code = getattr(e, "status_code", None)
+            if isinstance(code, int) and 500 <= code < 600:
+                logger.warning(
+                    "/cases/generate-draft: anthropic 5xx (no retry per §13.13 C-2): %s", e
+                )
+                raise HTTPException(status_code=502, detail="Anthropic API 5xx") from e
+            # Any other 4xx is a request-shape bug on our side; surface as 502
+            # too rather than leaking the SDK's status into an HTTP-like passthrough.
+            logger.warning("/cases/generate-draft: anthropic API status error: %s", e)
+            raise HTTPException(status_code=502, detail=f"Anthropic API error: {e}") from e
+        except anthropic.APIConnectionError as e:
+            logger.warning(
+                "/cases/generate-draft: anthropic network error (no retry per §13.13 C-2): %s", e
+            )
+            raise HTTPException(status_code=504, detail="Anthropic API connection error") from e
+
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        # Extract usage stats for observability (§13.13 amendment F).
+        usage = getattr(message, "usage", None)
+        prompt_tokens = getattr(usage, "input_tokens", None) if usage else None
+        completion_tokens = getattr(usage, "output_tokens", None) if usage else None
+
+        raw_text = _extract_response_text(message)
+        candidate_yaml = _strip_yaml_fences(raw_text)
+
+        # Validate via the same helper /cases/validate uses (§14 R26).
+        ok, errors, _parsed = _validate_yaml_text(candidate_yaml)
+
+        # Observability line (every call gets one, success or fail).
+        logger.info(
+            "generate-draft attempt=%d ok=%s model=%s latency_ms=%d "
+            "prompt_tokens=%s completion_tokens=%s validation_errors_count=%d",
+            attempt,
+            ok,
+            _GENERATE_DRAFT_MODEL,
+            latency_ms,
+            prompt_tokens,
+            completion_tokens,
+            len(errors),
+        )
+
+        if ok:
+            yaml_draft = candidate_yaml
+            break
+
+        # Bundle this attempt's errors into a flat string for both the
+        # response payload and the next prompt's feedback injection.
+        error_str = "; ".join(f"{e.where}: {e.reason}" for e in errors) or "validation failed"
+        validation_errors_during_retry.append(error_str)
+        previous_error = error_str
+        # Loop: next attempt embeds previous_error in the prompt (the
+        # wiring assertion in tests checks this string literally appears
+        # in the next messages.create call's prompt body — §13.13 D).
+
+    return GenerateDraftResponse(
+        yaml_draft=yaml_draft,
+        attempts=attempts,
+        validation_errors_during_retry=validation_errors_during_retry,
+    )
 
 
 __all__ = ["router"]
