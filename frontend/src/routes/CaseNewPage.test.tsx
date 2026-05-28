@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import CaseNewPage from './CaseNewPage';
 import { stripSkillFence } from '@/lib/skillFence';
 import * as clientModule from '@/api/client';
+import { flags } from '@/lib/featureFlags';
 
 // ---------------------------------------------------------------------------
 // Mock apiFetch for generate-draft tests
@@ -571,10 +572,12 @@ describe('M3a-9: Try spinner and elapsed counter', () => {
 
 describe('M7-3: LLM generate-draft state machine', () => {
   beforeEach(() => {
+    flags.llmFeatureEnabled = true;
     vi.clearAllMocks();
   });
 
   afterEach(() => {
+    flags.llmFeatureEnabled = false;
     vi.restoreAllMocks();
   });
 
@@ -587,9 +590,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     });
   }
 
-  // §M7-followup: tests below require btn-generate-real to be clickable.
-  // Skipped while LLM_FEATURE_ENABLED=false; un-skip when the flag is flipped true.
-  it.skip('shows llm-status-loading while request is in-flight', async () => {
+  it('shows llm-status-loading while request is in-flight', async () => {
     let resolveGenerate!: (value: unknown) => void;
     mockApiFetch.mockImplementationOnce(
       () => new Promise((r) => { resolveGenerate = r; }),
@@ -616,7 +617,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     });
   });
 
-  it.skip('success (200): transitions to llm-status-loaded, injects draft into YAML editor', async () => {
+  it('success (200): transitions to llm-status-loaded, injects draft into YAML editor', async () => {
     const draftYaml = 'id: lg-bug-test\ntitle: Test bug\ncategory: bug_regression\n';
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: draftYaml,
@@ -637,7 +638,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(screen.queryByTestId('llm-status-error')).not.toBeInTheDocument();
   });
 
-  it.skip('success with attempts=3: loaded state shows validation_errors_during_retry', async () => {
+  it('success with attempts=3: loaded state shows validation_errors_during_retry', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-retry\ntitle: retry\ncategory: bug_regression\n',
       attempts: 3,
@@ -656,7 +657,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(loadedEl.textContent).toContain('3');
   });
 
-  it.skip('401: transitions to llm-status-error and shows error message', async () => {
+  it('401: transitions to llm-status-error and shows error message', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 401 · Not authenticated'),
     );
@@ -674,7 +675,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(screen.queryByTestId('llm-status-loaded')).not.toBeInTheDocument();
   });
 
-  it.skip('413: error panel shows HTTP 413 · detail', async () => {
+  it('413: error panel shows HTTP 413 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 413 · description exceeds 8 KB limit'),
     );
@@ -691,7 +692,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('description exceeds 8 KB limit');
   });
 
-  it.skip('429: error panel shows HTTP 429 · detail', async () => {
+  it('429: error panel shows HTTP 429 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 429 · Anthropic rate limited — try again shortly'),
     );
@@ -708,7 +709,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('rate limited');
   });
 
-  it.skip('502: error panel shows HTTP 502 · detail', async () => {
+  it('502: error panel shows HTTP 502 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 502 · Anthropic API error'),
     );
@@ -725,7 +726,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('Anthropic API error');
   });
 
-  it.skip('503: error panel shows HTTP 503 · detail', async () => {
+  it('503: error panel shows HTTP 503 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 503 · ANTHROPIC_API_KEY not configured'),
     );
@@ -742,7 +743,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('ANTHROPIC_API_KEY');
   });
 
-  it.skip('504: error panel shows HTTP 504 · detail', async () => {
+  it('504: error panel shows HTTP 504 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 504 · LLM request timed out'),
     );
@@ -766,15 +767,16 @@ describe('M7-3: LLM generate-draft state machine', () => {
 
 describe('M7-3: Confirm checkbox gate wiring', () => {
   beforeEach(() => {
+    flags.llmFeatureEnabled = true;
     vi.clearAllMocks();
   });
 
   afterEach(() => {
+    flags.llmFeatureEnabled = false;
     vi.restoreAllMocks();
   });
 
-  // §M7-followup: tests below require btn-generate-real to fire; skipped while LLM_FEATURE_ENABLED=false.
-  it.skip('btn-validate is DISABLED (attribute) after draft loads and checkbox unchecked', async () => {
+  it('btn-validate is DISABLED (attribute) after draft loads and checkbox unchecked', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
@@ -802,7 +804,7 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     expect(validateBtn.disabled).toBe(true);
   });
 
-  it.skip('btn-validate becomes ENABLED after checkbox is checked (wiring)', async () => {
+  it('btn-validate becomes ENABLED after checkbox is checked (wiring)', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
@@ -829,7 +831,7 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     expect(validateBtn.disabled).toBe(false);
   });
 
-  it.skip('clicking Validate when checkbox unchecked does NOT trigger validate network call', async () => {
+  it('clicking Validate when checkbox unchecked does NOT trigger validate network call', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
@@ -861,7 +863,7 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it.skip('checkbox not shown in idle or error states', async () => {
+  it('checkbox not shown in idle or error states', async () => {
     // Idle state
     renderPage();
     expect(screen.queryByTestId('confirm-draft-checkbox')).not.toBeInTheDocument();

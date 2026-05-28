@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
 import { stripSkillFence } from '@/lib/skillFence';
+import { flags } from '@/lib/featureFlags';
 
 // ---------------------------------------------------------------------------
 // API shape types (mirrors backend/app/api/cases.py)
@@ -81,9 +82,6 @@ function extractCaseId(yaml: string): string | null {
   const m = /^[\s\uFEFF]*id:\s*(\S+)/m.exec(yaml);
   return m ? m[1] : null;
 }
-
-// §M7-followup (2026-05-28): 暂未拿到 ANTHROPIC_API_KEY；待 key 到位翻 true 即可恢复完整 LLM 入口。
-const LLM_FEATURE_ENABLED = false;
 
 // ---------------------------------------------------------------------------
 // LLM generate state machine types
@@ -304,7 +302,7 @@ export default function CaseNewPage() {
         {/* Tab A — LLM generate */}
         <TabsContent value="entry-a">
           <div className="space-y-2 pt-2">
-            {!LLM_FEATURE_ENABLED && (
+            {!flags.llmFeatureEnabled && (
               <div
                 data-testid="llm-feature-unavailable-notice"
                 className="bg-amber-50 border border-amber-300 text-amber-900 rounded-md p-3 text-sm"
@@ -379,7 +377,7 @@ export default function CaseNewPage() {
               type="button"
               data-testid="btn-generate-real"
               onClick={() => void handleGenerate()}
-              disabled={!LLM_FEATURE_ENABLED || isAnyInFlight || isGenerating || !description.trim()}
+              disabled={!flags.llmFeatureEnabled || isAnyInFlight || isGenerating || !description.trim()}
             >
               {isGenerating ? '生成中…' : '从描述生成'}
             </Button>
