@@ -82,6 +82,9 @@ function extractCaseId(yaml: string): string | null {
   return m ? m[1] : null;
 }
 
+// §M7-followup (2026-05-28): 暂未拿到 ANTHROPIC_API_KEY；待 key 到位翻 true 即可恢复完整 LLM 入口。
+const LLM_FEATURE_ENABLED = false;
+
 // ---------------------------------------------------------------------------
 // LLM generate state machine types
 // ---------------------------------------------------------------------------
@@ -301,6 +304,16 @@ export default function CaseNewPage() {
         {/* Tab A — LLM generate */}
         <TabsContent value="entry-a">
           <div className="space-y-2 pt-2">
+            {!LLM_FEATURE_ENABLED && (
+              <div
+                data-testid="llm-feature-unavailable-notice"
+                className="bg-amber-50 border border-amber-300 text-amber-900 rounded-md p-3 text-sm"
+              >
+                <p className="font-semibold">⚠ "从描述生成"暂未启用</p>
+                <p>本功能需 ANTHROPIC_API_KEY 配置；当前账号尚未拿到 Anthropic key，待 key 到位后开放。</p>
+                <p>替代方案：① 切到「粘贴 YAML」标签自行粘贴；② 终端用 /add-test-case skill 路径。</p>
+              </div>
+            )}
             <label htmlFor="textarea-entry-a" className="text-sm font-medium">
               描述（Bug 场景描述，LLM 将据此生成 YAML 草稿）
             </label>
@@ -366,7 +379,7 @@ export default function CaseNewPage() {
               type="button"
               data-testid="btn-generate-real"
               onClick={() => void handleGenerate()}
-              disabled={isAnyInFlight || isGenerating || !description.trim()}
+              disabled={!LLM_FEATURE_ENABLED || isAnyInFlight || isGenerating || !description.trim()}
             >
               {isGenerating ? '生成中…' : '从描述生成'}
             </Button>
