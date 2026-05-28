@@ -272,7 +272,7 @@ with sqlite_store.get_session() as sess:
 
 ## 多 agent 自动协作（M5+ 后 fallback 路径）
 
-**当前现实**：M6 + post-M6 wave 1/2 共 ~16 PR 全部 user-driven 手写（带 Claude Code 协作但非 foreman 自动 dispatch），证明 R-stabilized 的代码库上 user-driven 显著比 foreman 快。
+**当前现实**：M6 + post-M6 wave 1/2 共 ~16 PR 为 user-driven 手写（带 Claude Code 协作但非 foreman 自动 dispatch），证明 R-stabilized 的代码库上 user-driven 显著比 foreman 快。**但 2026-05-28 起 foreman 自动 dispatch 路径已被真实功能 sprint 验证可用**：`m6-run-experience-deepening`（6 PR #189~#194）是**首个全程走 foreman 自动流水线**的功能 wave（非 user-driven），6/6 merged、`r25_violation=False`、reviewer 当真闸门抓 3 个真 bug（见下 Review 流水线 + design.md v1.24）。
 
 **foreman 自动 dispatch 路径仍然可用**（§15），作为大批量 sprint 的 fallback：
 
@@ -292,10 +292,12 @@ with sqlite_store.get_session() as sess:
 - **reviewer APPROVE** → foreman 武装 `gh pr merge --auto --squash`
 - **reviewer REQUEST_CHANGES** → foreman 派 fix，重新审查；REJECT 则停止
 - **CI 全绿** → GitHub 自动 squash merge 到 main
-- **merge 后 foreman 派 smoke-runner**（后台）→ 跑 `scripts/smoke.sh` 用 known-good case 验证工具链健康；NO-GO → foreman 核对 git show --stat 清单后自动开 revert PR + escalate
+- **merge 后 foreman 派 smoke-runner**（前台同步，见下 v1.23 更正）→ 跑 `scripts/smoke.sh` 用 known-good case 验证工具链健康；NO-GO → foreman 核对 git show --stat 清单后自动开 revert PR + escalate
 - **内置 `/review` 和 `/ultrareview`** 由用户**手动**调，不进自动流水线
 
 **v1.23 更正**：smoke-runner 由 foreman 在 merge 后**前台同步**(synchronous)派发，而**非**后台 (`run_in_background`)。原因：foreman 跑在 `claude --print` 一次性进程里，终态门若背景化会 orphan 子 agent 且丢失 final JSON，前台同步保证 GO/NO-GO 在同一轮被消费。详见 design.md §15.1 hard rule 5 + v1.23 changelog。
+
+**v1.24 验证（2026-05-28）**：上述全流水线首次在真实多 PR 功能 sprint（`m6-run-experience-deepening`，6 PR）上端到端跑通——specialist un-armed PR → reviewer 前置闸门（3 次 REQUEST_CHANGES 各抓真 bug：errorCache 双渲染 / 踩坏既有 e2e 契约 testid / §14 R30 stale-branch）→ APPROVE 武装 → ci-gate → 前台 smoke 逐 item 6 次全 GO。wrapper 对账 `foreman_exit_code=0` / `foreman_returned_final_json=True` / `r25_violation=False`。教训：**串行 worktree 不天然免冲突**（分支早于上一 PR 合入时切出会夹带已合并 commits，靠 reviewer R30 兜住）。详见 design.md v1.24 + docs/plans/review-pipeline-completion.md §5.6。
 
 ### Agent 模型矩阵
 

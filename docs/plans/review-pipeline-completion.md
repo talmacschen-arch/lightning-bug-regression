@@ -101,6 +101,22 @@ v3 核心代码工作 = **修根因 B(焊 foreman wiring) + 落 smoke.sh**。rev
    - **修正**：foreman 自动 revert 前**必须确认 squash commit 只含目标改动**（`git show <sha> --stat` 核对文件清单 = 该 PR 预期范围）；不干净则改精确回退或 escalate。
    - 顺带：cron reporter 有未 push 的本地 commit（git 卫生问题），导致开分支带进无关文件——reporter 落地时要确保 commit 后 push。
 
+## 5.6 真实多 PR sprint 端到端验证（2026-05-28，`m6-run-experience-deepening`）
+
+§5.5 只用 throwaway 单 PR 探针验过机制；本次首次用**真实功能 sprint**（6 item / 6 PR #189~#194）跑完整自动链，证明流水线在连续多 item 下稳定。
+
+- **结果**：6/6 merged，`scripts/dispatch-foreman.sh` 对账 `foreman_exit_code=0` / `foreman_returned_final_json=True` / **`r25_violation=False`** / 6 PR verified-from-gh / 9 of 10 rounds / ~1h49m。每 item 走 specialist un-armed PR → reviewer 前置闸门 → APPROVE 后 foreman 武装 → ci-gate → **前台同步 smoke（同轮消费 GO）** → 下一 item。
+- **reviewer 作真闸门**：3 次 REQUEST_CHANGES 各抓真问题（errorCache 双渲染 / 改页面踩坏既有 e2e 契约 testid / §14 R30 stale-branch），非橡皮章。
+- **新教训：串行 worktree 不天然免冲突**。foreman 一次派一个、合一个再派，但 specialist 分支若早于上一 PR 合入 main 时切出，仍夹带已合并 commits（#193 backend：`rebase --onto origin/main` 恢复纯净 diff），靠 reviewer R30 兜住。
+- **smoke 修法补强**：v1.23 前台同步派发只在单 sprint 验过，本次 6 次连续 GO、零 r25_violation，样本补强。
+
+### 5.6.1 附带调查：reviewer 本地 e2e + e2e mock 架构（结论：不改 CI）
+
+- reviewer verdict 常报 `Playwright e2e: SKIPPED (libgbm not available on reviewer host)` —— 实测**假阳性**：`/lib64/libgbm.so.1` 在、cached chrome-headless-shell `--dump-dom` 实跑 exit=0。根因 Playwright dep-checker 是 Debian 中心，在 RHEL **el9** 按 `libgbm1` 包名误报 missing。
+- 但 **e2e 全 `page.route()` mock 后端**（`frontend/e2e/*.spec.ts` 头明写 "All API calls are intercepted — no real backend needed"，webServer 只起 vite、CI 不起 :8000）→ reviewer 本地跳 e2e **无覆盖损失**；曾以为的"纯后端 PR 漏 e2e 洞"是**误判**（mock 不反映后端契约，后端 PR 跑 e2e 也抓不到）。
+- 真实覆盖结构**无真空**：前端行为=e2e(mock) / 后端契约=pytest / 类型契约=`gen:types`+tsc / 真集成=post-merge smoke。**决策：不动 `ci-gate.yml`（方案 A）。**
+- **残留隐患（待方案 B，未做）**：**mock 漂移**——e2e fixture 是对后端响应 shape 的硬编码假设，后端真改 shape 后 fixture 失真但 e2e 仍绿。治法 = CI 加一条真集成 e2e（起真 :8000 + 去 mock 跑 1-2 条 happy path）或 CI 检 `gen:types` 后 `git diff` 须为空。属新测试架构活、非改 filter。
+
 ## 6. 待确认决策点
 
 **已锁定**:
@@ -111,6 +127,8 @@ v3 核心代码工作 = **修根因 B(焊 foreman wiring) + 落 smoke.sh**。rev
 
 - ✅ A/B 流程机制端到端实测走通(§5.5)
 - ✅ D1 收紧:§14 A 类检查留 reviewer 内部,不裸进 ci-gate(实测会假阳性误挡文档 PR)
+- ✅ **真实多 PR sprint 端到端验证(§5.6)**:6 item/6 PR 全自动链 merged,r25_violation=False,reviewer 抓 3 个真问题
+- ✅ **e2e 覆盖结构调查(§5.6.1)**:reviewer 本地 e2e 是 el9 假阳性 + e2e 全 mock → 无覆盖真空 → **不改 ci-gate(方案 A)**;残留 mock 漂移待方案 B
 
 **待你拍板**:
 - **D5**:smoke.sh 自起自停 backend 确认?(荐 是,自包含)
