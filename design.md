@@ -41,6 +41,7 @@
 
 | 版本 | 日期 | 作者 | 变更摘要 |
 |------|------|------|----------|
+| v1.25 | 2026-05-28 | Claude (M7 plan amendment) | **M7 LLM 接入计划开工前最终化** —— §13.13 末尾新增 v1.25 amendment 段，原 2026-05-24 计划保留以见演化。核心决策：**D1=`claude-opus-4-7`**（推翻 §5.4 早期 sonnet 默认，与 skill 路径永久钉 opus 对齐，feedback_model_override_2026-05-24） / D2=hardcode 3 few-shot in `llm_prompt.py` / D3=`ANTHROPIC_API_KEY` env var only / **H=β user-driven 单 PR（不走 foreman）**——避 R30 stale-branch + 跳 gen:types 跨 PR 接力。必补项 A-G 全采纳：(A) endpoint 要求 Bearer auth，**不**沿用 `/cases/*` 当前匿名姿态（核实 2026-05-28：那三个 endpoint 当前无 Depends/auth）；(B) `description ≤ 8KB` + `max_tokens=2000`；(C) **retry 语义分两类**——schema-invalid 重试 ≤2 次塞回错误，Anthropic API 错（429/5xx/超时）**不重试**按错误码上抛；(D) M7-4 必 assert 重试时 prompt 真包含上次 validation error 串（CLAUDE.md §2 wiring）；(E) system prompt 显式注入两条 = 默认 `database: gpadmin`（2026-05-24 新规范）+ §4.1.2 psql -c 铁律；(F) 每次调用 `logger.info` 落 `tokens/latency/retry_count`，不持久化；(G) prompt caching = schema+few-shot 共同前缀打 `cache_control:ephemeral`，user description 不缓存，定位"省点是点"非承诺。**错误码细分**：503(key 缺) / 502(Anthropic 5xx) / 429 透传 / 504(超时) / 413(description 超长) / 401(no Bearer)；2 次 schema retry 失败返 200 + body attempts=3。M7-1 隐含一步：`anthropic` 加进 `backend/pyproject.toml`（当前未装）。原"M7 dispatch 提示"段（foreman 派 specialist）**作废**。同步落 `docs/plans/M7.md` 作 user 个人 checklist。 |
 | v1.24 | 2026-05-28 | Claude (foreman 运维 / 流程验证) | **review-pipeline v3 首次在真实「多 PR 功能 sprint」上端到端跑通**（此前仅 throwaway 单 PR 探针 #180/#181 + 单文档 sprint #183/#185 验过，从未验过连续多 item 自动链）。用 `scripts/dispatch-foreman.sh` 起 foreman 串行跑 `m6-run-experience-deepening`，6 item / 6 PR（#189~#194）全程走自动流水线：specialist 开 un-armed PR → foreman 派 reviewer 作 merge 前置闸门 → APPROVE 后 foreman 武装 auto-merge → ci-gate → **merge 后前台同步派 smoke（v1.23 修法逐 item 实跑生效）→ 同轮消费 GO** → 下一 item。wrapper 对账：`foreman_exit_code=0` / `foreman_returned_final_json=True` / **`r25_violation=False`** / 6 PR 全 verified-from-gh / main `6a47da1`→`19ce4ea` / 9 of 10 rounds / ~1h49m。**验证到的流程性事实**：(1) **reviewer 是真闸门不是橡皮章**——3 次 REQUEST_CHANGES 各抓真问题：errorCache stale-on-retry 双渲染、改页面踩坏既有 e2e 契约 testid（ci-gate e2e 拦下→fix 恢复→转绿才合）、**§14 R30 stale-branch**（backend 分支早于上一 PR 合入时切出、夹带已合并 commits）→ `rebase --onto origin/main` 恢复纯净 diff。(2) **串行 worktree 不天然免冲突**：foreman 一次派一个、合一个再派下一个，但若 specialist 分支创建时间早于上一 PR 合入 main，仍会夹带已合并 commits（#193 实证），靠 reviewer R30 兜住——新教训，记账。(3) **post-merge smoke 逐 item 全 GO**（v1.23 前台同步派发修法在真 foreman 进程里 6 次连续生效，无一 r25_violation，补强 v1.23 仅单 sprint 验过的样本）。**附带调查（结论：不改 CI）**：reviewer verdict 常报 `Playwright e2e: SKIPPED (libgbm not available)`——实测是 **el9 假阳性**（`/lib64/libgbm.so.1` 在、cached chrome-headless-shell 实跑 exit=0），根因 Playwright dep-checker 是 Debian 中心、在 RHEL 系按 `libgbm1` 包名误报；但 **e2e 全 `page.route()` mock 后端**（spec 头明写 "no real backend needed"），故 reviewer 本地跳 e2e 无覆盖损失，"纯后端 PR 漏 e2e"也是误判（mock 不反映后端契约）。真实覆盖结构无真空（前端行为=e2e mock / 后端契约=pytest / 类型契约=gen:types+tsc / 真集成=post-merge smoke）→ **决策不动 `ci-gate.yml`**（残留「mock 漂移」隐患记于 `docs/plans/review-pipeline-completion.md` 待方案 B：真集成 e2e）。 |
 | v1.23 | 2026-05-28 | Claude (foreman wiring fix) | **修 v1.22 遗留的 smoke 终态门编排 bug。** 实测 `smoke-pipeline-test` sprint:流水线前半截全走通(doc-writer 开 PR #183 不武装→停 open→reviewer APPROVE→foreman 武装→squash-merge `e41e88a`→CI SUCCESS),但 **step 6.a 派 smoke-runner 用了 `run_in_background: true`,foreman 随即退出(exit 0, 397s),smoke 的 GO/NO-GO 从没回来,final JSON 也丢了(`r25_violation=true`)**。**根因**:foreman 由 `scripts/dispatch-foreman.sh` 以 `claude --print`(一次性非交互)启动——没有 event loop 去 await 后台子 agent;而 smoke 是 foreman 的**终态门**(verdict 必须在同一轮被消费才能 emit final JSON),终态背景化 = orphan 子 agent + 丢 final JSON。**修法(用户决策:前台同步)**:step 6.a 改**前台同步**派 smoke-runner(阻塞等 GO/NO-GO,实测 known-good case <1min,脚本内部 budget ~6min 封顶),`run_in_background` 仅留给"有并行活、之后再回收"的长任务。**改动**:foreman.md hard rule 5 + step 3 + step 6.a 三处 + design.md §8.1/§8.2/§15.1 loop/§15.1 rule-5 表四处。**人工补跑 `scripts/smoke.sh` 对 `e41e88a` 拿基线 = GO**(passed=2 failed=0 errored=0,真集群链路通),证明工具链健康、卡点纯在编排。lint(`check_agent_dispatch.sh`)不涉 background,无矛盾。 |
 | v1.22 | 2026-05-28 | pm-designer (Claude) | **review 流水线补齐:reviewer 焊进 foreman 作 merge 前置闸门 + smoke-runner 落地 + 重启 foreman 作日常方式。** 起因:实测发现 reviewer 全仓只跑过 1 次(PR #94)、smoke-runner 从没落地(smoke.sh 不存在)。**两个根因**:(A) foreman 不启动(M5 后转 user-driven);(B) **foreman.md loop 算法本身没有"派 reviewer""派 smoke"步骤**——光重启 foreman 也不会派。**方案(用户三步收敛)**:① reviewer 内部本想"§14 + 内置 /review"两段式,但**实测撞死结**——subagent 能 invoke 内置 /review 但 /review 自身要派 finder 子 agent 而 subagent 不能嵌套派(能启动跑不完);② 故改为:**自研 reviewer 保留全功能(§14+6域)作前置闸门,内置 /review 由用户手动调不进流水线**;③ smoke 回 foreman 派,merge 后跑,**NO-GO 自动开 revert PR**。**改动**:foreman.md loop 补 step 3.5(PR 后派 reviewer,APPROVE 后**foreman**武装 auto-merge)+ step 6.a(merge 后派 smoke,NO-GO→`git show --stat`核对清单后 revert PR)+ state schema(reviewer_verdict/smoke_verdict)+ hard rule 12;**3 个 specialist(backend/frontend/doc-fixer)删自武装步**(改 `open-awaiting-review`,reviewer 当前置闸门的前提——否则 CI 一绿就合 reviewer 来不及);reviewer.md 加流水线定位 + §14 限代码文件;新 `scripts/smoke.sh`(自包含:临时端口+临时 DB 零污染,登录 admin/admin,跑 lg-bug-0001/0002 known-good 试纸验工具链,自起自停)。**throwaway PR #180+#181 端到端实测全走通**(开 PR 不武装→停 open→APPROVE→事后武装→合→smoke NO-GO→revert PR→合)。**实测抓到 3 个"实测>grep"**:§14 A 类 grep 假阳性(限代码文件)/ squash revert 误伤(revert 前核对清单)/ POST /runs 实测 401 要 auth(grep 漏了 CurrentUser 别名)。设计稿 docs/plans/review-pipeline-completion.md(v3 + §5.5 实测 + §7 reviewer 增强 backlog E1-E8 含边界原则:reviewer 快闸门只放轻量,重活归 smoke/ci-gate)。 |
@@ -745,7 +746,7 @@ step 上写 `host: '{{ ... }}'` 时，runner 决定 ssh 用哪个用户登录：
 输出: 一份合法的 YAML 草稿。
 
 实现:
-- 走 Anthropic SDK，模型 `claude-sonnet-4-6`（首选），prompt 里塞 YAML schema + 3~5 个 few-shot 例子。
+- 走 Anthropic SDK，模型 **`claude-opus-4-7`（首选）**——与 skill 路径对齐（feedback_model_override_2026-05-24：skill 永久钉 opus、禁 sonnet）；§13.13 v1.25 amendment 推翻了早期 `claude-sonnet-4-6` 默认。prompt 里塞 YAML schema + 3~5 个 few-shot 例子。
 - **开启 prompt caching**（schema + 例子放到 cached prefix），降低成本。
 - 返回前在后端做一次 YAML 合法性 + schema 校验，不合法重试一次（最多 2 次）。
 - 前端展示草稿后**必须人工确认**，确认后才进入"Validate → Try → Save → PR"流程，绝不直接落盘。
@@ -1894,6 +1895,61 @@ M7-1 + M7-2 可 parallel（不同文件）；M7-3 依赖 M7-1 endpoint shape 定
 - 走 `scripts/dispatch-foreman.sh M7` (§14 R25, §14 R31 hardened)
 - foreman 模型 opus；specialist M7-1 用 backend-fixer (opus per §8.1)；M7-2 prompt 写法可能反复调，先 backend-fixer 写初版；M7-3 frontend-fixer (sonnet)；M7-5 user-driven
 - §14 R29-R32 4-gate 防御已 spec 化 (PR #101/#102)，foreman + reviewer + specialist 三方守门会拦下次 M5-1-like 失败链
+
+---
+
+#### 13.13.v1.25 amendment（2026-05-28，开工前最终化）
+
+> 经 m6 sprint 真实多 PR 流水线验证 + 几条新规范沉淀后，对 2026-05-24 原计划补/改如下。**落地以本段为准**；原文保留以见演化。amendment 由 4 天后 (2026-05-28) 人/Claude 二次审产生。
+
+**核心决策落定（D1 / D2 / D3 / H）**:
+- **D1 = `claude-opus-4-7`**（**推翻 §5.4 早期默认 `claude-sonnet-4-6`**）—— 与 skill 路径已永久钉 opus 4.7 对齐（feedback_model_override_2026-05-24：skill 文件永久钉 `claude-opus-4-7`、禁 sonnet、CI lint 拦）。理由：web LLM 与 skill 干**同一件事**（描述 → schema-bounded YAML），项目已对该任务类别表态"质量 > 成本"；5x 价差在低频 dev tool 上月成本差 ~$15-30；opus 首次成功率更高 → retry 概率低 → 等效 token 成本接近。**§5.4 spec 同步刷新默认值**。不引入 `ANTHROPIC_MODEL` env 配置化（YAGNI）。
+- **D2 = hardcode 3 例 in `backend/app/api/llm_prompt.py`**（plan 默认）；不做 dynamic `/admin/few-shot` endpoint。
+- **D3 = `ANTHROPIC_API_KEY` env var only**；不进 admin UI / `system_settings` 表（secrets 永远 env var）；缺时 endpoint 返 503。
+- **H = β user-driven 单 PR**（**不走 foreman**）：用户自己一个分支同时改 backend + frontend + tests，一次开 PR。理由：M7-1（backend-fixer 角色）与 M7-3（frontend-fixer 角色）跨域，foreman 路径必然拆 2 PR（α 模式，复刻 m6d3t2-backend → m6d3t2-frontend 那对），R30 stale-branch 风险已在 #193 实证；β user-driven 单 PR 完全规避 R30 + 跳过 gen:types 跨 PR 接力 + 内容契约耦合本就该一起改。原文 1893-1896 "M7 dispatch 提示" 段（foreman 派 specialist）**作废**。
+
+**必补项 A-G（全部纳入实施）**:
+
+- **A. endpoint auth**：`POST /cases/generate-draft` **要求 Bearer auth**（v1.17+），**不**沿用 `/cases/{validate,try,submit}` 当前的开放姿态（核实 2026-05-28：那三个 endpoint 当前 routes 无 `Depends`、tests 不带 Bearer，即匿名可调）。理由：每次调用真实烧 Anthropic 配额，匿名 = 任意人能耗光配额。`/cases/{validate,try,submit}` 是否补 auth 是独立议题，**不**在本 sprint 范围。
+- **B. size cap**：`description` 长度 **≤ 8 KB**（超出返 **413** + 明示）；Anthropic 调用 `max_tokens=2000`（防 LLM 失控吐 100K tokens）。
+- **C. retry 语义分两类**：原 plan 只说"≤2 次重试"混了两种错。明确分开：
+  - **(C-1) schema-invalid（attempt 输出过不了 yaml_loader + normalize）→ retry ≤2 次**，把上次的 validation error 串塞回下次 prompt（这是 plan 原意）。
+  - **(C-2) Anthropic API 错（429 / 5xx / 网络 / 超时）→ 不重试、不进 retry quota**，立即失败按错误码上抛（见下"错误码细分"）。重试只会更烧配额。
+- **D. retry feedback 必须 assert wiring**（覆盖 CLAUDE.md §2 "covers X 必须 assert"）：M7-4 backend pytest **必须**有一条 = mock 第 1 次返恶意 YAML、第 2 次返合法；**断言第 2 次的 `messages.create` 调用的 prompt body 里真包含上次的 validation error 串**（而非只测"retry 发生了"）。否则 LLM 重试拿不到信号 = 盲重试。
+- **E. 注入两条近期规范到 system prompt**（在 §5.4 schema 简版之外**显式声明**，不能只靠 few-shot #3 例子推断）：
+  - **(E-1)** 默认 `database: gpadmin` —— 2026-05-24 新规范：case YAML 未显式 database 时默认填 `gpadmin`（不是 `postgres`）。
+  - **(E-2)** §4.1.2 psql -c 铁律 —— non-tx-safe DDL（`VACUUM` / `ANALYZE` 顶层 / `CREATE DATABASE` / `REINDEX CONCURRENTLY` 等）**绝禁** `kind: sql` 走 psycopg，**必须** `kind: shell + cmd: psql -c '<DDL>'`。
+- **F. 可观测性 / 成本日志**：每次成功/失败调用 `logger.info` 落 `prompt_tokens / completion_tokens / latency_ms / retry_count / validation_errors_count / model`。**不**做持久化（KISS，需要审计时再说）。
+- **G. Prompt caching 实现细节**：原 plan "enable" 没说怎么 enable。明确：**schema + few-shot 共同前缀**打 `cache_control: {"type": "ephemeral"}` marker；user `description` **不**缓存。注意 cache TTL 默认 **5 min**，dev tool 低流量场景命中率有限——定位为"省点是点"优化，不是承诺。
+
+**错误码细分（与 C 配套，前端 error panel 据此分流文案）**:
+| 情形 | HTTP 码 |
+|---|---|
+| `ANTHROPIC_API_KEY` 缺 | **503** |
+| Anthropic 5xx | **502** |
+| Anthropic 429（限流） | **429** 透传 |
+| 网络 / 请求超时 | **504** |
+| `description > 8 KB` | **413** |
+| Bearer auth 缺 | **401** |
+| 2 次 schema retry 均失败 | **200** + body `{yaml_draft:"", attempts:3, validation_errors_during_retry:[...]}`（plan 原设计保留——这是业务态，不是错） |
+
+**M7-1 隐含一步（plan 漏写）**: 把 `anthropic` 加进 `backend/pyproject.toml` deps（当前未装，已核实 2026-05-28）。M7-prep 单列。
+
+**M7-4 tests 追加项**（除原 plan 列表外）:
+- backend pytest：**Bearer auth 缺时返 401** 的契约测；上面 C-1/C-2 各错误码的覆盖测；**D 的 retry-feedback-contains-error 必 assert**。
+- frontend vitest：确认 checkbox 关时 Validate **真不可点**（不是仅视觉灰，要 assert click handler 不触发或按钮 `disabled` 属性）。
+
+**M7 不做的事 追加**（除原 plan 已列）:
+- "Regenerate（同描述）" 按钮（审 9. 🟢 I）—— 本期不做，需要时单独 PR。
+- 错误文案精细化（区分"请稍后重试" vs "API key 未配"等）—— 错误码细分已就位，前端文案先落到最简：`generate 失败：HTTP <code> · <body.detail>`；UI 文案优化留后续。
+- `/cases/{validate,try,submit}` 补 auth（与 A 关联但范围更大，独立议题）。
+
+**PR 走法（β user-driven，replace 原 1893-1896 段）**:
+- 单一分支 `feat/m7-llm-generate-draft`，user 自己同时改 backend + frontend + tests。
+- 开 PR 不自武装，走 reviewer 前置闸门：§14 R29 reviewer 可声明本机没 `ANTHROPIC_API_KEY` 而 SKIP 真 SDK 调用 → 给 **TENTATIVE_APPROVE**（仅本地 mock pytest + 静态 + 走查）。
+- APPROVE 后 user 手动 `gh pr merge --auto --squash`（不需要 foreman 武装）→ CI gate → merge → user 手动跑 `scripts/smoke.sh`（β 模式没 foreman 派 smoke，由 user 兜）。
+- dogfood (M7-5) 由 user 在浏览器手验，产 `docs/m7-dogfood-<ts>.md`。
+- 同步落 `docs/plans/M7.md` 作 user 个人 checklist（不被 foreman 消费，但保留 sprint plan 文件惯例）。
 
 ---
 
