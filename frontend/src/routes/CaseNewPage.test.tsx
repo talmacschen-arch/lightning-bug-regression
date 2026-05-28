@@ -120,7 +120,9 @@ describe('CaseNewPage rendering', () => {
     expect(btn.disabled).toBe(true);
   });
 
-  it('btn-generate-real is enabled when description is non-empty', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('btn-generate-real is enabled when description is non-empty', async () => {
     renderPage();
     const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'some description' } });
@@ -568,7 +570,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     });
   }
 
-  it('shows llm-status-loading while request is in-flight', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('shows llm-status-loading while request is in-flight', async () => {
     let resolveGenerate!: (value: unknown) => void;
     mockApiFetch.mockImplementationOnce(
       () => new Promise((r) => { resolveGenerate = r; }),
@@ -595,7 +599,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     });
   });
 
-  it('success (200): transitions to llm-status-loaded, injects draft into YAML editor', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('success (200): transitions to llm-status-loaded, injects draft into YAML editor', async () => {
     const draftYaml = 'id: lg-bug-test\ntitle: Test bug\ncategory: bug_regression\n';
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: draftYaml,
@@ -616,7 +622,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(screen.queryByTestId('llm-status-error')).not.toBeInTheDocument();
   });
 
-  it('success with attempts=3: loaded state shows validation_errors_during_retry', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('success with attempts=3: loaded state shows validation_errors_during_retry', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-retry\ntitle: retry\ncategory: bug_regression\n',
       attempts: 3,
@@ -635,7 +643,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(loadedEl.textContent).toContain('3');
   });
 
-  it('401: transitions to llm-status-error and shows error message', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('401: transitions to llm-status-error and shows error message', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 401 · Not authenticated'),
     );
@@ -653,7 +663,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(screen.queryByTestId('llm-status-loaded')).not.toBeInTheDocument();
   });
 
-  it('413: error panel shows HTTP 413 · detail', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('413: error panel shows HTTP 413 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 413 · description exceeds 8 KB limit'),
     );
@@ -670,7 +682,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('description exceeds 8 KB limit');
   });
 
-  it('429: error panel shows HTTP 429 · detail', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('429: error panel shows HTTP 429 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 429 · Anthropic rate limited — try again shortly'),
     );
@@ -687,7 +701,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('rate limited');
   });
 
-  it('502: error panel shows HTTP 502 · detail', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('502: error panel shows HTTP 502 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 502 · Anthropic API error'),
     );
@@ -704,7 +720,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('Anthropic API error');
   });
 
-  it('503: error panel shows HTTP 503 · detail', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('503: error panel shows HTTP 503 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 503 · ANTHROPIC_API_KEY not configured'),
     );
@@ -721,7 +739,9 @@ describe('M7-3: LLM generate-draft state machine', () => {
     expect(errorEl.textContent).toContain('ANTHROPIC_API_KEY');
   });
 
-  it('504: error panel shows HTTP 504 · detail', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('504: error panel shows HTTP 504 · detail', async () => {
     mockApiFetch.mockRejectedValueOnce(
       new Error('generate 失败：HTTP 504 · LLM request timed out'),
     );
@@ -752,7 +772,9 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     vi.restoreAllMocks();
   });
 
-  it('btn-validate is DISABLED (attribute) after draft loads and checkbox unchecked', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('btn-validate is DISABLED (attribute) after draft loads and checkbox unchecked', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
@@ -780,7 +802,9 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     expect(validateBtn.disabled).toBe(true);
   });
 
-  it('btn-validate becomes ENABLED after checkbox is checked (wiring)', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('btn-validate becomes ENABLED after checkbox is checked (wiring)', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
@@ -807,7 +831,9 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     expect(validateBtn.disabled).toBe(false);
   });
 
-  it('clicking Validate when checkbox unchecked does NOT trigger validate network call', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('clicking Validate when checkbox unchecked does NOT trigger validate network call', async () => {
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
@@ -839,7 +865,9 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('checkbox not shown in idle or error states', async () => {
+  // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
+  // unskip together with restoring button when feature returns.
+  it.skip('checkbox not shown in idle or error states', async () => {
     // Idle state
     renderPage();
     expect(screen.queryByTestId('confirm-draft-checkbox')).not.toBeInTheDocument();
@@ -867,5 +895,24 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
     });
     const validateBtn = screen.getByTestId('btn-validate') as HTMLButtonElement;
     expect(validateBtn.disabled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M7 disabled: btn-generate-real hardcoded disabled + unavailable hint
+// ---------------------------------------------------------------------------
+
+describe('M7 disabled: unavailable hint and hardcoded button state', () => {
+  it('renders llm-feature-unavailable-hint paragraph', () => {
+    renderPage();
+    expect(screen.getByTestId('llm-feature-unavailable-hint')).toBeInTheDocument();
+  });
+
+  it('btn-generate-real is disabled regardless of description content', () => {
+    renderPage();
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'some description that would normally enable it' } });
+    const btn = screen.getByTestId('btn-generate-real') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
   });
 });
