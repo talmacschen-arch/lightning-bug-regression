@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { toast } from '@/hooks/use-toast';
+import { apiFetch } from '@/api/client';
+import type { components } from '@/api/client';
 import { stripSkillFence } from '@/lib/skillFence';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,9 @@ interface SubmitResponse {
   branch: string;
 }
 
+// GenerateDraftResponse shape from generated types
+type GenerateDraftResponse = components['schemas']['GenerateDraftResponse'];
+
 // ---------------------------------------------------------------------------
 // API helpers (plain fetch — these endpoints are not in the generated types.ts)
 // ---------------------------------------------------------------------------
@@ -72,11 +76,17 @@ function extractCaseId(yaml: string): string | null {
   // Tolerate leading whitespace / BOM / blank lines before `id:` line.
   // yaml_loader handles those when parsing the full file; the frontend
   // extractor matches that leniency. /m makes ^ match start-of-line; the
-  // \uFEFF escape (not a literal BOM) keeps eslint no-irregular-whitespace
+  // uFEFF escape (not a literal BOM) keeps eslint no-irregular-whitespace
   // happy while still consuming a leading byte-order mark if present.
   const m = /^[\s\uFEFF]*id:\s*(\S+)/m.exec(yaml);
   return m ? m[1] : null;
 }
+
+// ---------------------------------------------------------------------------
+// LLM generate state machine types
+// ---------------------------------------------------------------------------
+
+type LlmStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
 // ---------------------------------------------------------------------------
 // Component
@@ -88,11 +98,24 @@ export default function CaseNewPage() {
   // Entry tab selection
   const [activeEntry, setActiveEntry] = useState<string>('entry-a');
 
+  // Entry A description text
+  const [description, setDescription] = useState('');
+
   // Entry B raw paste value (kept separate from yamlText to preserve raw input)
   const [entryBRaw, setEntryBRaw] = useState('');
 
   // The canonical YAML being edited
   const [yamlText, setYamlText] = useState('');
+
+  // LLM generate state machine
+  const [llmStatus, setLlmStatus] = useState<LlmStatus>('idle');
+  const [llmError, setLlmError] = useState<string | null>(null);
+  const [llmAttempts, setLlmAttempts] = useState<number>(0);
+  const [llmValidationErrors, setLlmValidationErrors] = useState<string[]>([]);
+  // Human-gate checkbox: must be checked before Validate is enabled after LLM draft
+  const [draftConfirmed, setDraftConfirmed] = useState(false);
+  // Whether the current yamlText came from LLM and is awaiting confirmation
+  const [draftPending, setDraftPending] = useState(false);
 
   // Three-gate state
   const [validateOk, setValidateOk] = useState(false);
@@ -119,6 +142,9 @@ export default function CaseNewPage() {
     setValidateErrors([]);
     setPanelMsg(null);
     setPrResult(null);
+    // User edited the draft — confirmation is invalidated
+    setDraftPending(false);
+    setDraftConfirmed(false);
   }
 
   // Entry B: paste handler — strip skill fence if present, mirror to yaml editor
@@ -135,13 +161,42 @@ export default function CaseNewPage() {
     setValidateErrors([]);
     setPanelMsg(null);
     setPrResult(null);
+    setDraftPending(false);
+    setDraftConfirmed(false);
   }
 
-  // M3a-5: Entry A generate stub — literal placeholder, no LLM
-  function handleGenerateStub() {
-    toast({
-      title: 'M3a-5 not yet wired — 请用 skill 路径（/add-test-case）或 Tab B 粘贴',
-    });
+  // M7-3: Entry A generate — real LLM call via apiFetch
+  async function handleGenerate() {
+    setLlmStatus('loading');
+    setLlmError(null);
+    setLlmAttempts(0);
+    setLlmValidationErrors([]);
+    setDraftConfirmed(false);
+    setDraftPending(false);
+    try {
+      const resp = (await apiFetch('/cases/generate-draft', 'post', {
+        body: { description, category: null },
+      })) as GenerateDraftResponse;
+      setLlmAttempts(resp.attempts);
+      setLlmValidationErrors(resp.validation_errors_during_retry);
+      if (resp.yaml_draft) {
+        setYamlText(resp.yaml_draft);
+        // Reset three-gate since YAML changed
+        setValidateOk(false);
+        setTryOk(false);
+        setTryStepResults([]);
+        setYamlSha256(null);
+        setValidateErrors([]);
+        setPanelMsg(null);
+        setPrResult(null);
+      }
+      setLlmStatus('loaded');
+      // §5.4: do NOT auto-trigger Validate — human must check the checkbox first
+      setDraftPending(true);
+    } catch (err) {
+      setLlmStatus('error');
+      setLlmError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   // M3a-7: Validate handler
@@ -223,12 +278,16 @@ export default function CaseNewPage() {
   }
 
   const isAnyInFlight = validating || trying || submitting;
+  const isGenerating = llmStatus === 'loading';
+
+  // Validate button disabled when: in-flight, OR draft is loaded but checkbox not yet checked
+  const validateDisabled = validating || (draftPending && !draftConfirmed);
 
   return (
     <div data-testid="page-case-new" className="p-4 space-y-4">
       <h1 className="text-2xl font-semibold">New Case</h1>
 
-      {/* ---- Entry tabs (A = LLM stub, B = paste) ---- */}
+      {/* ---- Entry tabs (A = LLM, B = paste) ---- */}
       <Tabs value={activeEntry} onValueChange={setActiveEntry}>
         <TabsList>
           <TabsTrigger value="entry-a" data-testid="tab-entry-a">
@@ -239,26 +298,77 @@ export default function CaseNewPage() {
           </TabsTrigger>
         </TabsList>
 
-        {/* Tab A — LLM stub */}
+        {/* Tab A — LLM generate */}
         <TabsContent value="entry-a">
           <div className="space-y-2 pt-2">
             <label htmlFor="textarea-entry-a" className="text-sm font-medium">
-              描述（将来会调 LLM 生成 YAML 草稿）
+              描述（Bug 场景描述，LLM 将据此生成 YAML 草稿）
             </label>
             <textarea
               id="textarea-entry-a"
               data-testid="textarea-entry-a"
               className="w-full h-28 border rounded p-2 text-sm font-mono"
-              placeholder="在这里输入 Bug 描述…（v1 stub，暂不调 LLM）"
+              placeholder="在这里输入 Bug 描述…"
               rows={5}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
             />
+
+            {/* LLM status indicators */}
+            {llmStatus === 'idle' && (
+              <span data-testid="llm-status-idle" className="text-xs text-muted-foreground">
+                输入描述后点击按钮生成草稿
+              </span>
+            )}
+            {llmStatus === 'loading' && (
+              <span data-testid="llm-status-loading" className="text-xs text-muted-foreground flex items-center gap-1">
+                <span className="inline-block animate-spin">⏳</span>
+                LLM 生成中…
+              </span>
+            )}
+            {llmStatus === 'loaded' && (
+              <div data-testid="llm-status-loaded" className="space-y-2">
+                <p className="text-xs text-green-700">
+                  草稿已生成（尝试次数：{llmAttempts}）
+                  {llmValidationErrors.length > 0 && (
+                    <span className="ml-2 text-amber-600">
+                      重试时遇到 {llmValidationErrors.length} 个校验问题
+                    </span>
+                  )}
+                </p>
+                {/* Human-gate checkbox — §5.4 mandatory before Validate */}
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    data-testid="confirm-draft-checkbox"
+                    checked={draftConfirmed}
+                    onChange={(e) => setDraftConfirmed(e.target.checked)}
+                  />
+                  我已审阅 LLM 生成内容
+                </label>
+              </div>
+            )}
+            {llmStatus === 'error' && (
+              <div data-testid="llm-status-error" className="text-xs text-destructive">
+                {llmAttempts > 0 && (
+                  <p>
+                    尝试次数：{llmAttempts}
+                    {llmValidationErrors.length > 0 && (
+                      <span>，校验错误：{llmValidationErrors.join(' | ')}</span>
+                    )}
+                  </p>
+                )}
+                <p>{llmError}</p>
+              </div>
+            )}
+
             <Button
               type="button"
-              data-testid="btn-generate-stub"
-              onClick={handleGenerateStub}
-              disabled={isAnyInFlight}
+              data-testid="btn-generate-real"
+              onClick={() => void handleGenerate()}
+              disabled={isAnyInFlight || isGenerating || !description.trim()}
             >
-              生成 YAML 草稿
+              {isGenerating ? '生成中…' : '从描述生成'}
             </Button>
           </div>
         </TabsContent>
@@ -326,7 +436,7 @@ export default function CaseNewPage() {
         <Button
           type="button"
           data-testid="btn-validate"
-          disabled={validating}
+          disabled={validateDisabled}
           onClick={() => void handleValidate()}
         >
           {validating ? 'Validating…' : 'Validate'}

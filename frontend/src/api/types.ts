@@ -370,6 +370,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cases/generate-draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Draft
+         * @description Generate a §4.1-shaped YAML case draft from a free-text description.
+         *
+         *     Design.md §5.4 + §13.13 v1.25 amendment. The endpoint is a thin
+         *     contract layer:
+         *
+         *     1. Validate `len(description) <= 8 KB` (413 on overflow).
+         *     2. Resolve allowed categories + status_whitelists from
+         *        ``case_categories`` and build the system prompt via
+         *        :mod:`app.api.llm_prompt`.
+         *     3. Call ``anthropic.Anthropic().messages.create`` with
+         *        ``max_tokens=2000``, ``model="claude-opus-4-7"``.
+         *        a. On a 5xx / 429 / timeout / network error → no retry, raise
+         *           mapped HTTPException immediately (retrying just burns more
+         *           quota).
+         *        b. On a successful call whose body fails ``yaml_loader.load_case``
+         *           + ``case_normalizer.normalize_case`` validation → retry with
+         *           the previous validation error embedded in the next prompt's
+         *           user-turn (capped at 2 retries, so 3 calls total).
+         *     4. After max retries, return 200 with empty ``yaml_draft`` and the
+         *        accumulated validation errors — that's a business state, not a
+         *        5xx.
+         *
+         *     §14 R26: validation goes through the same modules ``POST /cases/validate``
+         *     uses (``_validate_yaml_text``). No inline schema check — if the
+         *     contract drifts there, this endpoint inherits it for free.
+         */
+        post: operations["generate_draft_cases_generate_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/categories": {
         parameters: {
             query?: never;
@@ -867,6 +911,34 @@ export interface components {
             content: string;
             /** Parse Error */
             parse_error?: string | null;
+        };
+        /**
+         * GenerateDraftRequest
+         * @description Request shape for ``POST /cases/generate-draft`` (M7-1).
+         */
+        GenerateDraftRequest: {
+            /** Description */
+            description: string;
+            /** Category */
+            category?: string | null;
+        };
+        /**
+         * GenerateDraftResponse
+         * @description Response shape for ``POST /cases/generate-draft`` (M7-1).
+         *
+         *     Note ``yaml_draft`` may be the empty string when all retries failed
+         *     schema validation; in that case ``attempts == 3`` and
+         *     ``validation_errors_during_retry`` is non-empty. This is a business
+         *     state, NOT an HTTP error — the endpoint returns 200 so the frontend
+         *     can surface the errors to the user.
+         */
+        GenerateDraftResponse: {
+            /** Yaml Draft */
+            yaml_draft: string;
+            /** Attempts */
+            attempts: number;
+            /** Validation Errors During Retry */
+            validation_errors_during_retry: string[];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1556,6 +1628,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_draft_cases_generate_draft_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateDraftResponse"];
                 };
             };
             /** @description Validation Error */

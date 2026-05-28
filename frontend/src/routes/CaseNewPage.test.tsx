@@ -2,8 +2,18 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import CaseNewPage from './CaseNewPage';
-import { Toaster } from '@/components/ui/toaster';
 import { stripSkillFence } from '@/lib/skillFence';
+import * as clientModule from '@/api/client';
+
+// ---------------------------------------------------------------------------
+// Mock apiFetch for generate-draft tests
+// ---------------------------------------------------------------------------
+
+vi.mock('@/api/client', () => ({
+  apiFetch: vi.fn(),
+}));
+
+const mockApiFetch = vi.mocked(clientModule.apiFetch);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,12 +26,11 @@ function makeJsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** Render CaseNewPage with Toaster so toast() output appears in DOM. */
+/** Render CaseNewPage. */
 function renderPage() {
   return render(
     <MemoryRouter>
       <CaseNewPage />
-      <Toaster />
     </MemoryRouter>,
   );
 }
@@ -99,20 +108,24 @@ describe('CaseNewPage rendering', () => {
     const btn = screen.getByTestId('btn-validate') as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
-});
 
-// ---------------------------------------------------------------------------
-// M3a-5: btn-generate-stub toast
-// ---------------------------------------------------------------------------
-
-describe('M3a-5: btn-generate-stub toast', () => {
-  it('btn-generate-stub click shows M3a-5 not yet wired toast', async () => {
+  it('shows llm-status-idle initially', () => {
     renderPage();
-    // btn-generate-stub is in Tab A which is the default active tab
-    const btn = screen.getByTestId('btn-generate-stub');
-    fireEvent.click(btn);
-    // The Toaster renders toasts — findByText searches within the full document
-    await screen.findByText(/M3a-5 not yet wired/);
+    expect(screen.getByTestId('llm-status-idle')).toBeInTheDocument();
+  });
+
+  it('btn-generate-real is disabled when description is empty', () => {
+    renderPage();
+    const btn = screen.getByTestId('btn-generate-real') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('btn-generate-real is enabled when description is non-empty', async () => {
+    renderPage();
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'some description' } });
+    const btn = screen.getByTestId('btn-generate-real') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 });
 
@@ -530,5 +543,329 @@ describe('M3a-9: Try spinner and elapsed counter', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('try-elapsed')).not.toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M7-3: LLM generate-draft state machine
+// ---------------------------------------------------------------------------
+
+describe('M7-3: LLM generate-draft state machine', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Type a description and click btn-generate-real */
+  async function clickGenerate(description = 'VACUUM crash bug') {
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: description } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-generate-real'));
+    });
+  }
+
+  it('shows llm-status-loading while request is in-flight', async () => {
+    let resolveGenerate!: (value: unknown) => void;
+    mockApiFetch.mockImplementationOnce(
+      () => new Promise((r) => { resolveGenerate = r; }),
+    );
+
+    renderPage();
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'some description' } });
+
+    act(() => {
+      fireEvent.click(screen.getByTestId('btn-generate-real'));
+    });
+
+    expect(screen.getByTestId('llm-status-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('llm-status-idle')).not.toBeInTheDocument();
+
+    // Cleanup
+    await act(async () => {
+      resolveGenerate({
+        yaml_draft: 'id: test\n',
+        attempts: 1,
+        validation_errors_during_retry: [],
+      });
+    });
+  });
+
+  it('success (200): transitions to llm-status-loaded, injects draft into YAML editor', async () => {
+    const draftYaml = 'id: lg-bug-test\ntitle: Test bug\ncategory: bug_regression\n';
+    mockApiFetch.mockResolvedValueOnce({
+      yaml_draft: draftYaml,
+      attempts: 1,
+      validation_errors_during_retry: [],
+    });
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-loaded')).toBeInTheDocument();
+    });
+
+    const yamlEditor = screen.getByTestId('textarea-yaml-editor') as HTMLTextAreaElement;
+    expect(yamlEditor.value).toBe(draftYaml);
+    expect(screen.queryByTestId('llm-status-idle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('llm-status-error')).not.toBeInTheDocument();
+  });
+
+  it('success with attempts=3: loaded state shows validation_errors_during_retry', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      yaml_draft: 'id: lg-bug-retry\ntitle: retry\ncategory: bug_regression\n',
+      attempts: 3,
+      validation_errors_during_retry: ['missing field: steps', 'invalid status value'],
+    });
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-loaded')).toBeInTheDocument();
+    });
+
+    // Should mention retry errors visually
+    const loadedEl = screen.getByTestId('llm-status-loaded');
+    expect(loadedEl.textContent).toContain('3');
+  });
+
+  it('401: transitions to llm-status-error and shows error message', async () => {
+    mockApiFetch.mockRejectedValueOnce(
+      new Error('generate 失败：HTTP 401 · Not authenticated'),
+    );
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    const errorEl = screen.getByTestId('llm-status-error');
+    expect(errorEl.textContent).toContain('HTTP 401');
+    expect(errorEl.textContent).toContain('Not authenticated');
+    expect(screen.queryByTestId('llm-status-loaded')).not.toBeInTheDocument();
+  });
+
+  it('413: error panel shows HTTP 413 · detail', async () => {
+    mockApiFetch.mockRejectedValueOnce(
+      new Error('generate 失败：HTTP 413 · description exceeds 8 KB limit'),
+    );
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    const errorEl = screen.getByTestId('llm-status-error');
+    expect(errorEl.textContent).toContain('HTTP 413');
+    expect(errorEl.textContent).toContain('description exceeds 8 KB limit');
+  });
+
+  it('429: error panel shows HTTP 429 · detail', async () => {
+    mockApiFetch.mockRejectedValueOnce(
+      new Error('generate 失败：HTTP 429 · Anthropic rate limited — try again shortly'),
+    );
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    const errorEl = screen.getByTestId('llm-status-error');
+    expect(errorEl.textContent).toContain('HTTP 429');
+    expect(errorEl.textContent).toContain('rate limited');
+  });
+
+  it('502: error panel shows HTTP 502 · detail', async () => {
+    mockApiFetch.mockRejectedValueOnce(
+      new Error('generate 失败：HTTP 502 · Anthropic API error'),
+    );
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    const errorEl = screen.getByTestId('llm-status-error');
+    expect(errorEl.textContent).toContain('HTTP 502');
+    expect(errorEl.textContent).toContain('Anthropic API error');
+  });
+
+  it('503: error panel shows HTTP 503 · detail', async () => {
+    mockApiFetch.mockRejectedValueOnce(
+      new Error('generate 失败：HTTP 503 · ANTHROPIC_API_KEY not configured'),
+    );
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    const errorEl = screen.getByTestId('llm-status-error');
+    expect(errorEl.textContent).toContain('HTTP 503');
+    expect(errorEl.textContent).toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('504: error panel shows HTTP 504 · detail', async () => {
+    mockApiFetch.mockRejectedValueOnce(
+      new Error('generate 失败：HTTP 504 · LLM request timed out'),
+    );
+
+    renderPage();
+    await clickGenerate();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    const errorEl = screen.getByTestId('llm-status-error');
+    expect(errorEl.textContent).toContain('HTTP 504');
+    expect(errorEl.textContent).toContain('timed out');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M7-3: Confirm checkbox gate — wiring tests (spec §5.4)
+// ---------------------------------------------------------------------------
+
+describe('M7-3: Confirm checkbox gate wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('btn-validate is DISABLED (attribute) after draft loads and checkbox unchecked', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
+      attempts: 1,
+      validation_errors_during_retry: [],
+    });
+
+    renderPage();
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bug description' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-generate-real'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-loaded')).toBeInTheDocument();
+    });
+
+    // Checkbox must be visible and unchecked
+    const checkbox = screen.getByTestId('confirm-draft-checkbox') as HTMLInputElement;
+    expect(checkbox).toBeInTheDocument();
+    expect(checkbox.checked).toBe(false);
+
+    // Validate button MUST have disabled attribute (wiring, not just visual)
+    const validateBtn = screen.getByTestId('btn-validate') as HTMLButtonElement;
+    expect(validateBtn.disabled).toBe(true);
+  });
+
+  it('btn-validate becomes ENABLED after checkbox is checked (wiring)', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
+      attempts: 1,
+      validation_errors_during_retry: [],
+    });
+
+    renderPage();
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bug description' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-generate-real'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-loaded')).toBeInTheDocument();
+    });
+
+    // Check the checkbox
+    const checkbox = screen.getByTestId('confirm-draft-checkbox') as HTMLInputElement;
+    fireEvent.click(checkbox);
+
+    // Validate button must now be enabled
+    const validateBtn = screen.getByTestId('btn-validate') as HTMLButtonElement;
+    expect(validateBtn.disabled).toBe(false);
+  });
+
+  it('clicking Validate when checkbox unchecked does NOT trigger validate network call', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
+      attempts: 1,
+      validation_errors_during_retry: [],
+    });
+
+    // Spy on fetch to detect any validate call
+    vi.spyOn(global, 'fetch');
+
+    renderPage();
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bug description' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-generate-real'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-loaded')).toBeInTheDocument();
+    });
+
+    // Checkbox is unchecked — btn-validate is disabled
+    const validateBtn = screen.getByTestId('btn-validate') as HTMLButtonElement;
+    expect(validateBtn.disabled).toBe(true);
+
+    // Attempt to click validate (should be blocked by disabled attribute)
+    fireEvent.click(validateBtn);
+
+    // fetch must NOT have been called (validate flow did not fire)
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('checkbox not shown in idle or error states', async () => {
+    // Idle state
+    renderPage();
+    expect(screen.queryByTestId('confirm-draft-checkbox')).not.toBeInTheDocument();
+
+    // Error state
+    mockApiFetch.mockRejectedValueOnce(new Error('generate 失败：HTTP 503 · key missing'));
+    const textarea = screen.getByTestId('textarea-entry-a') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'bug description' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('btn-generate-real'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('llm-status-error')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('confirm-draft-checkbox')).not.toBeInTheDocument();
+  });
+
+  it('btn-validate is enabled (no draft pending) when YAML typed directly without LLM', () => {
+    renderPage();
+    // No LLM call — just type YAML directly
+    fireEvent.change(screen.getByTestId('textarea-yaml-editor'), {
+      target: { value: 'id: manual\n' },
+    });
+    const validateBtn = screen.getByTestId('btn-validate') as HTMLButtonElement;
+    expect(validateBtn.disabled).toBe(false);
   });
 });
