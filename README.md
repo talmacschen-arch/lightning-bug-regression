@@ -10,7 +10,7 @@
 
 三类用例**共用**同一份 runner、schema、UI；通过 `category` 字段（DB 表驱动可扩展）区分，统计 / 看板 / Run 子集按 category 拆分。
 
-> 状态：**M0 ~ M7 全部交付 + post-M6 UX 迭代 wave 1+2 + 简易用户登录模块 + Release 流程文档 + target_versions registry + run.errored / error verdict / 进度条 / case 隔离 / 时区 root fix / Admin Bearer 迁移 + external_systems status 双轴语义改造 + review 流水线端到端跑通 + M7 LLM 从描述生成 case 草稿**（design.md v1.25，2026-06-02）。Released: [**v0.25.0**](https://github.com/talmacschen-arch/lightning-bug-regression/releases/tag/v0.25.0) (2026-06-02)。
+> 状态：**M0 ~ M7 全部交付 + post-M6 UX 迭代 wave 1+2 + 简易用户登录模块 + Release 流程文档 + target_versions registry + run.errored / error verdict / 进度条 / case 隔离 / 时区 root fix / Admin Bearer 迁移 + external_systems status 双轴语义改造 + review 流水线端到端跑通 + M7 LLM 从描述生成 case 草稿**（design.md v1.25，2026-06-02）。
 
 ---
 
