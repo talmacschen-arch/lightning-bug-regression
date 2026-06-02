@@ -210,6 +210,43 @@ describe('RunDetailPage', () => {
     expect(screen.getByTestId('run-case-status-bug-pass').className).toContain('bg-green-100');
   });
 
+  it('"Only failed/errored" toggle filters the case list to problem rows', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunMixed));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-case-row-bug-pass')).toBeInTheDocument();
+    });
+
+    // Off by default: all rows visible, toggle labels the problem count (3).
+    const toggle = screen.getByTestId('btn-filter-failed');
+    expect(toggle).toHaveTextContent('Only failed/errored (3)');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('run-case-row-bug-skip')).toBeInTheDocument();
+
+    // Turn on: pass + skip rows drop, only fail/error remain.
+    act(() => toggle.click());
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(toggle).toHaveTextContent('Show all');
+    expect(screen.queryByTestId('run-case-row-bug-pass')).toBeNull();
+    expect(screen.queryByTestId('run-case-row-bug-skip')).toBeNull();
+    expect(screen.getByTestId('run-case-row-bug-fail-1')).toBeInTheDocument();
+    expect(screen.getByTestId('run-case-row-bug-fail-2')).toBeInTheDocument();
+    expect(screen.getByTestId('run-case-row-bug-error-1')).toBeInTheDocument();
+
+    // Toggle back off: everything returns.
+    act(() => toggle.click());
+    expect(screen.getByTestId('run-case-row-bug-pass')).toBeInTheDocument();
+  });
+
+  it('filter toggle is absent when the run has no failed/errored cases', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunDone));
+    renderWithRoute('99');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-case-row-bug-001')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('btn-filter-failed')).toBeNull();
+  });
+
   it('running run opens SSE and indicator shows "live"', async () => {
     mockFetch.mockResolvedValue(mockJsonResponse(fakeRunRunning));
     renderWithRoute('42');
