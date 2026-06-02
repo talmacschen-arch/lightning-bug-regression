@@ -25,7 +25,7 @@ class TestNormalizeSetupTeardown:
 
     def test_string_setup_becomes_sql_dict(self):
         raw = {
-            "id": "lg-bug-X",
+            "id": "bug-X",
             "defaults": {"database": "mydb"},
             "setup": ["DROP TABLE IF EXISTS t1"],
             "steps": [{"kind": "sql", "sql": "SELECT 1"}],
@@ -167,7 +167,7 @@ class TestNormalizeCaseTopLevel:
         """M6-5: orchestrator-shaped dict must carry through external_deps
         so external_deps_loader.collect_external_deps() can pick it up."""
         raw = {
-            "id": "lg-xs-test",
+            "id": "xs-test",
             "external_deps": ["elasticsearch", "hive"],
             "steps": [{"id": "s1", "kind": "shell", "cmd": "echo ok"}],
         }
@@ -194,10 +194,10 @@ class TestNormalizeCaseTopLevel:
         assert out["external_deps"] == []
 
     def test_real_lg_bug_0001_shape_does_not_crash(self):
-        # Mini reproduction of the actual lg-bug-0001 YAML — proves
+        # Mini reproduction of the actual bug-0001 YAML — proves
         # `setup: list[str]` no longer breaks the orchestrator path.
         raw = {
-            "id": "lg-bug-0001-hashjoin-right-table",
+            "id": "bug-0001-hashjoin-right-table",
             "category": "bug_regression",
             "status": "open",
             "defaults": {"database": "postgres"},
@@ -232,11 +232,11 @@ class TestNormalizeCaseTopLevel:
 class TestTimeoutSecToMs:
     """`timeout_sec` → `timeout_ms` conversion.
 
-    Background (2026-05-25 dogfood, lg-bug-0011 v1): the orchestrator
+    Background (2026-05-25 dogfood, bug-0011 v1): the orchestrator
     (`backend/app/runner/orchestrator.py`) only reads `timeout_ms`, but
     the existing case YAML convention in this repo (e.g.
-    `cases/bug-regression/lg-bug-0008-pax-toast-vacuum-analyze-crash.yaml`,
-    `lg-bug-0010-gplogfilter-stuck-or-error.yaml`) writes `timeout_sec`.
+    `cases/bug-regression/bug-0008-pax-toast-vacuum-analyze-crash.yaml`,
+    `bug-0010-gplogfilter-stuck-or-error.yaml`) writes `timeout_sec`.
     Without conversion every author who wrote `timeout_sec: 300` got the
     60s `DEFAULT_TIMEOUTS_MS[kind]` fallback — a silent-noop bug. The
     normalizer now folds `timeout_sec` into `timeout_ms`.

@@ -378,8 +378,8 @@ async def test_non_explain_query_has_no_plan_text() -> None:
 
 # ---------------------------------------------------------------------------
 # (p) discard_all() — orchestrator session-state isolation between cases
-#     (dogfood 2026-05-26: lg-bug-0011 SET work_mem='256kB' leaked into
-#     lg-xs-zombodb at suite tail; per-case session reset is the fix)
+#     (dogfood 2026-05-26: bug-0011 SET work_mem='256kB' leaked into
+#     xs-zombodb at suite tail; per-case session reset is the fix)
 #
 #     Implementation note: PR-F's original DISCARD ALL fell over because
 #     PostgreSQL refuses DISCARD ALL inside a transaction block, and

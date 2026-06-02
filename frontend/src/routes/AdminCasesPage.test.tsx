@@ -28,7 +28,7 @@ function mockJson(body: unknown, ok = true, status = ok ? 200 : 500) {
 
 const FAKE_CASES = [
   {
-    id: 'lg-bug-0001-hashjoin-right-table',
+    id: 'bug-0001-hashjoin-right-table',
     category: 'bug_regression',
     title: 'hashjoin right table',
     status: 'fixed',
@@ -37,7 +37,7 @@ const FAKE_CASES = [
     error: null,
   },
   {
-    id: 'lg-ext-pgvector-ivfflat-basic',
+    id: 'ext-pgvector-ivfflat-basic',
     category: 'extension',
     title: 'pgvector IVFFLAT 索引',
     status: 'stable',
@@ -74,9 +74,9 @@ describe('AdminCasesPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('admin-cases-table')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('admin-cases-row-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
-    expect(screen.getByTestId('admin-cases-row-lg-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
-    expect(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-cases-row-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-cases-row-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table')).toBeInTheDocument();
   });
 
   it('renders hint banner pointing users to Skip list for temporary disable', async () => {
@@ -105,20 +105,20 @@ describe('AdminCasesPage', () => {
 
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId('admin-cases-row-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-cases-row-bug-0001-hashjoin-right-table')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table'));
+    fireEvent.click(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table'));
 
     await waitFor(() => {
-      expect(screen.queryByTestId('admin-cases-row-lg-bug-0001-hashjoin-right-table')).toBeNull();
+      expect(screen.queryByTestId('admin-cases-row-bug-0001-hashjoin-right-table')).toBeNull();
     });
     // Other row still there
-    expect(screen.getByTestId('admin-cases-row-lg-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-cases-row-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
 
     // Verify the DELETE call shape
     const deleteCall = mockFetch.mock.calls[0];
-    expect(deleteCall[0]).toContain('/admin/cases/lg-bug-0001-hashjoin-right-table');
+    expect(deleteCall[0]).toContain('/admin/cases/bug-0001-hashjoin-right-table');
     expect(deleteCall[1].method).toBe('DELETE');
   });
 
@@ -130,16 +130,16 @@ describe('AdminCasesPage', () => {
 
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table'));
+    fireEvent.click(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table'));
 
     expect(confirmSpy).toHaveBeenCalled();
     const msg = confirmSpy.mock.calls[0][0];
     expect(msg).toContain('Skip List');
     expect(msg).toContain('过期日');
     expect(msg).toContain('git rm');
-    expect(msg).toContain('lg-bug-0001-hashjoin-right-table');
+    expect(msg).toContain('bug-0001-hashjoin-right-table');
   });
 
   it('cancel via confirm() → no DELETE call', async () => {
@@ -148,14 +148,14 @@ describe('AdminCasesPage', () => {
 
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table'));
+    fireEvent.click(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table'));
 
     // No DELETE was made
     expect(mockFetch).not.toHaveBeenCalled();
     // Row still present
-    expect(screen.getByTestId('admin-cases-row-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-cases-row-bug-0001-hashjoin-right-table')).toBeInTheDocument();
   });
 
   it('sends Authorization: Bearer header from authHeaders() (v1.17 token-auth)', async () => {
@@ -171,7 +171,7 @@ describe('AdminCasesPage', () => {
 
     renderPage();
     await waitFor(() => expect(screen.getByTestId('admin-cases-table')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table'));
+    fireEvent.click(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table'));
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
     const headers = (mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers;
@@ -187,9 +187,9 @@ describe('AdminCasesPage', () => {
 
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table')).toBeInTheDocument();
+      expect(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('admin-cases-delete-lg-bug-0001-hashjoin-right-table'));
+    fireEvent.click(screen.getByTestId('admin-cases-delete-bug-0001-hashjoin-right-table'));
 
     await waitFor(() => {
       expect(screen.getByTestId('admin-cases-error')).toBeInTheDocument();

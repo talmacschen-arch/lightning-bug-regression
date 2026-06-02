@@ -1,4 +1,4 @@
-id: lg-bug-0011-pax-count-parallel-orca-off-unstable
+id: bug-0011-pax-count-parallel-orca-off-unstable
 title: 9.10 enable_parallel BUG1 [ORCA=OFF] PAX 表 count(*) 查询行数不稳定
 category: bug_regression
 status: fixed
@@ -113,10 +113,9 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-25"
 notes: |
-  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.10。
   关联 issue: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/265
   （注：BUG1 / 9.10 = #265；BUG2 / 9.11 "PAX 结果集行数改变" = #264，
-  我之前 lg-bug-0011 v1 PR #139 把 issue 号搞反了，本版修正）
+  我之前 bug-0011 v1 PR #139 把 issue 号搞反了，本版修正）
 
   **BUG 触发条件（飞书原文逐条对齐）**：
   1. 表 schema：`(id bigint, name text) USING pax WITH

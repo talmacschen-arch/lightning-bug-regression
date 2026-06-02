@@ -1,4 +1,4 @@
-id: lg-bug-0012-pax-count-parallel-orca-off-result-set-changes
+id: bug-0012-pax-count-parallel-orca-off-result-set-changes
 title: 9.11 enable_parallel BUG2 [ORCA=OFF] PAX 表结果集行数改变
 category: bug_regression
 status: fixed
@@ -147,7 +147,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-25"
 notes: |
-  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.11。
   关联 issue: https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/issues/264
 
   **BUG 触发条件（飞书原文逐条对齐 2026-05-25 fresh fetch）**：
@@ -193,7 +192,7 @@ notes: |
   build130 上的 ORCA=off + 多 micro-partition + 默认 prefetch 路径
   未复现 BUG)。
 
-  **注**：与 lg-bug-0011 (9.10 / BUG1 / #265) 互为兄弟 BUG，路径有重叠
+  **注**：与 bug-0011 (9.10 / BUG1 / #265) 互为兄弟 BUG，路径有重叠
   （都是 ORCA=off + parallel + PAX count）但触发条件正交：
   - 9.10 强制 Bitmap Index Scan（三条 enable_seqscan/indexscan/indexonlyscan=off）
   - 9.11 默认 scan 路径 + 多 micro-partition + prefetch 路径（飞书结论）

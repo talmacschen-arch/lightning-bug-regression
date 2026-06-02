@@ -28,7 +28,7 @@ Usage::
         --pgdatabase postgres \\
         --artifacts-root artifacts/m1-dogfood \\
         --report-path docs/m1-dogfood-<auto-timestamp>.md \\
-        [--case-id lg-bug-0001-hashjoin-right-table]
+        [--case-id bug-0001-hashjoin-right-table]
 
 PGPASSWORD env or ~/.pgpass picks up the password — psycopg honors both.
 """

@@ -1,4 +1,4 @@
-id: lg-bug-0003-count-no-statistics
+id: bug-0003-count-no-statistics
 title: ANALYZE 后 select count(*) 仍提示 "one or more columns ... do not have statistics"
 category: bug_regression
 status: fixed
@@ -83,7 +83,7 @@ notes: |
 
   "do not have statistics" 是 pg/Greenplum 的 NOTICE 级输出；runner 实跑
   时需要把 psycopg connection.notices 拼接进 step 输出流，让 expect
-  not_contains 可以匹配——同 lg-bug-0002 的 NOTICE 捕获依赖。M1 runner
+  not_contains 可以匹配——同 bug-0002 的 NOTICE 捕获依赖。M1 runner
   实现 sql_driver 时统一处理。
 
   ---
@@ -92,4 +92,4 @@ notes: |
   with real per-step duration (not 0ms instant-error of pre-PR #42/#43 era).
   Double evidence chain: CLI dogfood (M1, scripts/run_m1_dogfood.py) also PASS.
   fixed_version above = verified-non-reproducing version, NOT the specific fix
-  introduction build / commit (not yet researched against 飞书 LG history).
+  introduction build / commit (not yet researched against 飞书 history).

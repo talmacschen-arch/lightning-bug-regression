@@ -119,18 +119,18 @@ def test_case_categories_seeded(fresh_db_url: str) -> None:
     assert len(rows) == 3
     bug, ext, xs = rows
     assert bug.name == "bug_regression"
-    assert bug.id_prefix == "lg-bug-"
+    assert bug.id_prefix == "bug-"
     assert bug.dir_path == "bug-regression"
     assert bug.default_status == "open"
     assert bug.display_order == 10
     assert bug.is_active in (1, True)
     assert ext.name == "extension"
-    assert ext.id_prefix == "lg-ext-"
+    assert ext.id_prefix == "ext-"
     assert ext.dir_path == "extension"
     assert ext.default_status == "stable"
     assert ext.display_order == 20
     assert xs.name == "external_systems"
-    assert xs.id_prefix == "lg-xs-"
+    assert xs.id_prefix == "xs-"
     assert xs.dir_path == "external-systems"
     assert xs.default_status == "open"
     assert xs.display_order == 30

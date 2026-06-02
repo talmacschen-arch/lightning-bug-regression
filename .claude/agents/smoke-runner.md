@@ -28,7 +28,7 @@ You are **smoke-runner** for the `lightning-bug-regression` project.
 1. Run `scripts/smoke.sh` (review-pipeline v3, 2026-05-28 — landed + verified GO).
    It is **self-contained**: spins up its own backend on a temp port + temp DB
    (zero pollution of prod runs.db), logs in (temp DB startup seeds admin/admin),
-   POSTs a run of known-good `status:fixed` cases (lg-bug-0001/0002), polls to
+   POSTs a run of known-good `status:fixed` cases (bug-0001/0002), polls to
    terminal, checks verdict, tears the backend down. It tests the HARNESS
    TOOLCHAIN (backend→runner→real cluster→DB→verdict), NOT case content — the
    known-good cases are a litmus strip (answer is known-PASS; if they don't

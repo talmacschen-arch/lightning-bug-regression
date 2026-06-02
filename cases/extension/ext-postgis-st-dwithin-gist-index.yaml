@@ -1,4 +1,4 @@
-id: lg-ext-postgis-st-dwithin-gist-index
+id: ext-postgis-st-dwithin-gist-index
 title: PostGIS ST_DWithin / ST_Distance + GIST 空间索引基础链路
 category: extension
 status: stable
@@ -176,7 +176,7 @@ notes: |
     - #7 destructive=false 合理（无 gpstop / gpconfig / shared_preload_libraries
       改动）。
     - 其它 (#1-6, #8-10)：step kind 在 /admin/step-kinds (sql)；setup/teardown
-      幂等齐全；status=stable 对 extension category 合规；id 前缀 lg-ext-* 对；
+      幂等齐全；status=stable 对 extension category 合规；id 前缀 ext-* 对；
       无 Jinja typo / 无远端 cli step；无服务端配置文件。
 
   status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 postgis 2.5.4 完整链路

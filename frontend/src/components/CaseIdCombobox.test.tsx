@@ -15,9 +15,9 @@ vi.mock('@/api/client', () => ({
 }));
 
 const FAKE_CASES = [
-  { id: 'lg-bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const distributed row order', status: 'open', destructive: false, tags: null, error: null },
-  { id: 'lg-ext-pgvector-ivfflat-basic', category: 'extension', title: 'pgvector IVFFLAT 索引基础', status: 'stable', destructive: false, tags: null, error: null },
-  { id: 'lg-xs-zombodb-partition-text-search', category: 'external_systems', title: 'ZomboDB 分区表全文搜索', status: 'fixed', destructive: false, tags: null, error: null },
+  { id: 'bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const distributed row order', status: 'open', destructive: false, tags: null, error: null },
+  { id: 'ext-pgvector-ivfflat-basic', category: 'extension', title: 'pgvector IVFFLAT 索引基础', status: 'stable', destructive: false, tags: null, error: null },
+  { id: 'xs-zombodb-partition-text-search', category: 'external_systems', title: 'ZomboDB 分区表全文搜索', status: 'fixed', destructive: false, tags: null, error: null },
 ];
 
 beforeEach(() => {
@@ -39,9 +39,9 @@ describe('CaseIdCombobox', () => {
 
   it('displays current value when set', () => {
     apiFetchMock.mockResolvedValue(FAKE_CASES);
-    render(<CaseIdCombobox value="lg-ext-pgvector-ivfflat-basic" onChange={vi.fn()} />);
+    render(<CaseIdCombobox value="ext-pgvector-ivfflat-basic" onChange={vi.fn()} />);
     expect(screen.getByTestId('case-id-combobox-trigger')).toHaveTextContent(
-      'lg-ext-pgvector-ivfflat-basic',
+      'ext-pgvector-ivfflat-basic',
     );
   });
 
@@ -63,10 +63,10 @@ describe('CaseIdCombobox', () => {
     render(<CaseIdCombobox value="" onChange={onChange} />);
     fireEvent.click(screen.getByTestId('case-id-combobox-trigger'));
     await waitFor(() => {
-      expect(screen.getByTestId('case-id-combobox-item-lg-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
+      expect(screen.getByTestId('case-id-combobox-item-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('case-id-combobox-item-lg-ext-pgvector-ivfflat-basic'));
-    expect(onChange).toHaveBeenCalledWith('lg-ext-pgvector-ivfflat-basic');
+    fireEvent.click(screen.getByTestId('case-id-combobox-item-ext-pgvector-ivfflat-basic'));
+    expect(onChange).toHaveBeenCalledWith('ext-pgvector-ivfflat-basic');
   });
 
   it('filters by id substring via search input', async () => {
@@ -80,7 +80,7 @@ describe('CaseIdCombobox', () => {
     // cmdk filters in-place; mismatched items have display:none via aria
     // attributes. We assert at least the matching item is visible.
     await waitFor(() => {
-      const match = screen.getByTestId('case-id-combobox-item-lg-xs-zombodb-partition-text-search');
+      const match = screen.getByTestId('case-id-combobox-item-xs-zombodb-partition-text-search');
       expect(match).toBeInTheDocument();
     });
   });
@@ -93,7 +93,7 @@ describe('CaseIdCombobox', () => {
     // Search a TITLE-only keyword (not part of id)
     fireEvent.change(screen.getByTestId('case-id-combobox-search'), { target: { value: '全文搜索' } });
     await waitFor(() => {
-      expect(screen.getByTestId('case-id-combobox-item-lg-xs-zombodb-partition-text-search')).toBeInTheDocument();
+      expect(screen.getByTestId('case-id-combobox-item-xs-zombodb-partition-text-search')).toBeInTheDocument();
     });
   });
 
@@ -130,7 +130,7 @@ describe('CaseIdCombobox', () => {
     expect(screen.getByTestId('my-picker-trigger')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('my-picker-trigger'));
     await waitFor(() => {
-      expect(screen.getByTestId('my-picker-item-lg-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
+      expect(screen.getByTestId('my-picker-item-ext-pgvector-ivfflat-basic')).toBeInTheDocument();
     });
   });
 });

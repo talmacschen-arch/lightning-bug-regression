@@ -50,7 +50,7 @@ def _minimal_valid_yaml() -> str:
     schema (yaml_loader) and the normalizer's VALID_KINDS check."""
     return textwrap.dedent(
         """\
-        id: lg-bug-9999-test-submit
+        id: bug-9999-test-submit
         category: bug_regression
         title: submit endpoint smoke
         description: minimal valid case for /cases/submit test
@@ -90,7 +90,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
                 name="bug_regression",
                 display_name="BUG 回归",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -171,8 +171,8 @@ def test_submit_rejects_when_no_cache_entry(client: TestClient) -> None:
         "/cases/submit",
         json={
             "yaml": _minimal_valid_yaml(),
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 400
@@ -187,8 +187,8 @@ def test_submit_rejects_when_cache_entry_is_stale(client: TestClient) -> None:
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 400
@@ -213,8 +213,8 @@ def test_submit_rejects_invalid_yaml_even_with_cache_hit(client: TestClient) -> 
         "/cases/submit",
         json={
             "yaml": bad_yaml,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 400
@@ -256,19 +256,19 @@ def test_submit_dry_run_writes_file_and_skips_subprocess(
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["pr_number"] == 0
     assert "dryrun" in body["pr_url"]
-    assert body["branch"] == "case/lg-bug-9999-test-submit"
+    assert body["branch"] == "case/bug-9999-test-submit"
     assert called == []
 
     # File on disk, content round-trips byte-for-byte.
-    expected_file = tmp_path / "bug-regression" / "lg-bug-9999-test-submit.yaml"
+    expected_file = tmp_path / "bug-regression" / "bug-9999-test-submit.yaml"
     assert expected_file.is_file()
     assert expected_file.read_text(encoding="utf-8") == yaml_text
 
@@ -293,8 +293,8 @@ def test_submit_rejects_unknown_category(
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     # The validation layer rejects unknown categories first (it checks the
@@ -343,15 +343,15 @@ def test_submit_live_path_mocks_subprocess_and_asserts_cwd(
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["pr_number"] == 42
     assert body["pr_url"] == "https://github.com/foo/bar/pull/42"
-    assert body["branch"] == "case/lg-bug-9999-test-submit"
+    assert body["branch"] == "case/bug-9999-test-submit"
 
     # §14 R27 contract: every subprocess call MUST carry explicit cwd=repo_root.
     assert len(calls) == 6, f"expected 6 subprocess calls, got {len(calls)}: {calls}"
@@ -365,7 +365,7 @@ def test_submit_live_path_mocks_subprocess_and_asserts_cwd(
     argvs = [c["argv"] for c in calls]
     assert argvs[0][:2] == ["git", "checkout"]
     assert argvs[0][2] == "-b"
-    assert argvs[0][3] == "case/lg-bug-9999-test-submit"
+    assert argvs[0][3] == "case/bug-9999-test-submit"
     assert argvs[1][:2] == ["git", "add"]
     assert argvs[2][:2] == ["git", "commit"]
     assert argvs[3][:4] == ["git", "push", "-u", "origin"]
@@ -411,8 +411,8 @@ def test_submit_subprocess_failure_returns_500(
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 500
@@ -469,8 +469,8 @@ def test_submit_gh_pr_create_retries_on_tls_timeout(
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -515,8 +515,8 @@ def test_submit_gh_logical_error_does_not_retry(
         "/cases/submit",
         json={
             "yaml": yaml_text,
-            "case_id": "lg-bug-9999-test-submit",
-            "branch_name": "case/lg-bug-9999-test-submit",
+            "case_id": "bug-9999-test-submit",
+            "branch_name": "case/bug-9999-test-submit",
         },
     )
     assert resp.status_code == 500
@@ -526,7 +526,7 @@ def test_submit_gh_logical_error_does_not_retry(
     detail = resp.json()["detail"]
     assert "422" in detail
     assert "manually run" in detail  # caller-fallback hint
-    assert "case/lg-bug-9999-test-submit" in detail  # branch name in hint
+    assert "case/bug-9999-test-submit" in detail  # branch name in hint
 
 
 # ---------------------------------------------------------------------------

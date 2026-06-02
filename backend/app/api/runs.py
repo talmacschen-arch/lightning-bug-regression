@@ -408,7 +408,7 @@ def list_runs(
 
     Optional `case_id` query param filters to runs that touched the
     given case (post-M6 UX, 2026-05-25). Example:
-    `GET /runs?case_id=lg-bug-0009-union-all-const-distributed-row-order`
+    `GET /runs?case_id=bug-0009-union-all-const-distributed-row-order`
     returns only runs whose case_results array contains that case.
     """
     with sqlite_store.get_session() as sess:

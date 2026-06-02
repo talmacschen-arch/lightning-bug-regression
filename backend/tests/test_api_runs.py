@@ -53,7 +53,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="bug_regression",
                 display_name="BUG",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open"]),
                 default_status="open",
@@ -94,7 +94,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             insert_case_result(
                 sess,
                 run_id=run_id,
-                case_id="lg-bug-fake-0001",
+                case_id="bug-fake-0001",
                 status="pass",
                 duration_ms=42,
             )
@@ -162,7 +162,7 @@ def test_create_run_happy_path_returns_202_and_runs_in_background(
     assert final["total"] == 1
     assert final["passed"] == 1
     # nested case_results array populated by the fake orchestrator.
-    assert any(cr["case_id"] == "lg-bug-fake-0001" for cr in final["case_results"])
+    assert any(cr["case_id"] == "bug-fake-0001" for cr in final["case_results"])
 
 
 def test_create_run_requires_auth(client: TestClient) -> None:
@@ -203,7 +203,7 @@ def test_create_run_with_explicit_case_ids_filters_load(client: TestClient) -> N
     captured cases count from the fake orchestrator."""
     resp = client.post(
         "/runs",
-        json={"case_ids": ["lg-bug-0001-hashjoin-right-table"]},
+        json={"case_ids": ["bug-0001-hashjoin-right-table"]},
     )
     assert resp.status_code == 202
     run_id = resp.json()["run_id"]
@@ -271,7 +271,7 @@ def test_list_runs_returns_recent_runs_newest_first(client: TestClient) -> None:
 def test_list_runs_filter_by_case_id(client: TestClient) -> None:
     """GET /runs?case_id=X returns only runs that touched case X.
 
-    Fake orchestrator inserts `lg-bug-fake-0001` for every run, so it
+    Fake orchestrator inserts `bug-fake-0001` for every run, so it
     should match all runs; a non-existent case_id should match none.
     """
     r1 = client.post("/runs", json={})
@@ -282,7 +282,7 @@ def test_list_runs_filter_by_case_id(client: TestClient) -> None:
     _wait_for_run_terminal(client, id2)
 
     # case_id 命中 → 2 个 run
-    resp = client.get("/runs?case_id=lg-bug-fake-0001")
+    resp = client.get("/runs?case_id=bug-fake-0001")
     assert resp.status_code == 200
     assert {r["id"] for r in resp.json()} == {id1, id2}
 
@@ -321,7 +321,7 @@ def test_get_run_returns_run_with_case_results_array(client: TestClient) -> None
     assert final["id"] == run_id
     assert isinstance(final["case_results"], list)
     assert len(final["case_results"]) >= 1
-    assert final["case_results"][0]["case_id"] == "lg-bug-fake-0001"
+    assert final["case_results"][0]["case_id"] == "bug-fake-0001"
     assert final["case_results"][0]["status"] == "pass"
     assert final["case_results"][0]["duration_ms"] == 42
 
@@ -553,7 +553,7 @@ def test_load_cases_from_disk_skips_unreadable_files(
                 name="bug_regression",
                 display_name="BUG",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open"]),
                 default_status="open",
@@ -650,7 +650,7 @@ def _seed_run_with_artifacts(
     Returns (run_id, case_id, artifacts_dir).
     """
     started = datetime.utcnow()
-    case_id = "lg-bug-fake-art-0001"
+    case_id = "bug-fake-art-0001"
     artifacts_dir = tmp_path / "1" / case_id
     artifacts_dir.mkdir(parents=True)
     # Realistic per-step layout written by orchestrator
@@ -859,7 +859,7 @@ def test_execute_run_injects_external_context_from_yaml(
 
     # Call _execute_run directly with a case that declares external_deps
     cases = [
-        {"id": "lg-xs-test", "external_deps": ["elasticsearch"]},
+        {"id": "xs-test", "external_deps": ["elasticsearch"]},
     ]
     import asyncio
 
@@ -936,7 +936,7 @@ def test_execute_run_passes_skip_list_to_orchestrator(
 
     with SessionLocal() as sess:
         # Seed one skip-list entry
-        sqlite_store.add_skip_list_entry(sess, case_id="lg-bug-flaky-X", reason="intermittent")
+        sqlite_store.add_skip_list_entry(sess, case_id="bug-flaky-X", reason="intermittent")
         sess.commit()
         run = sqlite_store.create_run(sess, started_at=datetime.utcnow())
         run_id = run.id
@@ -955,7 +955,7 @@ def test_execute_run_passes_skip_list_to_orchestrator(
 
     skip_list_arg = captured.get("skip_list")
     assert skip_list_arg is not None and len(skip_list_arg) == 1
-    assert skip_list_arg[0]["case_id"] == "lg-bug-flaky-X"
+    assert skip_list_arg[0]["case_id"] == "bug-flaky-X"
     assert skip_list_arg[0]["reason"] == "intermittent"
     engine.dispose()
 

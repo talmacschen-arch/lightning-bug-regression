@@ -1,4 +1,4 @@
-id: lg-xs-pxf-hdfs-order-by-writable
+id: xs-pxf-hdfs-order-by-writable
 title: 9.6 [PXF+HDFS] order by insert 入可写外部表后实际存储乱序
 category: external_systems
 status: fixed
@@ -182,7 +182,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-26"
 notes: |
-  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.6。
   关联 issue: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/728
 
   **BUG 触发条件**：

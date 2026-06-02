@@ -36,10 +36,10 @@ describe('useFilters (M5-4)', () => {
 
     it('parses case_id (post-M6 UX for /runs?case_id=X)', () => {
       const { result } = renderHook(() => useFilters(), {
-        wrapper: withRouter('/?case_id=lg-bug-0001-hashjoin-right-table'),
+        wrapper: withRouter('/?case_id=bug-0001-hashjoin-right-table'),
       });
       expect(result.current.filters.case_id).toBe(
-        'lg-bug-0001-hashjoin-right-table',
+        'bug-0001-hashjoin-right-table',
       );
     });
 
@@ -130,9 +130,9 @@ describe('useFilters (M5-4)', () => {
         wrapper: withRouter('/'),
       });
       act(() => {
-        result.current.setFilter('case_id', 'lg-bug-0001-hashjoin-right-table');
+        result.current.setFilter('case_id', 'bug-0001-hashjoin-right-table');
       });
-      expect(result.current.filters.case_id).toBe('lg-bug-0001-hashjoin-right-table');
+      expect(result.current.filters.case_id).toBe('bug-0001-hashjoin-right-table');
       act(() => {
         result.current.setFilter('case_id', '');
       });

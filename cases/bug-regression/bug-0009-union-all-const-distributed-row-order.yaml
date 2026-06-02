@@ -1,4 +1,4 @@
-id: lg-bug-0009-union-all-const-distributed-row-order
+id: bug-0009-union-all-const-distributed-row-order
 title: UNION ALL (常量 SELECT) 与 (分布式表 SELECT) 拼接时常量行未稳定出现在结果集首行
 category: bug_regression
 status: open
@@ -224,7 +224,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-24"
 notes: |
-  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.12。
   关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/800
 
   **复现意图**：UNION ALL 把 (常量 SELECT) 拼接到 (分布式表 SELECT) 之前，

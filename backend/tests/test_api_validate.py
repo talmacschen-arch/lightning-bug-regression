@@ -49,7 +49,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="bug_regression",
                 display_name="BUG 回归",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -80,7 +80,7 @@ def _minimal_valid_yaml() -> str:
     """
     return textwrap.dedent(
         """\
-        id: lg-bug-9999-test-validate
+        id: bug-9999-test-validate
         category: bug_regression
         title: validate endpoint smoke
         description: minimal valid case for /cases/validate test
@@ -187,7 +187,7 @@ def test_validate_normalize_violation_unknown_step_kind(client: TestClient) -> N
     """
     yaml_with_unknown_kind = textwrap.dedent(
         """\
-        id: lg-bug-9999-test-normalize
+        id: bug-9999-test-normalize
         category: bug_regression
         title: triggers normalize-stage rejection
         description: passes schema but normalize_case rejects restart_db kind
