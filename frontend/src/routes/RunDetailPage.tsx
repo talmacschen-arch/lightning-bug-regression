@@ -401,6 +401,7 @@ export default function RunDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [streamMode, setStreamMode] = useState<'sse' | 'polling' | 'idle'>('idle');
+  const [onlyFailed, setOnlyFailed] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -549,6 +550,13 @@ export default function RunDetailPage() {
     })
     .map((r) => r.case_id);
 
+  // "Only failed/errored" filter. Guard against the toggle staying on after a
+  // refetch drops the problem count to 0 (the button hides; show all again).
+  const showOnlyFailed = onlyFailed && failedCaseIds.length > 0;
+  const visibleResults = showOnlyFailed
+    ? runData.case_results.filter((r) => isProblemStatus(r.status))
+    : runData.case_results;
+
   function buildRerunUrl(caseIds: string[]): string {
     const params = new URLSearchParams();
     params.set('case_ids', caseIds.join(','));
@@ -608,7 +616,24 @@ export default function RunDetailPage() {
       )}
       <RunProgressBar run={run} />
       <div className="mt-4">
-        {run.case_results.map((result) => (
+        {failedCaseIds.length > 0 && (
+          <div className="flex items-center gap-2 mb-2">
+            <button
+              type="button"
+              data-testid="btn-filter-failed"
+              aria-pressed={onlyFailed}
+              onClick={() => setOnlyFailed((v) => !v)}
+              className={`px-2 py-0.5 rounded border text-xs ${
+                onlyFailed
+                  ? 'bg-red-600 text-white border-red-600'
+                  : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              {onlyFailed ? 'Show all' : `Only failed/errored (${failedCaseIds.length})`}
+            </button>
+          </div>
+        )}
+        {visibleResults.map((result) => (
           <CaseResultRow key={result.case_id} runId={run.id} result={result} />
         ))}
       </div>
