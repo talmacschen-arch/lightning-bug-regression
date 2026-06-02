@@ -75,12 +75,12 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     Layout:
 
         <tmp>/cases/bug-regression/
-            lg-bug-0001-hashjoin-foo.yaml      # matches via id substring
-            lg-bug-0002-ndv-optimizer.yaml     # matches via title substring
-            lg-bug-0003-uniqueword.yaml        # matches via description
-            lg-bug-0004-concurrent-tagged.yaml # matches via tags
+            bug-0001-hashjoin-foo.yaml      # matches via id substring
+            bug-0002-ndv-optimizer.yaml     # matches via title substring
+            bug-0003-uniqueword.yaml        # matches via description
+            bug-0004-concurrent-tagged.yaml # matches via tags
         <tmp>/cases/extension/
-            lg-ext-0001-optimizer-ext.yaml     # used by combined-filter test
+            ext-0001-optimizer-ext.yaml     # used by combined-filter test
     """
     engine = create_engine(
         "sqlite:///:memory:",
@@ -102,7 +102,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
                 name="bug_regression",
                 display_name="BUG",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -115,7 +115,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
                 name="extension",
                 display_name="Extension",
                 description=None,
-                id_prefix="lg-ext-",
+                id_prefix="ext-",
                 dir_path="extension",
                 status_whitelist=json.dumps(["stable", "experimental", "deprecated", "stub"]),
                 default_status="stable",
@@ -134,7 +134,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     # 1) id-only match.
     _write_case(
         bug_dir,
-        "lg-bug-0001-hashjoin-foo",
+        "bug-0001-hashjoin-foo",
         title="Some unrelated heading",
         description="An ordinary description without the keyword.",
         tags=["misc"],
@@ -142,7 +142,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     # 2) title-only match (case-insensitive — title has mixed case).
     _write_case(
         bug_dir,
-        "lg-bug-0002-ndv-blowup",
+        "bug-0002-ndv-blowup",
         title="Optimizer NDV blow-up on partitioned tables",
         description="Unrelated narrative here.",
         tags=["planner"],
@@ -150,7 +150,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     # 3) description-only match (the new behavior — keyword nowhere else).
     _write_case(
         bug_dir,
-        "lg-bug-0003-uniqueword",
+        "bug-0003-uniqueword",
         title="Plain title",
         description="This case investigates a quirky-needle-phrase in the runtime path.",
         tags=["misc"],
@@ -158,7 +158,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     # 4) tag-only match.
     _write_case(
         bug_dir,
-        "lg-bug-0004-tagged",
+        "bug-0004-tagged",
         title="Plain title",
         description="Plain description with no keywords.",
         tags=["concurrent-update", "isolation"],
@@ -166,7 +166,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     # 5) null/missing description — must not 500 the endpoint.
     _write_case(
         bug_dir,
-        "lg-bug-0005-no-description",
+        "bug-0005-no-description",
         title="Plain title",
         description="",
         tags=["misc"],
@@ -175,7 +175,7 @@ def client_with_seeded_cases(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     #    ?category= still narrows the result set even when ?q= would match.
     _write_case(
         ext_dir,
-        "lg-ext-0001-optimizer-ext",
+        "ext-0001-optimizer-ext",
         category="extension",
         status="stable",
         title="Optimizer extension entry point",
@@ -203,7 +203,7 @@ def test_q_matches_id_substring(client_with_seeded_cases: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     ids = _ids(body)
-    assert "lg-bug-0001-hashjoin-foo" in ids
+    assert "bug-0001-hashjoin-foo" in ids
     # No other fixture has "hashjoin" anywhere.
     assert len(ids) == 1, f"unexpected matches: {ids}"
 
@@ -215,7 +215,7 @@ def test_q_matches_title_substring(client_with_seeded_cases: TestClient) -> None
     resp = client_with_seeded_cases.get("/cases?q=optimizer")
     assert resp.status_code == 200
     ids = _ids(resp.json())
-    assert "lg-bug-0002-ndv-blowup" in ids
+    assert "bug-0002-ndv-blowup" in ids
 
 
 def test_q_matches_description_substring(client_with_seeded_cases: TestClient) -> None:
@@ -226,7 +226,7 @@ def test_q_matches_description_substring(client_with_seeded_cases: TestClient) -
     assert resp.status_code == 200
     body = resp.json()
     ids = _ids(body)
-    assert ids == {"lg-bug-0003-uniqueword"}, f"description match failed: {ids}"
+    assert ids == {"bug-0003-uniqueword"}, f"description match failed: {ids}"
     # Defensive: confirm description is NOT exposed on the summary payload
     # (out-of-scope decision: keep list response lean for the dropdown).
     assert "description" not in body[0]
@@ -239,16 +239,16 @@ def test_q_matches_tag(client_with_seeded_cases: TestClient) -> None:
     resp = client_with_seeded_cases.get("/cases?q=concurrent")
     assert resp.status_code == 200
     ids = _ids(resp.json())
-    assert "lg-bug-0004-tagged" in ids
+    assert "bug-0004-tagged" in ids
     # Ensure we didn't accidentally also match anyone else (no other
     # fixture has 'concurrent' anywhere).
-    assert ids == {"lg-bug-0004-tagged"}
+    assert ids == {"bug-0004-tagged"}
 
 
 def test_q_no_match_returns_empty(client_with_seeded_cases: TestClient) -> None:
     """?q=zzz-nonexistent must return [] — never 500, never fall back to
     'return everything'. Also implicitly exercises the missing/empty
-    description path (lg-bug-0005-no-description must not raise)."""
+    description path (bug-0005-no-description must not raise)."""
     resp = client_with_seeded_cases.get("/cases?q=zzz-nonexistent")
     assert resp.status_code == 200
     assert resp.json() == []
@@ -261,8 +261,8 @@ def test_q_combined_with_category(client_with_seeded_cases: TestClient) -> None:
     resp = client_with_seeded_cases.get("/cases?q=optimizer&category=bug_regression")
     assert resp.status_code == 200
     ids = _ids(resp.json())
-    assert "lg-bug-0002-ndv-blowup" in ids
-    assert "lg-ext-0001-optimizer-ext" not in ids
+    assert "bug-0002-ndv-blowup" in ids
+    assert "ext-0001-optimizer-ext" not in ids
     # Every returned id must be from the bug_regression category.
     for c in resp.json():
-        assert c["id"].startswith("lg-bug-"), f"non-bug case leaked through: {c['id']}"
+        assert c["id"].startswith("bug-"), f"non-bug case leaked through: {c['id']}"

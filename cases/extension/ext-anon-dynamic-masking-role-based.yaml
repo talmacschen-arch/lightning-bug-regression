@@ -1,4 +1,4 @@
-id: lg-ext-anon-dynamic-masking-role-based
+id: ext-anon-dynamic-masking-role-based
 title: anon extension 基于 role 的 dynamic masking（脱敏用户看到 random_string + partial）
 category: extension
 status: stable
@@ -46,7 +46,7 @@ defaults:
   database: gpadmin
 
 setup:
-  # 清掉历史残留：mydb (lg-bug-0005 用过) + 本 case 自身的 testdb；先 pg_terminate
+  # 清掉历史残留：mydb (bug-0005 用过) + 本 case 自身的 testdb；先 pg_terminate
   # 避免残留连接阻挠 DROP DATABASE。CREATE/DROP DATABASE 是 non-tx-safe DDL →
   # §4.1.2 必须 psql -c 走 shell。
   - su - gpadmin -c "psql -d gpadmin -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('mydb', 'testdb') AND pid != pg_backend_pid()\""
@@ -175,7 +175,7 @@ notes: |
   步用 `current_setting('shared_preload_libraries') ~ 'anon'` 软检查；
   缺则 fail 提示用户按 §3.1 deployment 路径加进 gpconfig 后重启集群。
 
-  **跨 database 模式**（参考 lg-bug-0005）：
+  **跨 database 模式**（参考 bug-0005）：
     - defaults.database: gpadmin（admin db，setup / teardown 跑这里）
     - main steps 的 `database: testdb` 字段 override，runner 自动开
       到 testdb 的 psycopg AsyncConnection（SqlSessionPool 缓存为
@@ -197,7 +197,7 @@ notes: |
       改断 char_length=4 + != 'Conor'（验证 mask 确实应用了）
 
   **setup 注意**：
-    - DROP DATABASE IF EXISTS mydb 是历史残留清理（lg-bug-0005 case 在
+    - DROP DATABASE IF EXISTS mydb 是历史残留清理（bug-0005 case 在
       mydb 跑过 LC_CTYPE 验证，本机有可能残留；防止 mydb 冲突或资源占用
       影响 testdb 创建）。这是 user 2026-05-24 反馈加的。
     - DROP testdb 之前先 pg_terminate_backend，防 SqlSessionPool 上次 case
@@ -224,7 +224,7 @@ notes: |
       session-commit 过的 catalog 条目（sql_driver post-PR #80 每 step 自动
       commit），所以 teardown psql 子进程能看到 ✓
     - 其它（#1-#11）：step kind 都合规；setup/teardown 幂等守卫（IF EXISTS /
-      IF NOT EXISTS）齐全；status=stable 对 extension 合规；id 前缀 lg-ext-*
+      IF NOT EXISTS）齐全；status=stable 对 extension 合规；id 前缀 ext-*
       对；destructive 不含 gpstop。
 
   status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 extension 可用"。

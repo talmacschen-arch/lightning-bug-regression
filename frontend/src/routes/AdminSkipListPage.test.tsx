@@ -28,8 +28,8 @@ beforeEach(() => {
   // Default /cases payload — used by CaseIdCombobox; tests can override
   // before render() if a specific case row needs to be selected.
   apiFetchMock.mockResolvedValue([
-    { id: 'lg-bug-9999-flaky', category: 'bug_regression', title: 'Flaky bug', status: 'open', destructive: false, tags: null, error: null },
-    { id: 'lg-bug-x', category: 'bug_regression', title: 'Test case X', status: 'open', destructive: false, tags: null, error: null },
+    { id: 'bug-9999-flaky', category: 'bug_regression', title: 'Flaky bug', status: 'open', destructive: false, tags: null, error: null },
+    { id: 'bug-x', category: 'bug_regression', title: 'Test case X', status: 'open', destructive: false, tags: null, error: null },
     { id: 'a', category: 'bug_regression', title: 'Single-letter id', status: 'open', destructive: false, tags: null, error: null },
   ]);
   if (typeof localStorage !== 'undefined') localStorage.clear();
@@ -51,7 +51,7 @@ function mockJson(body: unknown, ok = true, status = ok ? 200 : 500) {
 const SAMPLE_ENTRIES = [
   {
     id: 1,
-    case_id: 'lg-bug-9999-flaky',
+    case_id: 'bug-9999-flaky',
     reason: 'intermittent on 4.5.0 (R28)',
     applies_to_version: 'SynxDB-4.5.0-build130',
     upstream_issue: null,
@@ -80,7 +80,7 @@ describe('AdminSkipListPage', () => {
       expect(screen.getByTestId('skip-list-table')).toBeInTheDocument();
     });
     expect(screen.getByTestId('skip-list-row-1')).toBeInTheDocument();
-    expect(screen.getByText('lg-bug-9999-flaky')).toBeInTheDocument();
+    expect(screen.getByText('bug-9999-flaky')).toBeInTheDocument();
   });
 
   it('shows empty hint when list is empty', async () => {
@@ -98,8 +98,8 @@ describe('AdminSkipListPage', () => {
   it('add form POSTs and refreshes (case_id picked via combobox)', async () => {
     mockFetch
       .mockResolvedValueOnce(mockJson([])) // initial GET /admin/skip-list
-      .mockResolvedValueOnce(mockJson({ ...SAMPLE_ENTRIES[0], id: 7, case_id: 'lg-bug-x' }, true, 201)) // POST
-      .mockResolvedValueOnce(mockJson([{ ...SAMPLE_ENTRIES[0], id: 7, case_id: 'lg-bug-x' }])); // refresh GET
+      .mockResolvedValueOnce(mockJson({ ...SAMPLE_ENTRIES[0], id: 7, case_id: 'bug-x' }, true, 201)) // POST
+      .mockResolvedValueOnce(mockJson([{ ...SAMPLE_ENTRIES[0], id: 7, case_id: 'bug-x' }])); // refresh GET
 
     render(
       <MemoryRouter>
@@ -108,7 +108,7 @@ describe('AdminSkipListPage', () => {
     );
     await waitFor(() => expect(screen.getByTestId('skip-list-empty')).toBeInTheDocument());
 
-    await pickCaseInCombobox('lg-bug-x');
+    await pickCaseInCombobox('bug-x');
     fireEvent.change(screen.getByTestId('skip-list-input-reason'), { target: { value: 'test reason' } });
     fireEvent.click(screen.getByTestId('skip-list-add-submit'));
 
@@ -120,7 +120,7 @@ describe('AdminSkipListPage', () => {
     expect(postCall[0]).toContain('/admin/skip-list');
     expect(postCall[1].method).toBe('POST');
     expect(JSON.parse(postCall[1].body)).toMatchObject({
-      case_id: 'lg-bug-x',
+      case_id: 'bug-x',
       reason: 'test reason',
     });
   });

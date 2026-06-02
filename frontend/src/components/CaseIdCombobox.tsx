@@ -2,7 +2,7 @@
  * CaseIdCombobox — pick a case_id from /cases (fuzzy search id + title).
  *
  * Why a combobox vs plain `<input>`: case_ids like
- * `lg-bug-0009-union-all-const-distributed-row-order` are long and
+ * `bug-0009-union-all-const-distributed-row-order` are long and
  * easy to typo. Admin UI flows that take a case_id (skip-list etc.)
  * should let the user search by either id segment or title keyword.
  *

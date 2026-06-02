@@ -54,7 +54,7 @@ def client_with_real_cases(
                 name="bug_regression",
                 display_name="BUG 回归",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -67,7 +67,7 @@ def client_with_real_cases(
                 name="extension",
                 display_name="Extension",
                 description=None,
-                id_prefix="lg-ext-",
+                id_prefix="ext-",
                 dir_path="extension",
                 status_whitelist=json.dumps(["stable", "experimental", "deprecated", "stub"]),
                 default_status="stable",
@@ -92,7 +92,7 @@ def test_list_returns_all_five_bug_regression_cases(
     all show up in the list (even though strict §4.1 validation rejects
     their richer schema; per spec we include them with status='invalid').
 
-    M3a-10 dogfood added 2 more cases (`lg-bug-0006-m3a-dogfood-smoke{,2}`),
+    M3a-10 dogfood added 2 more cases (`bug-0006-m3a-dogfood-smoke{,2}`),
     so the test asserts the 5 originals are a **subset** rather than an
     equality — new cases (added via M3a `/cases/submit` web flow or future
     M4a feishu imports) must not break this test."""
@@ -101,11 +101,11 @@ def test_list_returns_all_five_bug_regression_cases(
     body = resp.json()
     ids = {c["id"] for c in body}
     expected_subset = {
-        "lg-bug-0001-hashjoin-right-table",
-        "lg-bug-0002-array-unnest-crash",
-        "lg-bug-0003-count-no-statistics",
-        "lg-bug-0004-ctas-rowcount-zero",
-        "lg-bug-0005-lc-ctype-upper",
+        "bug-0001-hashjoin-right-table",
+        "bug-0002-array-unnest-crash",
+        "bug-0003-count-no-statistics",
+        "bug-0004-ctas-rowcount-zero",
+        "bug-0005-lc-ctype-upper",
     }
     assert expected_subset.issubset(ids), f"missing original cases: {expected_subset - ids}"
 
@@ -122,18 +122,18 @@ def test_list_filtered_by_category_bug_regression(
     body = resp.json()
     assert len(body) >= 5
     for c in body:
-        assert c["id"].startswith("lg-bug-")
+        assert c["id"].startswith("bug-")
 
 
 def test_list_search_returns_hashjoin_case_only(
     client_with_real_cases: TestClient,
 ) -> None:
-    """Substring search against id+title matches lg-bug-0001 alone."""
+    """Substring search against id+title matches bug-0001 alone."""
     resp = client_with_real_cases.get("/cases?q=hashjoin")
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 1
-    assert body[0]["id"] == "lg-bug-0001-hashjoin-right-table"
+    assert body[0]["id"] == "bug-0001-hashjoin-right-table"
 
 
 def test_list_search_case_insensitive(
@@ -151,15 +151,15 @@ def test_get_case_returns_raw_yaml_and_parsed_fields(
     """GET /cases/{id} must return both raw text (yaml_raw) and parsed
     fields so the editor can show the source while UI controls show
     structured metadata."""
-    resp = client_with_real_cases.get("/cases/lg-bug-0001-hashjoin-right-table")
+    resp = client_with_real_cases.get("/cases/bug-0001-hashjoin-right-table")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["id"] == "lg-bug-0001-hashjoin-right-table"
+    assert body["id"] == "bug-0001-hashjoin-right-table"
     # Raw text must be non-empty and contain the case's id.
-    assert "lg-bug-0001-hashjoin-right-table" in body["yaml_raw"]
+    assert "bug-0001-hashjoin-right-table" in body["yaml_raw"]
     # Parsed dict must be present and carry the same id.
     assert body["parsed"] is not None
-    assert body["parsed"]["id"] == "lg-bug-0001-hashjoin-right-table"
+    assert body["parsed"]["id"] == "bug-0001-hashjoin-right-table"
     # Title surfaces even though strict validation rejects this case.
     assert body["title"]
     assert body["category"] == "bug_regression"
@@ -169,7 +169,7 @@ def test_get_case_404_on_unknown_id(
     client_with_real_cases: TestClient,
 ) -> None:
     """Unknown case_id → 404 (NOT 500)."""
-    resp = client_with_real_cases.get("/cases/lg-bug-9999-does-not-exist")
+    resp = client_with_real_cases.get("/cases/bug-9999-does-not-exist")
     assert resp.status_code == 404
 
 
@@ -199,7 +199,7 @@ def test_list_does_not_500_on_invalid_yaml_file(
                 name="bug_regression",
                 display_name="BUG",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open"]),
                 default_status="open",
@@ -254,7 +254,7 @@ def test_list_empty_when_no_categories_directories_exist(
                 name="bug_regression",
                 display_name="BUG",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open"]),
                 default_status="open",
@@ -325,7 +325,7 @@ def test_recent_runs_returns_empty_when_case_never_run(
     client_with_real_cases: TestClient,
 ) -> None:
     """A case that's never appeared in any run gets `[]`, not 404."""
-    resp = client_with_real_cases.get("/cases/lg-bug-0001-hashjoin-right-table/recent-runs")
+    resp = client_with_real_cases.get("/cases/bug-0001-hashjoin-right-table/recent-runs")
     assert resp.status_code == 200
     assert resp.json() == []
 
@@ -334,7 +334,7 @@ def test_recent_runs_returns_runs_in_descending_started_at_order(
     client_with_real_cases: TestClient,
 ) -> None:
     """Multiple runs touching the same case → most recent first."""
-    case_id = "lg-bug-0001-hashjoin-right-table"
+    case_id = "bug-0001-hashjoin-right-table"
     with sqlite_store.get_session() as sess:
         _seed_runs_and_results(
             sess,
@@ -363,8 +363,8 @@ def test_recent_runs_only_returns_rows_for_the_requested_case_id(
     client_with_real_cases: TestClient,
 ) -> None:
     """A run that touched multiple cases — only the requested case row is returned."""
-    target = "lg-bug-0002-array-unnest-crash"
-    other = "lg-bug-0003-count-no-statistics"
+    target = "bug-0002-array-unnest-crash"
+    other = "bug-0003-count-no-statistics"
     with sqlite_store.get_session() as sess:
         _seed_runs_and_results(
             sess,
@@ -385,7 +385,7 @@ def test_recent_runs_respects_limit_parameter(
     client_with_real_cases: TestClient,
 ) -> None:
     """`?limit=N` clamps the result; default is 20 (M6-D3 Tier2 multi-version)."""
-    case_id = "lg-bug-0004-ctas-rowcount-zero"
+    case_id = "bug-0004-ctas-rowcount-zero"
     with sqlite_store.get_session() as sess:
         _seed_runs_and_results(
             sess,
@@ -412,7 +412,7 @@ def test_recent_runs_includes_target_version(
     `runs.target_version` per row so the frontend can build the
     cross-version trend view.
     """
-    case_id = "lg-bug-0005-lc-ctype-upper"
+    case_id = "bug-0005-lc-ctype-upper"
     with sqlite_store.get_session() as sess:
         _seed_runs_and_results(
             sess,
@@ -438,7 +438,7 @@ def test_recent_runs_target_version_null_does_not_raise(
     client_with_real_cases: TestClient,
 ) -> None:
     """A run with NULL target_version → field is null in the response, no error."""
-    case_id = "lg-bug-0007-orca-sort-pathkey"
+    case_id = "bug-0007-orca-sort-pathkey"
     with sqlite_store.get_session() as sess:
         # No target_versions kwarg → run.target_version stays None.
         _seed_runs_and_results(

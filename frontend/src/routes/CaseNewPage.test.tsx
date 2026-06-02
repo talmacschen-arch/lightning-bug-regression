@@ -602,7 +602,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
   // §M7-followup (2026-05-28): button hardcoded disabled until ANTHROPIC_API_KEY ready;
   // unskip together with restoring button when feature returns.
   it.skip('success (200): transitions to llm-status-loaded, injects draft into YAML editor', async () => {
-    const draftYaml = 'id: lg-bug-test\ntitle: Test bug\ncategory: bug_regression\n';
+    const draftYaml = 'id: bug-test\ntitle: Test bug\ncategory: bug_regression\n';
     mockApiFetch.mockResolvedValueOnce({
       yaml_draft: draftYaml,
       attempts: 1,
@@ -626,7 +626,7 @@ describe('M7-3: LLM generate-draft state machine', () => {
   // unskip together with restoring button when feature returns.
   it.skip('success with attempts=3: loaded state shows validation_errors_during_retry', async () => {
     mockApiFetch.mockResolvedValueOnce({
-      yaml_draft: 'id: lg-bug-retry\ntitle: retry\ncategory: bug_regression\n',
+      yaml_draft: 'id: bug-retry\ntitle: retry\ncategory: bug_regression\n',
       attempts: 3,
       validation_errors_during_retry: ['missing field: steps', 'invalid status value'],
     });
@@ -776,7 +776,7 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
   // unskip together with restoring button when feature returns.
   it.skip('btn-validate is DISABLED (attribute) after draft loads and checkbox unchecked', async () => {
     mockApiFetch.mockResolvedValueOnce({
-      yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
+      yaml_draft: 'id: bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
       validation_errors_during_retry: [],
     });
@@ -806,7 +806,7 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
   // unskip together with restoring button when feature returns.
   it.skip('btn-validate becomes ENABLED after checkbox is checked (wiring)', async () => {
     mockApiFetch.mockResolvedValueOnce({
-      yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
+      yaml_draft: 'id: bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
       validation_errors_during_retry: [],
     });
@@ -835,7 +835,7 @@ describe('M7-3: Confirm checkbox gate wiring', () => {
   // unskip together with restoring button when feature returns.
   it.skip('clicking Validate when checkbox unchecked does NOT trigger validate network call', async () => {
     mockApiFetch.mockResolvedValueOnce({
-      yaml_draft: 'id: lg-bug-draft\ntitle: Draft\ncategory: bug_regression\n',
+      yaml_draft: 'id: bug-draft\ntitle: Draft\ncategory: bug_regression\n',
       attempts: 1,
       validation_errors_during_retry: [],
     });

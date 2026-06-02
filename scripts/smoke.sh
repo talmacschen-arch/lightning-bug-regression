@@ -22,7 +22,7 @@ TMPDB="$(mktemp -u -t smoke-XXXXXX.db)"
 ARTIFACTS_TMP="$(mktemp -d -t smoke-art-XXXXXX)"
 API="http://127.0.0.1:$PORT"
 # known-good 试纸:轻量纯 SQL 的 fixed case(避开 pax/orca 重型 + destructive)
-KNOWN_GOOD=("lg-bug-0001-hashjoin-right-table" "lg-bug-0002-array-unnest-crash")
+KNOWN_GOOD=("bug-0001-hashjoin-right-table" "bug-0002-array-unnest-crash")
 BACKEND_PID=""
 
 log()  { echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }

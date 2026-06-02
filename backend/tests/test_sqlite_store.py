@@ -294,17 +294,17 @@ def test_insert_case_result_and_list_round_trip() -> None:
         sqlite_store.insert_case_result(
             sess,
             run_id=run_id,
-            case_id="lg-bug-0001",
+            case_id="bug-0001",
             status="pass",
             duration_ms=1234,
             stdout="hello",
             stderr=None,
-            artifacts_path="/tmp/artifacts/1/lg-bug-0001",
+            artifacts_path="/tmp/artifacts/1/bug-0001",
         )
         sqlite_store.insert_case_result(
             sess,
             run_id=run_id,
-            case_id="lg-bug-0002",
+            case_id="bug-0002",
             status="fail",
             duration_ms=2000,
             expect_detail="step 2: scalar_eq expected 1 got 0",
@@ -313,11 +313,11 @@ def test_insert_case_result_and_list_round_trip() -> None:
     with sqlite_store.get_session() as sess:
         rows = sqlite_store.list_case_results(sess, run_id)
         assert len(rows) == 2
-        assert rows[0].case_id == "lg-bug-0001"
+        assert rows[0].case_id == "bug-0001"
         assert rows[0].status == "pass"
         assert rows[0].duration_ms == 1234
-        assert rows[0].artifacts_path == "/tmp/artifacts/1/lg-bug-0001"
-        assert rows[1].case_id == "lg-bug-0002"
+        assert rows[0].artifacts_path == "/tmp/artifacts/1/bug-0001"
+        assert rows[1].case_id == "bug-0002"
         assert rows[1].status == "fail"
         assert rows[1].expect_detail == "step 2: scalar_eq expected 1 got 0"
 
@@ -350,7 +350,7 @@ def test_get_skip_list_returns_inserted_rows() -> None:
     with sqlite_store.get_session() as sess:
         sess.add(
             CaseSkipList(
-                case_id="lg-bug-0099",
+                case_id="bug-0099",
                 reason="upstream bug not fixed; tracked LG-1234",
                 upstream_issue="https://issues.example.com/LG-1234",
                 created_by="ops@example.com",
@@ -358,7 +358,7 @@ def test_get_skip_list_returns_inserted_rows() -> None:
         )
         sess.add(
             CaseSkipList(
-                case_id="lg-ext-0050",
+                case_id="ext-0050",
                 reason="extension stub; revisit Q3",
                 created_by="ops@example.com",
             )
@@ -366,7 +366,7 @@ def test_get_skip_list_returns_inserted_rows() -> None:
 
     with sqlite_store.get_session() as sess:
         rows = sqlite_store.get_skip_list(sess)
-        assert [r.case_id for r in rows] == ["lg-bug-0099", "lg-ext-0050"]
+        assert [r.case_id for r in rows] == ["bug-0099", "ext-0050"]
         assert rows[0].reason.startswith("upstream bug")
         # server_default CURRENT_TIMESTAMP populated created_at.
         assert rows[0].created_at is not None

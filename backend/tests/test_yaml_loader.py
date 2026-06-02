@@ -37,17 +37,17 @@ def _default_categories() -> dict[str, CategoryMeta]:
     return {
         "bug_regression": CategoryMeta(
             name="bug_regression",
-            id_prefix="lg-bug-",
+            id_prefix="bug-",
             status_whitelist=bug_statuses,
         ),
         "bug-regression": CategoryMeta(
             name="bug-regression",
-            id_prefix="lg-bug-",
+            id_prefix="bug-",
             status_whitelist=bug_statuses,
         ),
         "extension": CategoryMeta(
             name="extension",
-            id_prefix="lg-ext-",
+            id_prefix="ext-",
             status_whitelist=ext_statuses,
         ),
     }
@@ -61,7 +61,7 @@ DEFAULT_WHITELIST = _default_categories()
 # ---------------------------------------------------------------------------
 
 
-def _minimal_yaml(case_id: str = "lg-bug-0001-demo") -> str:
+def _minimal_yaml(case_id: str = "bug-0001-demo") -> str:
     """Return a minimal valid case YAML matching §4.1 (M1 slice)."""
     return f"""\
 id: {case_id}
@@ -87,7 +87,7 @@ steps:
 """
 
 
-def _write(tmp_path: Path, content: str, stem: str = "lg-bug-0001-demo") -> Path:
+def _write(tmp_path: Path, content: str, stem: str = "bug-0001-demo") -> Path:
     p = tmp_path / f"{stem}.yaml"
     p.write_text(content, encoding="utf-8")
     return p
@@ -102,7 +102,7 @@ def test_happy_path_minimal(tmp_path: Path) -> None:
     path = _write(tmp_path, _minimal_yaml())
     case = load_case(path, DEFAULT_WHITELIST)
     assert isinstance(case, Case)
-    assert case.id == "lg-bug-0001-demo"
+    assert case.id == "bug-0001-demo"
     assert case.category == "bug-regression"
     assert case.title == "demo case"
     assert case.status == "open"  # default
@@ -197,7 +197,7 @@ def test_missing_sessions_is_valid(tmp_path: Path) -> None:
     # Build a minimal YAML without any sessions block and without "on:".
     # The step uses the auto-derived "default" session.
     yaml_src = (
-        "id: lg-bug-0001-demo\n"
+        "id: bug-0001-demo\n"
         "category: bug-regression\n"
         "title: demo case\n"
         "description: |\n  verify the demo bug is fixed.\n"
@@ -218,7 +218,7 @@ def test_empty_list_sessions_is_valid(tmp_path: Path) -> None:
     equivalent to omitting the field (auto-derive default). M3a-10 dogfood
     spec gap fix — previously this raised 'sessions must be a non-empty mapping'."""
     yaml_src = (
-        "id: lg-bug-0001-demo\n"
+        "id: bug-0001-demo\n"
         "category: bug-regression\n"
         "title: demo case\n"
         "description: |\n  verify.\n"
@@ -238,7 +238,7 @@ def test_empty_list_sessions_is_valid(tmp_path: Path) -> None:
 def test_empty_mapping_sessions_is_valid(tmp_path: Path) -> None:
     """Symmetric with empty list: empty mapping `sessions: {}` also derives default."""
     yaml_src = (
-        "id: lg-bug-0001-demo\n"
+        "id: bug-0001-demo\n"
         "category: bug-regression\n"
         "title: demo case\n"
         "description: |\n  verify.\n"
@@ -302,7 +302,7 @@ def test_category_underscore_form_accepted(tmp_path: Path) -> None:
         {
             "bug_regression": CategoryMeta(
                 name="bug_regression",
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 status_whitelist=frozenset({"open", "fixed", "wontfix", "stub"}),
             )
         },
@@ -321,19 +321,19 @@ def test_id_prefix_mismatch(tmp_path: Path) -> None:
     path = _write(tmp_path, src, stem="lg-feat-0001-demo")
     with pytest.raises(CaseValidationError) as exc_info:
         load_case(path, DEFAULT_WHITELIST)
-    assert "lg-bug-" in str(exc_info.value)
+    assert "bug-" in str(exc_info.value)
     assert "id" in str(exc_info.value)
 
 
 def test_id_not_equal_filename_stem(tmp_path: Path) -> None:
-    src = _minimal_yaml(case_id="lg-bug-0001-demo")
+    src = _minimal_yaml(case_id="bug-0001-demo")
     # Write to a different filename stem on disk.
-    path = _write(tmp_path, src, stem="lg-bug-0001-other")
+    path = _write(tmp_path, src, stem="bug-0001-other")
     with pytest.raises(CaseValidationError) as exc_info:
         load_case(path, DEFAULT_WHITELIST)
     msg = str(exc_info.value)
     assert "filename stem" in msg
-    assert "lg-bug-0001-other" in msg
+    assert "bug-0001-other" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ def test_step_missing_required_field(tmp_path: Path, missing_field: str) -> None
     step_block = "\n".join(step_lines) + "\n"
 
     yaml_src = (
-        "id: lg-bug-0001-demo\n"
+        "id: bug-0001-demo\n"
         "category: bug-regression\n"
         "title: demo case\n"
         "description: |\n  desc\n"
@@ -606,7 +606,7 @@ def test_step_kind_field_takes_priority_over_driver(tmp_path: Path) -> None:
 
 def test_malformed_yaml(tmp_path: Path) -> None:
     # Unbalanced brackets / bad indent triggers yaml.YAMLError.
-    src = "id: lg-bug-0001-demo\ncategory: bug-regression\nsessions: [s1\n"
+    src = "id: bug-0001-demo\ncategory: bug-regression\nsessions: [s1\n"
     path = _write(tmp_path, src)
     with pytest.raises(CaseValidationError) as exc_info:
         load_case(path, DEFAULT_WHITELIST)
@@ -638,15 +638,15 @@ def test_load_case_accepts_status_stable_for_extension(tmp_path: Path) -> None:
     previously rejected because the loader had no ``extension`` entry in
     its hardcoded prefix map and ``stable`` was not in _VALID_STATUSES."""
     src = (
-        _minimal_yaml(case_id="lg-ext-pgvector-install").replace(
+        _minimal_yaml(case_id="ext-pgvector-install").replace(
             "category: bug-regression", "category: extension"
         )
         + "status: stable\n"
     )
-    path = _write(tmp_path, src, stem="lg-ext-pgvector-install")
+    path = _write(tmp_path, src, stem="ext-pgvector-install")
     case = load_case(path, DEFAULT_WHITELIST)
     assert case.category == "extension"
-    assert case.id == "lg-ext-pgvector-install"
+    assert case.id == "ext-pgvector-install"
     assert case.status == "stable"
 
 
@@ -664,28 +664,28 @@ def test_load_case_rejects_status_closed(tmp_path: Path) -> None:
 
     # extension rejects "closed" too
     src_ext = (
-        _minimal_yaml(case_id="lg-ext-pgvector-install").replace(
+        _minimal_yaml(case_id="ext-pgvector-install").replace(
             "category: bug-regression", "category: extension"
         )
         + "status: closed\n"
     )
-    path_ext = _write(tmp_path, src_ext, stem="lg-ext-pgvector-install")
+    path_ext = _write(tmp_path, src_ext, stem="ext-pgvector-install")
     with pytest.raises(CaseValidationError, match=r"status 'closed' .* whitelist"):
         load_case(path_ext, DEFAULT_WHITELIST)
 
 
 def test_load_case_enforces_lg_ext_prefix(tmp_path: Path) -> None:
-    """``category: extension`` with an ``id: lg-bug-...`` is REJECTED.
+    """``category: extension`` with an ``id: bug-...`` is REJECTED.
     Before the refactor the loader had no ``extension`` entry in its
     hardcoded prefix map and silently accepted any id stem."""
-    src = _minimal_yaml(case_id="lg-bug-1234-mislabeled").replace(
+    src = _minimal_yaml(case_id="bug-1234-mislabeled").replace(
         "category: bug-regression", "category: extension"
     )
-    path = _write(tmp_path, src, stem="lg-bug-1234-mislabeled")
+    path = _write(tmp_path, src, stem="bug-1234-mislabeled")
     with pytest.raises(CaseValidationError) as exc_info:
         load_case(path, DEFAULT_WHITELIST)
     msg = str(exc_info.value)
-    assert "lg-ext-" in msg
+    assert "ext-" in msg
     assert "extension" in msg
 
 
@@ -698,7 +698,7 @@ _REAL_CASE_FILES = sorted(_CASES_DIR.glob("*.yaml"))
 _BUG_REGRESSION_CATEGORIES = {
     "bug_regression": CategoryMeta(
         name="bug_regression",
-        id_prefix="lg-bug-",
+        id_prefix="bug-",
         status_whitelist=frozenset({"open", "fixed", "wontfix", "stub"}),
     )
 }

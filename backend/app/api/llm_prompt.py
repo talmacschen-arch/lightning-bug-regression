@@ -210,9 +210,9 @@ still emit a best-effort YAML draft and put your concerns into `notes:`.
 # These strings are copy-pasted verbatim from cases/. When the source files
 # evolve, hand-sync this module. The 3 examples cover the three main forms:
 #
-#   1. lg-bug-0001-hashjoin-right-table        — bug_regression, simple SQL
-#   2. lg-ext-pgvector-ivfflat-basic           — extension, CREATE EXTENSION
-#   3. lg-bug-0008-pax-toast-vacuum-analyze-crash
+#   1. bug-0001-hashjoin-right-table        — bug_regression, simple SQL
+#   2. ext-pgvector-ivfflat-basic           — extension, CREATE EXTENSION
+#   3. bug-0008-pax-toast-vacuum-analyze-crash
 #                                               — cross-driver §4.1.2
 #                                                 (kind: sql + kind: shell
 #                                                 psql -c VACUUM/ANALYZE)
@@ -224,14 +224,14 @@ still emit a best-effort YAML draft and put your concerns into `notes:`.
 
 _FEW_SHOT_EXAMPLES = [
     {
-        "id": "lg-bug-0001-hashjoin-right-table",
+        "id": "bug-0001-hashjoin-right-table",
         "trigger_description": (
             "ORCA 关闭、两表 analyze 后，DELETE...USING 的 hashjoin 应当选小表"
             "tmp_test02（1000 行）作为右表（hash build 侧）；若选了大表"
             "tmp_test01（1000 万行）则代价模型有问题。"
         ),
         "yaml": """\
-id: lg-bug-0001-hashjoin-right-table
+id: bug-0001-hashjoin-right-table
 title: ORCA off + analyze 后 hashjoin 右表应选小表 tmp_test02
 category: bug_regression
 status: fixed
@@ -302,13 +302,13 @@ notes: |
 """,
     },
     {
-        "id": "lg-ext-pgvector-ivfflat-basic",
+        "id": "ext-pgvector-ivfflat-basic",
         "trigger_description": (
             "验证 pgvector extension 基础集成链路：CREATE EXTENSION → vector 类型"
             "→ IVFFlat 索引 → L2 距离查询 → 计划走索引。"
         ),
         "yaml": """\
-id: lg-ext-pgvector-ivfflat-basic
+id: ext-pgvector-ivfflat-basic
 title: pgvector IVFFlat 索引基础功能验证
 category: extension
 status: stable
@@ -396,14 +396,14 @@ notes: |
 """,
     },
     {
-        "id": "lg-bug-0008-pax-toast-vacuum-analyze-crash",
+        "id": "bug-0008-pax-toast-vacuum-analyze-crash",
         "trigger_description": (
             "PAX + DISTRIBUTED REPLICATED 表里有 1 行 NULL + 1 行需要走 TOAST"
             "的大数组，顺序跑 VACUUM FULL 然后 ANALYZE 会触发集群 crash。"
             "验证 fix 后不再 crash。"
         ),
         "yaml": """\
-id: lg-bug-0008-pax-toast-vacuum-analyze-crash
+id: bug-0008-pax-toast-vacuum-analyze-crash
 title: PAX 表含 TOAST 大数组与 NULL 行时 VACUUM FULL + ANALYZE 触发数据库 crash
 category: bug_regression
 status: fixed
@@ -519,7 +519,7 @@ def build_few_shot_block() -> str:
     """Render the 3 hardcoded examples into one string block.
 
     Exposed (not _underscore'd) so tests can assert e.g. "few-shot block
-    contains lg-bug-0008's PAX YAML" without re-spelling the YAML.
+    contains bug-0008's PAX YAML" without re-spelling the YAML.
     """
     parts: list[str] = ["# Few-shot examples (study these for structure + tone)"]
     for ex in _FEW_SHOT_EXAMPLES:
