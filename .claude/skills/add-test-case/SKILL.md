@@ -35,7 +35,7 @@ model: claude-opus-4-7
 ## 输入模式（四选一）
 
 ```
-/add-test-case <feishu-url>             模式 A：飞书 LG 历史 BUG 文档锚点（多用于 bug_regression）
+/add-test-case <feishu-url>             模式 A：飞书历史 BUG 文档锚点（多用于 bug_regression）
 /add-test-case <local-sql-file>         模式 B：本地 SQL 复现脚本
 /add-test-case ext:<extname> [<doc-url>] 模式 D：v0.7 新增——extension 用例，如 ext:pgvector / ext:postgis
 /add-test-case                          模式 C：自然语言（skill 反问要做什么）
