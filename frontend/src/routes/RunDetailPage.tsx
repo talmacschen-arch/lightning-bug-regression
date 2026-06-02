@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { apiFetch } from '@/api/client';
 import type { components } from '@/api/client';
+import { caseStatusBadgeClass, caseStatusRowClass, isProblemStatus } from '@/lib/caseStatus';
 
 type RunDetail = components['schemas']['RunDetail'];
 type CaseResultOut = components['schemas']['CaseResultOut'];
@@ -363,8 +364,13 @@ function RunProgressBar({ run }: { run: RunDetail }) {
 }
 
 function CaseResultRow({ runId, result }: { runId: number; result: CaseResultOut }) {
+  const problem = isProblemStatus(result.status);
   return (
-    <div data-testid={`run-case-row-${result.case_id}`} className="py-2 border-b last:border-0">
+    <div
+      data-testid={`run-case-row-${result.case_id}`}
+      data-problem={problem ? 'true' : undefined}
+      className={`py-2 border-b last:border-0 ${caseStatusRowClass(result.status)}`}
+    >
       <div className="flex items-center gap-4">
         <Link
           to={`/cases/${result.case_id}`}
@@ -375,7 +381,7 @@ function CaseResultRow({ runId, result }: { runId: number; result: CaseResultOut
         </Link>
         <span
           data-testid={`run-case-status-${result.case_id}`}
-          className="text-xs font-medium px-2 py-0.5 rounded"
+          className={`text-xs font-medium px-2 py-0.5 rounded ${caseStatusBadgeClass(result.status)}`}
         >
           {(result.status ?? '').toUpperCase()}
         </span>
