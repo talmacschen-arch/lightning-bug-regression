@@ -153,7 +153,7 @@ def _normalize_one_step(
     # YAML-author-friendly alias: timeout_sec → timeout_ms. Orchestrator only
     # reads timeout_ms; without this conversion every author who wrote
     # timeout_sec silently fell back to the 60s default (dogfood 2026-05-25
-    # lg-bug-0011 v1: setup INSERT of 98M rows was killed at exactly 60s
+    # bug-0011 v1: setup INSERT of 98M rows was killed at exactly 60s
     # with asyncio.TimeoutError despite `timeout_sec: 120`). timeout_ms wins
     # on conflict (explicit canonical key).
     if "timeout_sec" in step and "timeout_ms" not in out:

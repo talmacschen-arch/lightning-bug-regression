@@ -1,4 +1,4 @@
-id: lg-xs-pxf-hive-fdw-encoding-utf8
+id: xs-pxf-hive-fdw-encoding-utf8
 title: 9.14 [PXF+Hive+FDW] encoding 'UTF8' 读取含非 ASCII 的 HIVE 表报 gpdbwritable formatter UTF8 错（误导性错误）
 category: external_systems
 status: open
@@ -209,7 +209,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-26"
 notes: |
-  来源：飞书《Lightning原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.14。
 
   **BUG 描述（误导性错误信息）**：
   - 用 FDW 语法（SERVER gp_exttable_server + OPTIONS encoding 'UTF8'）建 PXF+HIVE 外表

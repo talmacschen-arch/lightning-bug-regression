@@ -29,7 +29,7 @@ const FAKE_CATEGORIES = [
     name: 'bug_regression',
     display_name: 'BUG 回归',
     description: null,
-    id_prefix: 'lg-bug-',
+    id_prefix: 'bug-',
     dir_path: 'bug-regression',
     status_whitelist: ['open', 'fixed', 'wontfix', 'stub'],
     default_status: 'open',
@@ -53,8 +53,8 @@ const FAKE_RUNS = [
 ];
 
 const FAKE_CASES = [
-  { id: 'lg-bug-0001-hashjoin-right-table', category: 'bug_regression', title: 'hashjoin right table', status: 'fixed', destructive: false, tags: null, error: null },
-  { id: 'lg-bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const row order', status: 'open', destructive: false, tags: null, error: null },
+  { id: 'bug-0001-hashjoin-right-table', category: 'bug_regression', title: 'hashjoin right table', status: 'fixed', destructive: false, tags: null, error: null },
+  { id: 'bug-0009-union-all-const-distributed-row-order', category: 'bug_regression', title: 'UNION ALL const row order', status: 'open', destructive: false, tags: null, error: null },
 ];
 
 function setupMocks(runs: RunSummary[] = FAKE_RUNS) {
@@ -64,7 +64,7 @@ function setupMocks(runs: RunSummary[] = FAKE_RUNS) {
       // that "touched" the filtered case. Tests below seed the fake
       // backend to mirror this — return the FAKE_RUNS subset matching.
       const cid = init?.query?.case_id;
-      if (cid === 'lg-bug-0009-union-all-const-distributed-row-order') {
+      if (cid === 'bug-0009-union-all-const-distributed-row-order') {
         return [runs[1], runs[2]]; // id=41, id=40
       }
       if (cid && !FAKE_CASES.find((c) => c.id === cid)) {
@@ -249,11 +249,11 @@ describe('RunsPage', () => {
     fireEvent.click(screen.getByTestId('runs-page-case-picker-trigger'));
     await waitFor(() => {
       expect(
-        screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+        screen.getByTestId('runs-page-case-picker-item-bug-0009-union-all-const-distributed-row-order'),
       ).toBeInTheDocument();
     });
     fireEvent.click(
-      screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+      screen.getByTestId('runs-page-case-picker-item-bug-0009-union-all-const-distributed-row-order'),
     );
 
     // Mock setup returns only runs 41 + 40 for that case_id
@@ -271,7 +271,7 @@ describe('RunsPage', () => {
     const fetchedWithCaseId = apiFetchMock.mock.calls.some(
       (call) =>
         call[0] === '/runs' &&
-        call[2]?.query?.case_id === 'lg-bug-0009-union-all-const-distributed-row-order',
+        call[2]?.query?.case_id === 'bug-0009-union-all-const-distributed-row-order',
     );
     expect(fetchedWithCaseId).toBe(true);
   });
@@ -284,11 +284,11 @@ describe('RunsPage', () => {
     fireEvent.click(screen.getByTestId('runs-page-case-picker-trigger'));
     await waitFor(() => {
       expect(
-        screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+        screen.getByTestId('runs-page-case-picker-item-bug-0009-union-all-const-distributed-row-order'),
       ).toBeInTheDocument();
     });
     fireEvent.click(
-      screen.getByTestId('runs-page-case-picker-item-lg-bug-0009-union-all-const-distributed-row-order'),
+      screen.getByTestId('runs-page-case-picker-item-bug-0009-union-all-const-distributed-row-order'),
     );
     await waitFor(() => expect(screen.getByTestId('runs-page-case-clear')).toBeInTheDocument());
 

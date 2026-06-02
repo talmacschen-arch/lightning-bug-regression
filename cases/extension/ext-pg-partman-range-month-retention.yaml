@@ -1,4 +1,4 @@
-id: lg-ext-pg-partman-range-month-retention
+id: ext-pg-partman-range-month-retention
 title: pg_partman range partition (1-month interval) + retention 策略缩减分区数
 category: extension
 status: stable
@@ -167,7 +167,7 @@ notes: |
     - #13 跨 driver visibility：本 case 全 kind: sql，无 cross-driver 问题。
     - 其它（#1-11）：step kind 都在 /admin/step-kinds；setup/teardown 幂等
       守卫齐全（IF EXISTS / IF NOT EXISTS / DELETE 幂等）；status=stable 对
-      extension category 合规；id 前缀 lg-ext-* 对；destructive 不含 gpstop。
+      extension category 合规；id 前缀 ext-* 对；destructive 不含 gpstop。
 
   status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 extension 可用"，
   与 bug_regression 的 status=fixed 语义不同（extension 没有 'fixed

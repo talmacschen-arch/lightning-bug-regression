@@ -123,7 +123,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="bug_regression",
                 display_name="BUG",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open"]),
                 default_status="open",

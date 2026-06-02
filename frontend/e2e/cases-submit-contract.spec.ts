@@ -78,7 +78,7 @@ test.describe('/cases/new → /cases/submit contract (M3a-8)', () => {
         body: JSON.stringify({
           pr_url: 'https://github.com/example/repo/pull/42',
           pr_number: 42,
-          branch: 'case/lg-bug-9999-contract-test',
+          branch: 'case/bug-9999-contract-test',
         }),
       });
     });
@@ -86,7 +86,7 @@ test.describe('/cases/new → /cases/submit contract (M3a-8)', () => {
     await page.goto('/cases/new');
 
     const sampleYaml = [
-      'id: lg-bug-9999-contract-test',
+      'id: bug-9999-contract-test',
       'category: bug-regression',
       'title: contract test stub',
       'status: open',
@@ -127,8 +127,8 @@ test.describe('/cases/new → /cases/submit contract (M3a-8)', () => {
       branch_name: expect.any(String),
     });
     // Concrete value assertions — these fail if the component wiring breaks
-    expect(submitBodyCaptured!.case_id).toBe('lg-bug-9999-contract-test');
-    expect(submitBodyCaptured!.branch_name).toBe('case/lg-bug-9999-contract-test');
-    expect(submitBodyCaptured!.yaml).toContain('id: lg-bug-9999-contract-test');
+    expect(submitBodyCaptured!.case_id).toBe('bug-9999-contract-test');
+    expect(submitBodyCaptured!.branch_name).toBe('case/bug-9999-contract-test');
+    expect(submitBodyCaptured!.yaml).toContain('id: bug-9999-contract-test');
   });
 });

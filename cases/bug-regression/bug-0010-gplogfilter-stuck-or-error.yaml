@@ -1,4 +1,4 @@
-id: lg-bug-0010-gplogfilter-stuck-or-error
+id: bug-0010-gplogfilter-stuck-or-error
 title: 9.9 gplogfilter 处理大日志文件长时间卡住或报错
 category: bug_regression
 status: fixed

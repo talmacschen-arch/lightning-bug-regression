@@ -1,4 +1,4 @@
-id: lg-bug-0007-orca-sort-pathkey
+id: bug-0007-orca-sort-pathkey
 title: 默认 ORCA + enable_sort(on) 时 DISTINCT/GROUP BY/ORDER BY 嵌套查询报 "could not find pathkey item to sort"
 category: bug_regression
 status: fixed
@@ -140,7 +140,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-24"
 notes: |
-  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录》§9.7。
   关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/738
 
   修复前预期：步骤 1 以 "could not find pathkey item to sort" 报错，case fail；
@@ -167,4 +166,4 @@ notes: |
   steps PASS (step 1: DISTINCT+GROUP BY+ORDER BY 未报 pathkey 错 50ms;
   step 2: scalar_ge ≥ 1 兜底通过 15ms). fixed_version above = verified-
   non-reproducing version, NOT necessarily the fix introduction commit
-  (not yet researched against 飞书 LG history / source).
+  (not yet researched against 飞书 history / source).

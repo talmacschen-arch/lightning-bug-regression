@@ -1,4 +1,4 @@
-id: lg-bug-0001-hashjoin-right-table
+id: bug-0001-hashjoin-right-table
 title: ORCA off + analyze 后 hashjoin 右表应选小表 tmp_test02
 category: bug_regression
 status: fixed
@@ -76,4 +76,4 @@ notes: |
   with real per-step duration (not 0ms instant-error of pre-PR #42/#43 era).
   Double evidence chain: CLI dogfood (M1, scripts/run_m1_dogfood.py) also PASS.
   fixed_version above = verified-non-reproducing version, NOT the specific fix
-  introduction build / commit (not yet researched against 飞书 LG history).
+  introduction build / commit (not yet researched against 飞书 history).

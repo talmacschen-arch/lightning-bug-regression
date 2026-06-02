@@ -27,7 +27,7 @@ psycopg deadlocks does asyncio rescue.
 NOTICE capture: register a psycopg notice_handler that appends each
 notice line to a per-step buffer. Stored into StepResult.stderr so
 log_grep assertions and humans can see 'do not have statistics' etc.
-(lg-bug-0002 / lg-bug-0003 depend on this.)
+(bug-0002 / bug-0003 depend on this.)
 
 R9: NEVER let an exception bubble. Catch everything -> StepResult(status=ERROR, error=str(exc)).
 """
@@ -105,9 +105,9 @@ class SqlSessionPool:
 
         Called by orchestrator at the start of each case to prevent
         session-level GUC + prepared-statement leakage from one case to
-        the next (dogfood 2026-05-26: lg-bug-0011/0012's non-LOCAL
+        the next (dogfood 2026-05-26: bug-0011/0012's non-LOCAL
         ``SET work_mem='256kB'`` + ``SET enable_seqscan = off`` persisted
-        into the persistent AsyncConnection and broke lg-xs-zombodb at
+        into the persistent AsyncConnection and broke xs-zombodb at
         the suite tail).
 
         Uses ``RESET ALL`` + ``DEALLOCATE ALL`` (both tx-safe) rather
@@ -247,7 +247,7 @@ async def execute_sql_step(
             # shell+psql steps — see this step's CREATE TABLE / INSERT data.
             # Without this commit: psycopg long-lived AsyncConnection holds an
             # uncommitted tx; a separate `psql -c` subprocess can't see those
-            # writes. M4a-2/-3 lg-bug-0008 exposed this when the case mixed
+            # writes. M4a-2/-3 bug-0008 exposed this when the case mixed
             # kind: sql (setup INSERT) with kind: shell (VACUUM FULL via psql).
             # For all-sql cases the commit doesn't change intra-case visibility
             # (same-tx already saw own writes); teardown DROP still cleans up.

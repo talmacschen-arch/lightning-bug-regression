@@ -114,7 +114,7 @@ async def test_happy_path_single_sql_step_passes(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0001",
+        "id": "bug-0001",
         "steps": [
             {"id": "s1", "kind": "sql", "on": "primary", "sql": "select 1"},
         ],
@@ -155,7 +155,7 @@ async def test_first_fail_step_breaks_subsequent_and_runs_teardown(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0002",
+        "id": "bug-0002",
         "steps": [
             {"id": "s1", "kind": "sql", "on": "primary", "sql": "select 1"},
             {"id": "s2", "kind": "sql", "on": "primary", "sql": "select 2"},
@@ -198,7 +198,7 @@ async def test_driver_exception_is_folded_to_error_status(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0003",
+        "id": "bug-0003",
         "steps": [{"id": "s1", "kind": "sql", "on": "primary", "sql": "select 1"}],
     }
     result = await run_case(
@@ -238,7 +238,7 @@ async def test_multi_session_steps_run_concurrently(
     # A and B run concurrently. Sequential per-group cost = 0.20s each;
     # concurrent total ≈ 0.20s (not 0.40s).
     case = {
-        "id": "lg-bug-0004",
+        "id": "bug-0004",
         "steps": [
             {"id": "a1", "kind": "sql", "on": "A", "sql": "select 1"},
             {"id": "b1", "kind": "sql", "on": "B", "sql": "select 2"},
@@ -337,7 +337,7 @@ async def test_setup_failure_skips_steps_but_runs_teardown(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0005",
+        "id": "bug-0005",
         "setup": [
             {"id": "setup1", "kind": "sql", "on": "primary", "sql": "create temp"},
         ],
@@ -385,7 +385,7 @@ async def test_assertion_pass_downgrade_to_fail_when_expect_mismatches(
 
     # 1. expect matches → PASS preserved.
     case_pass = {
-        "id": "lg-bug-0006a",
+        "id": "bug-0006a",
         "steps": [
             {
                 "id": "s1",
@@ -411,7 +411,7 @@ async def test_assertion_pass_downgrade_to_fail_when_expect_mismatches(
 
     # 2. expect mismatches → downgrade PASS → FAIL.
     case_fail = {
-        "id": "lg-bug-0006b",
+        "id": "bug-0006b",
         "steps": [
             {
                 "id": "s1",
@@ -450,7 +450,7 @@ async def test_assertions_accept_yaml_loader_list_form(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0006c",
+        "id": "bug-0006c",
         "steps": [
             {
                 "id": "s1",
@@ -512,7 +512,7 @@ async def test_recover_mode_guard_aborts_case_and_marks_cluster_crashed(
     server_log.write_text("dummy\n")
 
     case = {
-        "id": "lg-bug-0007",
+        "id": "bug-0007",
         "steps": [
             {"id": "s1", "kind": "sql", "on": "primary", "sql": "select 1"},
             {"id": "s2", "kind": "sql", "on": "primary", "sql": "select 2"},
@@ -627,7 +627,7 @@ async def test_artifacts_written_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0008",
+        "id": "bug-0008",
         "steps": [
             {"id": "s1", "kind": "sql", "on": "primary", "sql": "select 1"},
         ],
@@ -640,7 +640,7 @@ async def test_artifacts_written_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
         dut_hosts=set(),
         sql_pool=_mock_sql_pool(),
     )
-    case_dir = tmp_path / "42" / "lg-bug-0008"
+    case_dir = tmp_path / "42" / "bug-0008"
     assert case_dir.is_dir()
     stdout_file = case_dir / "step-00-s1.stdout.txt"
     stderr_file = case_dir / "step-00-s1.stderr.txt"
@@ -658,7 +658,7 @@ async def test_artifacts_written_to_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
 # ---------------------------------------------------------------------------
 # Bug A (PR-G): step_id sanitization — `/`, Windows-reserved chars must
 # not corrupt the artifact file path into nested subdirs.
-# Dogfood incident: lg-xs-zombodb-partition-text-search step 0 was named
+# Dogfood incident: xs-zombodb-partition-text-search step 0 was named
 # "precondition: ES /_cluster/health status=green (...)" — slash created
 # subdirs, hiding the artifact from the non-recursive iterdir() listing.
 # ---------------------------------------------------------------------------
@@ -682,7 +682,7 @@ async def test_step_id_with_slash_does_not_create_nested_dirs(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-sanitize-slash",
+        "id": "bug-sanitize-slash",
         "steps": [
             # id literally contains `/`, simulating the zombodb step name
             {"id": "step a/b/c", "kind": "sql", "on": "primary", "sql": "select 1"},
@@ -696,7 +696,7 @@ async def test_step_id_with_slash_does_not_create_nested_dirs(
         dut_hosts=set(),
         sql_pool=_mock_sql_pool(),
     )
-    case_dir = tmp_path / "99" / "lg-bug-sanitize-slash"
+    case_dir = tmp_path / "99" / "bug-sanitize-slash"
     # No nested subdir for the slash fragment
     assert not (case_dir / "step-00-step a").exists()
     # The file lands directly in case_dir with underscore replacements
@@ -728,7 +728,7 @@ async def test_step_id_sanitization_replaces_all_illegal_chars(
 
     step_id_value = f"x{illegal_char}y"
     case = {
-        "id": "lg-bug-sanitize-parametrized",
+        "id": "bug-sanitize-parametrized",
         "steps": [
             {"id": step_id_value, "kind": "sql", "on": "primary", "sql": "select 1"},
         ],
@@ -741,7 +741,7 @@ async def test_step_id_sanitization_replaces_all_illegal_chars(
         dut_hosts=set(),
         sql_pool=_mock_sql_pool(),
     )
-    case_dir = tmp_path / "100" / "lg-bug-sanitize-parametrized"
+    case_dir = tmp_path / "100" / "bug-sanitize-parametrized"
     # All listed children must be files (no subdir created by the illegal char)
     children = list(case_dir.iterdir())
     for child in children:
@@ -765,7 +765,7 @@ async def test_step_id_sanitization_preserves_non_ascii_chinese(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-sanitize-cn",
+        "id": "bug-sanitize-cn",
         "steps": [
             # Chinese chars kept; slash replaced
             {"id": "step 中文 with /", "kind": "sql", "on": "primary", "sql": "select 1"},
@@ -779,7 +779,7 @@ async def test_step_id_sanitization_preserves_non_ascii_chinese(
         dut_hosts=set(),
         sql_pool=_mock_sql_pool(),
     )
-    case_dir = tmp_path / "101" / "lg-bug-sanitize-cn"
+    case_dir = tmp_path / "101" / "bug-sanitize-cn"
     expected = case_dir / "step-00-step 中文 with _.stdout.txt"
     assert expected.exists(), (
         f"expected sanitized {expected.name}; got listing: {[p.name for p in case_dir.iterdir()]}"
@@ -815,7 +815,7 @@ async def test_sql_error_writes_error_txt_artifact(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-err-artifact",
+        "id": "bug-err-artifact",
         "steps": [
             {"id": "boom", "kind": "sql", "on": "primary", "sql": "select 1"},
         ],
@@ -828,7 +828,7 @@ async def test_sql_error_writes_error_txt_artifact(
         dut_hosts=set(),
         sql_pool=_mock_sql_pool(),
     )
-    case_dir = tmp_path / "200" / "lg-bug-err-artifact"
+    case_dir = tmp_path / "200" / "bug-err-artifact"
     error_file = case_dir / "step-00-boom.error.txt"
     assert error_file.exists(), (
         f"expected {error_file.name}; got {[p.name for p in case_dir.iterdir()]}"
@@ -851,7 +851,7 @@ async def test_step_with_no_error_does_not_write_error_txt(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-no-error",
+        "id": "bug-no-error",
         "steps": [
             {"id": "happy", "kind": "sql", "on": "primary", "sql": "select 1"},
         ],
@@ -864,7 +864,7 @@ async def test_step_with_no_error_does_not_write_error_txt(
         dut_hosts=set(),
         sql_pool=_mock_sql_pool(),
     )
-    case_dir = tmp_path / "201" / "lg-bug-no-error"
+    case_dir = tmp_path / "201" / "bug-no-error"
     # No .error.txt file present
     assert not (case_dir / "step-00-happy.error.txt").exists()
     # And nothing matching the pattern at all
@@ -881,7 +881,7 @@ async def test_unknown_step_kind_produces_error_result(tmp_path: Path) -> None:
     """An unrecognized `kind:` value must surface as a step error, not
     propagate as an exception (R9)."""
     case = {
-        "id": "lg-bug-0009",
+        "id": "bug-0009",
         "steps": [{"id": "s1", "kind": "playwright", "on": "primary", "run": "x"}],
     }
     result = await run_case(
@@ -916,7 +916,7 @@ async def test_jinja_undefined_variable_yields_step_error(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0010",
+        "id": "bug-0010",
         "steps": [
             {
                 "id": "s1",
@@ -960,7 +960,7 @@ async def test_ssh_user_decision_threads_into_render_context(
     monkeypatch.setattr(orchestrator, "execute_shell_step", fake_shell)
 
     case = {
-        "id": "lg-bug-0011",
+        "id": "bug-0011",
         "steps": [
             {
                 "id": "dut_step",
@@ -1059,7 +1059,7 @@ async def test_teardown_failure_does_not_change_case_status(
     monkeypatch.setattr(orchestrator, "execute_sql_step", fake_sql)
 
     case = {
-        "id": "lg-bug-0012",
+        "id": "bug-0012",
         "steps": [{"id": "s1", "kind": "sql", "on": "primary", "sql": "x"}],
         "teardown": [{"id": "td", "kind": "sql", "on": "primary", "sql": "y"}],
     }
@@ -1181,9 +1181,9 @@ async def test_run_case_calls_discard_all_before_setup_steps(
     """run_case must call sql_pool.discard_all() BEFORE the first setup
     step runs, so non-LOCAL SET GUCs from the prior case don't leak.
 
-    Regression: dogfood 2026-05-26 run #25/#26 — lg-bug-0011 SET
+    Regression: dogfood 2026-05-26 run #25/#26 — bug-0011 SET
     work_mem='256kB' + enable_seqscan=off persisted into the next case's
-    session via the shared AsyncConnection and broke lg-xs-zombodb at
+    session via the shared AsyncConnection and broke xs-zombodb at
     the suite tail.
     """
     order: list[str] = []

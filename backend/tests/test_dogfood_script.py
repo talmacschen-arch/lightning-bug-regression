@@ -184,26 +184,26 @@ def test_normalize_case_per_step_database() -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_cases: real fixture lg-bug-0001
+# load_cases: real fixture bug-0001
 # ---------------------------------------------------------------------------
 
 
 def test_load_cases_real_fixtures() -> None:
-    """Loads the real lg-bug-0001 YAML and asserts the normalized output
+    """Loads the real bug-0001 YAML and asserts the normalized output
     is orchestrator-compatible (setup/steps/teardown are lists of dicts,
     each step has a `kind` field)."""
-    cases = load_cases(CASES_DIR, only_ids={"lg-bug-0001-hashjoin-right-table"})
+    cases = load_cases(CASES_DIR, only_ids={"bug-0001-hashjoin-right-table"})
     assert len(cases) == 1
     case = cases[0]
 
-    assert case["id"] == "lg-bug-0001-hashjoin-right-table"
+    assert case["id"] == "bug-0001-hashjoin-right-table"
     assert isinstance(case["setup"], list)
     assert isinstance(case["steps"], list)
     assert isinstance(case["teardown"], list)
     assert all(isinstance(s, dict) and "kind" in s for s in case["setup"])
     assert all(isinstance(s, dict) and "kind" in s for s in case["steps"])
     assert all(isinstance(s, dict) and "kind" in s for s in case["teardown"])
-    # lg-bug-0001 has 4 setup statements (3 strings + 1 multi-statement block)
+    # bug-0001 has 4 setup statements (3 strings + 1 multi-statement block)
     assert len(case["setup"]) >= 3
     # the main step is sql kind with plan_contains assertion in expect
     assert case["steps"][0]["kind"] == "sql"
@@ -213,11 +213,11 @@ def test_load_cases_real_fixtures() -> None:
 def test_load_cases_loads_all_five() -> None:
     cases = load_cases(CASES_DIR)
     ids = [c["id"] for c in cases]
-    assert "lg-bug-0001-hashjoin-right-table" in ids
-    assert "lg-bug-0002-array-unnest-crash" in ids
-    assert "lg-bug-0003-count-no-statistics" in ids
-    assert "lg-bug-0004-ctas-rowcount-zero" in ids
-    assert "lg-bug-0005-lc-ctype-upper" in ids
+    assert "bug-0001-hashjoin-right-table" in ids
+    assert "bug-0002-array-unnest-crash" in ids
+    assert "bug-0003-count-no-statistics" in ids
+    assert "bug-0004-ctas-rowcount-zero" in ids
+    assert "bug-0005-lc-ctype-upper" in ids
 
 
 def test_load_cases_missing_dir_raises(tmp_path: Path) -> None:
@@ -297,28 +297,28 @@ def test_report_render_summary_counts(tmp_path: Path) -> None:
     s2.assertions = [("scalar", False, "expected scalar == 1, got None")]
 
     cer_pass = CaseExecutionResult(
-        case_id="lg-bug-0001",
+        case_id="bug-0001",
         status=StepStatus.PASS,
         duration_ms=100,
         step_results=[s1],
     )
     cer_fail = CaseExecutionResult(
-        case_id="lg-bug-0002",
+        case_id="bug-0002",
         status=StepStatus.FAIL,
         duration_ms=200,
         step_results=[s2],
     )
     cer_err = CaseExecutionResult(
-        case_id="lg-bug-0003",
+        case_id="bug-0003",
         status=StepStatus.ERROR,
         duration_ms=50,
         error="connection refused",
     )
 
     results = [
-        ({"id": "lg-bug-0001", "title": "t1", "status": "open"}, cer_pass),
-        ({"id": "lg-bug-0002", "title": "t2", "status": "open"}, cer_fail),
-        ({"id": "lg-bug-0003", "title": "t3", "status": "open"}, cer_err),
+        ({"id": "bug-0001", "title": "t1", "status": "open"}, cer_pass),
+        ({"id": "bug-0002", "title": "t2", "status": "open"}, cer_fail),
+        ({"id": "bug-0003", "title": "t3", "status": "open"}, cer_err),
     ]
     md = render_report(
         results,
@@ -335,13 +335,13 @@ def test_report_render_summary_counts(tmp_path: Path) -> None:
     # summary table
     assert "|   3   |  1   |  1   |   1   |  0   |" in md
     # per-case sections
-    assert "### lg-bug-0001 — PASS" in md
-    assert "### lg-bug-0002 — FAIL" in md
-    assert "### lg-bug-0003 — ERROR" in md
+    assert "### bug-0001 — PASS" in md
+    assert "### bug-0002 — FAIL" in md
+    assert "### bug-0003 — ERROR" in md
     # BUG state inference
-    assert "upstream-fixed" in md  # lg-bug-0001
-    assert "BUG still present" in md  # lg-bug-0002
-    assert "cluster/env issue" in md  # lg-bug-0003
+    assert "upstream-fixed" in md  # bug-0001
+    assert "BUG still present" in md  # bug-0002
+    assert "cluster/env issue" in md  # bug-0003
     # case-level error rendered
     assert "Error (case-level): connection refused" in md
     # assertion detail rendered
@@ -368,14 +368,14 @@ def test_report_render_cluster_crashed_marker() -> None:
     from app.runner.orchestrator import CaseExecutionResult
 
     cer = CaseExecutionResult(
-        case_id="lg-bug-XX",
+        case_id="bug-XX",
         status=StepStatus.ERROR,
         duration_ms=100,
         cluster_crashed=True,
         error="cluster crashed",
     )
     md = render_report(
-        [({"id": "lg-bug-XX", "title": "x", "status": "open"}, cer)],
+        [({"id": "bug-XX", "title": "x", "status": "open"}, cer)],
         pghost="h",
         pgport=5432,
         pgdatabase="postgres",
@@ -438,8 +438,8 @@ async def test_e2e_with_mock_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
             duration_ms=1,
             stdout="ok",
             stderr="",
-            scalar=0,  # so lg-bug-0003 expect: scalar: 0 passes
-            plan_text="Hash Join on tmp_test02",  # so lg-bug-0001 plan_contains passes
+            scalar=0,  # so bug-0003 expect: scalar: 0 passes
+            plan_text="Hash Join on tmp_test02",  # so bug-0001 plan_contains passes
         )
 
     monkeypatch.setattr(orch, "execute_sql_step", fake_sql)
@@ -479,7 +479,7 @@ async def test_e2e_with_mock_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
             "--report-path",
             str(report_path),
             "--case-id",
-            "lg-bug-0001-hashjoin-right-table",
+            "bug-0001-hashjoin-right-table",
         ],
         pool_factory=_FakePool,
     )
@@ -487,7 +487,7 @@ async def test_e2e_with_mock_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert rc == 0
     assert report_path.exists()
     md = report_path.read_text(encoding="utf-8")
-    assert "lg-bug-0001-hashjoin-right-table" in md
+    assert "bug-0001-hashjoin-right-table" in md
     # one case ran — summary table has exactly one total row.
     # (We don't assert pass=1 because the case YAML's
     #  `plan_contains: ["Hash", "tmp_test02"]` is a list, and the assertions
@@ -498,7 +498,7 @@ async def test_e2e_with_mock_pool(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert "## Summary" in md
     assert "| total | pass | fail | error | skip |" in md
     # artifacts dir is created by the orchestrator at run_case time
-    assert (artifacts_root / "1" / "lg-bug-0001-hashjoin-right-table").is_dir()
+    assert (artifacts_root / "1" / "bug-0001-hashjoin-right-table").is_dir()
 
 
 async def test_e2e_pass_path_with_synthetic_case(

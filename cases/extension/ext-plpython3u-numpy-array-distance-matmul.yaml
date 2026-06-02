@@ -1,4 +1,4 @@
-id: lg-ext-plpython3u-numpy-array-distance-matmul
+id: ext-plpython3u-numpy-array-distance-matmul
 title: PL/Python3u + numpy 数组聚合 / 欧氏距离 / 矩阵乘法三典型用例
 category: extension
 status: stable
@@ -189,7 +189,7 @@ notes: |
       step 可见，无 cross-driver tx 问题。
     - 其它 (#1-11)：step kind 都在 /admin/step-kinds (sql)；setup/teardown
       幂等守卫齐全；status=stable 对 extension category 合规；id 前缀
-      lg-ext-* 对；destructive=false 合理（无 gpstop / DROP DATABASE）。
+      ext-* 对；destructive=false 合理（无 gpstop / DROP DATABASE）。
 
   status=stable 表示"已在 SynxDB-4.5.0-build130 上验证 plpython3u + numpy 1.25.2
   完整链路可用"，与 bug_regression 的 status=fixed 语义不同。

@@ -68,7 +68,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="bug_regression",
                 display_name="BUG 回归",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -199,7 +199,7 @@ def _minimal_valid_yaml() -> str:
     """A case that passes both schema (yaml_loader) and normalizer."""
     return textwrap.dedent(
         """\
-        id: lg-bug-9999-test-try
+        id: bug-9999-test-try
         category: bug_regression
         title: try endpoint smoke
         description: minimal valid case for /cases/try test
@@ -242,7 +242,7 @@ def test_try_happy_path_one_passing_sql_step(
     """Valid YAML + run_case returns one passing step → ok=true,
     step_results has one pass, yaml_sha256 matches sha256 of payload."""
     raw = _minimal_valid_yaml()
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.PASS, [_passing_step()])
+    cer = _case_result("bug-9999-test-try", StepStatus.PASS, [_passing_step()])
     inv = _install_run_case_stub(monkeypatch, cer)
 
     resp = client.post("/cases/try", json={"yaml": raw})
@@ -261,7 +261,7 @@ def test_try_happy_path_one_passing_sql_step(
 
     # §14 R26 wiring proof: normalize_case must have been applied
     # (raw `steps[0].name` becomes `id` in normalized output).
-    assert inv.case.get("id") == "lg-bug-9999-test-try"
+    assert inv.case.get("id") == "bug-9999-test-try"
     normalized_step = inv.case["steps"][0]
     assert normalized_step["kind"] == "sql"
     assert normalized_step["id"] == "trivial"  # was YAML `name:`
@@ -347,7 +347,7 @@ def test_try_step_failure_yields_ok_false(
     long_stderr = "x" * 1500
     failing = _failing_step()
     failing.stderr = long_stderr
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.FAIL, [failing])
+    cer = _case_result("bug-9999-test-try", StepStatus.FAIL, [failing])
     _install_run_case_stub(monkeypatch, cer)
 
     resp = client.post("/cases/try", json={"yaml": _minimal_valid_yaml()})
@@ -380,7 +380,7 @@ def test_try_error_step_carries_error_string(
         duration_ms=2,
         error="connection refused",
     )
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.ERROR, [err_step])
+    cer = _case_result("bug-9999-test-try", StepStatus.ERROR, [err_step])
     _install_run_case_stub(monkeypatch, cer)
 
     resp = client.post("/cases/try", json={"yaml": _minimal_valid_yaml()})
@@ -403,7 +403,7 @@ def test_try_yaml_sha256_stable_across_calls(
 ) -> None:
     """Same yaml string → same sha256 hash (M3a-3.5 will gate /cases/submit
     on this hash being in the per-app try-pass cache)."""
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.PASS, [_passing_step()])
+    cer = _case_result("bug-9999-test-try", StepStatus.PASS, [_passing_step()])
     _install_run_case_stub(monkeypatch, cer)
 
     raw = _minimal_valid_yaml()
@@ -422,7 +422,7 @@ def test_try_yaml_sha256_differs_for_different_payloads(
     """Different yaml text → different hash. Trivially true given sha256
     but we assert it so a future bug where the endpoint hashes the wrong
     thing (e.g. parsed dict repr) is caught."""
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.PASS, [_passing_step()])
+    cer = _case_result("bug-9999-test-try", StepStatus.PASS, [_passing_step()])
     _install_run_case_stub(monkeypatch, cer)
 
     # First payload validates fine.
@@ -456,7 +456,7 @@ def test_try_pass_writes_to_app_state_cache(
     exactly this dict, so the wiring closes the loop end-to-end.
     """
     raw = _minimal_valid_yaml()
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.PASS, [_passing_step()])
+    cer = _case_result("bug-9999-test-try", StepStatus.PASS, [_passing_step()])
     _install_run_case_stub(monkeypatch, cer)
 
     # Cache starts empty (fixture clears it).
@@ -495,7 +495,7 @@ def test_try_fail_does_not_write_to_cache(
     Otherwise submit's gate would accept payloads that never passed Try.
     """
     raw = _minimal_valid_yaml()
-    cer = _case_result("lg-bug-9999-test-try", StepStatus.FAIL, [_failing_step()])
+    cer = _case_result("bug-9999-test-try", StepStatus.FAIL, [_failing_step()])
     _install_run_case_stub(monkeypatch, cer)
 
     assert app.state.try_pass_cache == {}

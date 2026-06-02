@@ -90,8 +90,8 @@ describe('Layout (M5-1 minimal sidebar)', () => {
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Cases');
     });
 
-    it('breadcrumb shows Cases / Detail at /cases/lg-bug-0001', () => {
-      renderAt('/cases/lg-bug-0001');
+    it('breadcrumb shows Cases / Detail at /cases/bug-0001', () => {
+      renderAt('/cases/bug-0001');
       expect(screen.getByTestId('breadcrumb').textContent).toContain('Cases / Detail');
     });
 

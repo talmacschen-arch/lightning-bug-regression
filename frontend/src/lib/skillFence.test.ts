@@ -1,7 +1,7 @@
 /**
  * Tests for skillFence helpers.
  *
- * M4a-1 dogfood (case lg-bug-0007-orca-sort-pathkey) exposed a footgun:
+ * M4a-1 dogfood (case bug-0007-orca-sort-pathkey) exposed a footgun:
  * the skill emitted a markdown code fence (```yaml ... ```) inside the
  * BEGIN/END block, which broke yaml_loader on POST /cases/validate. The
  * skill spec §5.5.1 forbids this but the model drifted. stripSkillFence
@@ -22,12 +22,12 @@ describe('stripSkillFence', () => {
     const input = [
       'preamble line',
       '─── BEGIN YAML ───',
-      'id: lg-bug-0001',
+      'id: bug-0001',
       'title: demo',
       '─── END YAML ───',
       'footer line',
     ].join('\n');
-    expect(stripSkillFence(input)).toBe('id: lg-bug-0001\ntitle: demo');
+    expect(stripSkillFence(input)).toBe('id: bug-0001\ntitle: demo');
   });
 
   it('returns input unchanged when only BEGIN present (defensive)', () => {
@@ -36,49 +36,49 @@ describe('stripSkillFence', () => {
   });
 
   it('strips nested ```yaml fence inside BEGIN/END (M4a-1 regression)', () => {
-    // This is the EXACT footgun pattern lg-bug-0007 exhibited.
+    // This is the EXACT footgun pattern bug-0007 exhibited.
     const input = [
       '─── BEGIN YAML ───',
       '```yaml',
-      'id: lg-bug-0007',
+      'id: bug-0007',
       'title: demo',
       '```',
       '─── END YAML ───',
     ].join('\n');
-    expect(stripSkillFence(input)).toBe('id: lg-bug-0007\ntitle: demo');
+    expect(stripSkillFence(input)).toBe('id: bug-0007\ntitle: demo');
   });
 
   it('strips nested ```yml fence (lowercase variant)', () => {
     const input = [
       '─── BEGIN YAML ───',
       '```yml',
-      'id: lg-bug-0008',
+      'id: bug-0008',
       '```',
       '─── END YAML ───',
     ].join('\n');
-    expect(stripSkillFence(input)).toBe('id: lg-bug-0008');
+    expect(stripSkillFence(input)).toBe('id: bug-0008');
   });
 
   it('strips nested ``` fence with no language tag', () => {
     const input = [
       '─── BEGIN YAML ───',
       '```',
-      'id: lg-bug-0009',
+      'id: bug-0009',
       '```',
       '─── END YAML ───',
     ].join('\n');
-    expect(stripSkillFence(input)).toBe('id: lg-bug-0009');
+    expect(stripSkillFence(input)).toBe('id: bug-0009');
   });
 
   it('leaves content unchanged when no nested fence present', () => {
     // Real well-formed skill output (the desired pattern per §5.5.1).
     const input = [
       '─── BEGIN YAML ───',
-      'id: lg-bug-0010',
+      'id: bug-0010',
       'title: well-formed',
       '─── END YAML ───',
     ].join('\n');
-    expect(stripSkillFence(input)).toBe('id: lg-bug-0010\ntitle: well-formed');
+    expect(stripSkillFence(input)).toBe('id: bug-0010\ntitle: well-formed');
   });
 });
 

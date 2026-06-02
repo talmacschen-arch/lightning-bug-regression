@@ -1,4 +1,4 @@
-id: lg-xs-zombodb-partition-text-search
+id: xs-zombodb-partition-text-search
 title: ZomboDB + Synxdb 分区表全文搜索（ES 后端，含 6 类 ZQL 查询 + EXPLAIN）
 category: external_systems
 status: fixed
@@ -202,7 +202,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-24"
 notes: |
-  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§15.3
   "Zombodb+分区表测试"。
 
   **外部依赖**:
@@ -215,7 +214,7 @@ notes: |
     `EXTERNAL_DEPS_DIR=/path` env var。
 
   **步骤 1 ES 健康检查策略**：飞书原文要求 "其他情况属于异常则不继续后续测试，报错
-  退出"。orchestrator 自带 "step fail blocks downstream main steps" 行为（lg-bug-0008
+  退出"。orchestrator 自带 "step fail blocks downstream main steps" 行为（bug-0008
   实战印证），所以把 ES 健康检查作为 **first main step**（不是 setup），fail
   时自动跳过 step 2~9。check 方式：`kind: shell + curl` + `stdout_contains: '"status" : "green"'`。
   超时 30s + 不容许 "Connection refused" / "timed out"。
@@ -251,7 +250,7 @@ notes: |
     - #12 跨 driver visibility：本 case 仅 step 1 是 kind: shell (ES curl)，
       step 2~9 全 kind: sql；shell step **不**操作 PG schema，不存在 visibility 问题
     - #7 destructive：false 合理（无 gpstop / gpconfig / 改 shared_preload）
-    - id 前缀 `lg-xs-` ✓ category external_systems
+    - id 前缀 `xs-` ✓ category external_systems
 
   **teardown 不 DROP EXTENSION zombodb**：共享 extension，其他 case 或业务可能依赖。
   仅 DROP TABLE 自建数据。

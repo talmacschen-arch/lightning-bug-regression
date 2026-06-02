@@ -17,7 +17,7 @@
  *   inner content is itself wrapped in a markdown code fence (```yaml ...
  *   ``` or ```yml ... ``` or plain ``` ... ```), strip that nested fence
  *   too. The skill spec §5.5.1 forbids nested fences inside BEGIN/END but
- *   the model has been observed to emit them (M4a-1 case lg-bug-0007 had
+ *   the model has been observed to emit them (M4a-1 case bug-0007 had
  *   a ```yaml fence inside the BEGIN/END block that broke yaml_loader);
  *   this client-side strip is defense-in-depth so users don't have to
  *   manually awk the fence away when pasting.

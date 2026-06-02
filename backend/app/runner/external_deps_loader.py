@@ -26,7 +26,7 @@ Path resolution (§14 R27 — never trust cwd):
   `_resolve_dir()` uses a 3-tier order: `EXTERNAL_DEPS_DIR` env >
   `LBR_REPO_ROOT/external` > cwd-relative `./external`. Earlier versions
   fell straight from #1 to #3, which broke under cwd drift: dogfood
-  run #25 (2026-05-26) saw `lg-xs-zombodb-partition-text-search` error
+  run #25 (2026-05-26) saw `xs-zombodb-partition-text-search` error
   at 5ms because uvicorn's cwd was `backend/` (no `backend/external/`),
   while the real configs live at repo-root `external/`. `LBR_REPO_ROOT`
   is already required by `/cases/submit` and set by README/bootstrap.sh,
@@ -61,7 +61,7 @@ def _resolve_dir() -> Path:
 
     Previous code went straight from #1 to #3, which broke when uvicorn's
     cwd drifted across restarts (dogfood run #25, 2026-05-26:
-    ``lg-xs-zombodb-partition-text-search`` errored at 5ms because
+    ``xs-zombodb-partition-text-search`` errored at 5ms because
     uvicorn cwd was ``backend/`` and there's no ``backend/external/``).
 
     Empty string env values are treated as unset (``if raw:`` is falsy

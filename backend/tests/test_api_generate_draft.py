@@ -72,7 +72,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="bug_regression",
                 display_name="BUG 回归",
                 description=None,
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -85,7 +85,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="extension",
                 display_name="Extension",
                 description=None,
-                id_prefix="lg-ext-",
+                id_prefix="ext-",
                 dir_path="extension",
                 status_whitelist=json.dumps(["stable", "experimental", "deprecated", "stub"]),
                 default_status="stable",
@@ -125,7 +125,7 @@ def _valid_minimal_yaml() -> str:
     """A YAML that passes yaml_loader.load_case + normalize_case."""
     return textwrap.dedent(
         """\
-        id: lg-bug-9999-mock
+        id: bug-9999-mock
         category: bug_regression
         title: mocked draft
         description: mocked LLM output for /cases/generate-draft test
@@ -144,7 +144,7 @@ def _malformed_yaml() -> str:
     """YAML that LOOKS like a case but fails normalization (unknown kind)."""
     return textwrap.dedent(
         """\
-        id: lg-bug-9998-mock
+        id: bug-9998-mock
         category: bug_regression
         title: bogus draft
         description: this should fail normalize_case because of bogus kind
@@ -225,7 +225,7 @@ def test_happy_path_valid_yaml_first_try(client: TestClient) -> None:
     body = resp.json()
     assert body["attempts"] == 1
     assert body["validation_errors_during_retry"] == []
-    assert "id: lg-bug-9999-mock" in body["yaml_draft"]
+    assert "id: bug-9999-mock" in body["yaml_draft"]
     # SDK invoked exactly once
     assert mock_client.messages.create.call_count == 1
     call = mock_client.messages.create.call_args
@@ -250,7 +250,7 @@ def test_happy_path_strips_markdown_fences(client: TestClient) -> None:
     assert body["attempts"] == 1
     # The fences should be stripped from yaml_draft
     assert not body["yaml_draft"].startswith("```")
-    assert "id: lg-bug-9999-mock" in body["yaml_draft"]
+    assert "id: bug-9999-mock" in body["yaml_draft"]
 
 
 def test_prompt_has_cache_control_marker(client: TestClient) -> None:
@@ -273,9 +273,9 @@ def test_prompt_has_cache_control_marker(client: TestClient) -> None:
     assert block.get("cache_control") == {"type": "ephemeral"}
     # Sanity check: schema + few-shot examples actually present
     text = block["text"]
-    assert "id: lg-bug-0001-hashjoin-right-table" in text
-    assert "id: lg-ext-pgvector-ivfflat-basic" in text
-    assert "id: lg-bug-0008-pax-toast-vacuum-analyze-crash" in text
+    assert "id: bug-0001-hashjoin-right-table" in text
+    assert "id: ext-pgvector-ivfflat-basic" in text
+    assert "id: bug-0008-pax-toast-vacuum-analyze-crash" in text
     # E-1: gpadmin default declared
     assert "gpadmin" in text
     # E-2: §4.1.2 psql -c iron rule declared
@@ -312,7 +312,7 @@ def test_retry_on_invalid_then_valid(client: TestClient) -> None:
     body = resp.json()
     assert body["attempts"] == 2, body
     assert len(body["validation_errors_during_retry"]) == 1
-    assert "id: lg-bug-9999-mock" in body["yaml_draft"]
+    assert "id: bug-9999-mock" in body["yaml_draft"]
     assert mock_client.messages.create.call_count == 2
 
 

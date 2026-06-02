@@ -386,7 +386,7 @@ async def _execute_one_step(
     # Sanitize step_id for the filename — slashes in step names create
     # accidental subdirectories that hide artifacts from the
     # non-recursive `list_case_artifacts` listing (dogfood run #26
-    # `lg-xs-zombodb-partition-text-search` step 0 incident).
+    # `xs-zombodb-partition-text-search` step 0 incident).
     if case_artifacts_dir is not None:
         sanitized_id = _sanitize_step_id_for_filename(step_id)
         stdout_path = case_artifacts_dir / f"step-{idx:02d}-{sanitized_id}.stdout.txt"
@@ -556,8 +556,8 @@ async def run_case(
     # this case's setup runs. Without this, non-LOCAL `SET` GUCs / temp
     # tables / prepared statements from a previous case bleed into this
     # case's session and silently corrupt behavior (dogfood 2026-05-26:
-    # lg-bug-0011/0012 SET work_mem='256kB' + enable_seqscan=off persisted
-    # into the persistent AsyncConnection and broke lg-xs-zombodb at the
+    # bug-0011/0012 SET work_mem='256kB' + enable_seqscan=off persisted
+    # into the persistent AsyncConnection and broke xs-zombodb at the
     # suite tail). discard_all() swallows per-connection errors with
     # logger.warning, so we don't need a try/except here.
     if sql_pool is not None:

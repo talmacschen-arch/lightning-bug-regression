@@ -46,7 +46,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="bug_regression",
                 display_name="BUG 回归",
                 description="历史 BUG 用例",
-                id_prefix="lg-bug-",
+                id_prefix="bug-",
                 dir_path="bug-regression",
                 status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
                 default_status="open",
@@ -59,7 +59,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 name="extension",
                 display_name="Extension 集成测试",
                 description="Extension 验证",
-                id_prefix="lg-ext-",
+                id_prefix="ext-",
                 dir_path="extension",
                 status_whitelist=json.dumps(["stable", "experimental", "deprecated", "stub"]),
                 default_status="stable",
@@ -107,7 +107,7 @@ def test_categories_returns_both_seeded_rows_with_parsed_whitelist(
     ]
 
     # spot-check required fields
-    assert body[0]["id_prefix"] == "lg-bug-"
+    assert body[0]["id_prefix"] == "bug-"
     assert body[0]["dir_path"] == "bug-regression"
     assert body[0]["default_status"] == "open"
 
@@ -181,7 +181,7 @@ def test_create_skip_list_entry_round_trip(client: TestClient) -> None:
         "/admin/skip-list",
         headers=client.auth_headers,  # type: ignore[attr-defined]
         json={
-            "case_id": "lg-bug-9999-flaky",
+            "case_id": "bug-9999-flaky",
             "reason": "intermittent on 4.5.0 — needs ≥10 rounds (R28)",
             "applies_to_version": "SynxDB-4.5.0-build130",
             "upstream_issue": "https://example/issue/42",
@@ -190,7 +190,7 @@ def test_create_skip_list_entry_round_trip(client: TestClient) -> None:
     )
     assert resp.status_code == 201
     body = resp.json()
-    assert body["case_id"] == "lg-bug-9999-flaky"
+    assert body["case_id"] == "bug-9999-flaky"
     assert body["reason"].startswith("intermittent on 4.5.0")
     assert body["applies_to_version"] == "SynxDB-4.5.0-build130"
     assert body["until_date"] == "2026-12-31"
@@ -223,7 +223,7 @@ def test_delete_skip_list_entry(client: TestClient) -> None:
     resp = client.post(
         "/admin/skip-list",
         headers=client.auth_headers,  # type: ignore[attr-defined]
-        json={"case_id": "lg-bug-X", "reason": "test"},
+        json={"case_id": "bug-X", "reason": "test"},
     )
     eid = resp.json()["id"]
     del_resp = client.delete(
@@ -271,7 +271,7 @@ def test_mutation_without_bearer_token_401(client: TestClient) -> None:
     """No Authorization header → mutating endpoint returns 401."""
     resp = client.post(
         "/admin/skip-list",
-        json={"case_id": "lg-bug-no-auth", "reason": "no header"},
+        json={"case_id": "bug-no-auth", "reason": "no header"},
     )
     assert resp.status_code == 401
 
@@ -280,7 +280,7 @@ def test_mutation_with_invalid_bearer_token_401(client: TestClient) -> None:
     resp = client.post(
         "/admin/skip-list",
         headers={"Authorization": "Bearer not-a-real-token"},
-        json={"case_id": "lg-bug-bad-token", "reason": "bad token"},
+        json={"case_id": "bug-bad-token", "reason": "bad token"},
     )
     assert resp.status_code == 401
 
@@ -290,7 +290,7 @@ def test_mutation_with_valid_bearer_token_201(client: TestClient) -> None:
     resp = client.post(
         "/admin/skip-list",
         headers=client.auth_headers,  # type: ignore[attr-defined]
-        json={"case_id": "lg-bug-with-token", "reason": "with bearer"},
+        json={"case_id": "bug-with-token", "reason": "with bearer"},
     )
     assert resp.status_code == 201
 
@@ -393,9 +393,9 @@ def _seed_test_case_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path
     cases_root = tmp_path / "cases"
     cat_dir = cases_root / "bug-regression"
     cat_dir.mkdir(parents=True)
-    case_yaml = cat_dir / "lg-bug-test-delete.yaml"
+    case_yaml = cat_dir / "bug-test-delete.yaml"
     case_yaml.write_text(
-        "id: lg-bug-test-delete\n"
+        "id: bug-test-delete\n"
         "category: bug_regression\n"
         "status: open\n"
         "title: dummy\n"
@@ -414,7 +414,7 @@ def test_delete_case_removes_yaml_file(
     assert case_yaml.exists()
 
     resp = client.delete(
-        "/admin/cases/lg-bug-test-delete",
+        "/admin/cases/bug-test-delete",
         headers=client.auth_headers,  # type: ignore[attr-defined]
     )
     assert resp.status_code == 204
@@ -426,7 +426,7 @@ def test_delete_case_404_when_not_found(
 ) -> None:
     _seed_test_case_dir(monkeypatch, tmp_path)
     resp = client.delete(
-        "/admin/cases/lg-bug-not-real",
+        "/admin/cases/bug-not-real",
         headers=client.auth_headers,  # type: ignore[attr-defined]
     )
     assert resp.status_code == 404
@@ -472,14 +472,14 @@ def test_delete_case_preserves_case_results_history(
         sqlite_store.insert_case_result(
             sess,
             run_id=run.id,
-            case_id="lg-bug-test-delete",
+            case_id="bug-test-delete",
             status="pass",
             duration_ms=42,
         )
         run_id = run.id
 
     resp = client.delete(
-        "/admin/cases/lg-bug-test-delete",
+        "/admin/cases/bug-test-delete",
         headers=client.auth_headers,  # type: ignore[attr-defined]
     )
     assert resp.status_code == 204
@@ -489,7 +489,7 @@ def test_delete_case_preserves_case_results_history(
     with sqlite_store.get_session() as sess:
         rows = sqlite_store.list_case_results(sess, run_id)
         assert len(rows) == 1
-        assert rows[0].case_id == "lg-bug-test-delete"
+        assert rows[0].case_id == "bug-test-delete"
 
 
 def test_delete_case_requires_bearer_token(
@@ -498,12 +498,12 @@ def test_delete_case_requires_bearer_token(
     _seed_test_case_dir(monkeypatch, tmp_path)
 
     # Without Authorization header → 401
-    resp = client.delete("/admin/cases/lg-bug-test-delete")
+    resp = client.delete("/admin/cases/bug-test-delete")
     assert resp.status_code == 401
 
     # With valid Bearer token → 204
     resp = client.delete(
-        "/admin/cases/lg-bug-test-delete",
+        "/admin/cases/bug-test-delete",
         headers=client.auth_headers,  # type: ignore[attr-defined]
     )
     assert resp.status_code == 204

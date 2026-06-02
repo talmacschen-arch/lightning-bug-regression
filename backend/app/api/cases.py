@@ -139,8 +139,8 @@ class TryResponse(BaseModel):
 
 class SubmitRequest(BaseModel):
     yaml: str
-    case_id: str  # e.g. "lg-bug-0006-foo"
-    branch_name: str  # e.g. "case/lg-bug-0006-foo"
+    case_id: str  # e.g. "bug-0006-foo"
+    branch_name: str  # e.g. "case/bug-0006-foo"
 
 
 class SubmitResponse(BaseModel):
@@ -670,7 +670,7 @@ async def try_case(req: TryRequest, request: Request) -> TryResponse:
     # Load external_deps context the same way POST /runs does — without this
     # Try would skip the loader and any `{{ external.<svc>.* }}` Jinja
     # reference in the case YAML raises UndefinedError → step error driver=jinja.
-    # Dogfood 2026-05-26 lg-xs-pxf-hdfs case: Try precondition-1 errored 0ms
+    # Dogfood 2026-05-26 xs-pxf-hdfs case: Try precondition-1 errored 0ms
     # because external.hadoop_simple was missing from the empty jinja_context.
     # Always include `dut` for cases that reference {{ external.dut.host }}.
     svc_names = sorted({"dut", *collect_external_deps([normalized])})

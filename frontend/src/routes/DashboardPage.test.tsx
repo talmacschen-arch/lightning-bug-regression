@@ -24,7 +24,7 @@ const FAKE_CATEGORIES = [
     name: 'bug_regression',
     display_name: 'BUG 回归',
     description: null,
-    id_prefix: 'lg-bug-',
+    id_prefix: 'bug-',
     dir_path: 'bug-regression',
     status_whitelist: ['open', 'fixed', 'wontfix', 'stub'],
     default_status: 'open',
@@ -34,7 +34,7 @@ const FAKE_CATEGORIES = [
     name: 'extension',
     display_name: 'Extension 集成测试',
     description: null,
-    id_prefix: 'lg-ext-',
+    id_prefix: 'ext-',
     dir_path: 'extension',
     status_whitelist: ['stable', 'experimental', 'deprecated', 'stub'],
     default_status: 'stable',
@@ -44,7 +44,7 @@ const FAKE_CATEGORIES = [
     name: 'external_systems',
     display_name: '外部系统集成测试',
     description: null,
-    id_prefix: 'lg-xs-',
+    id_prefix: 'xs-',
     dir_path: 'external-systems',
     status_whitelist: ['open', 'fixed', 'wontfix', 'stub', 'awaiting_env'],
     default_status: 'open',
@@ -53,14 +53,14 @@ const FAKE_CATEGORIES = [
 ];
 
 const FAKE_BUG_CASES = [
-  { id: 'lg-bug-0001', category: 'bug_regression', title: 'A', status: 'fixed', destructive: false, tags: null, error: null },
-  { id: 'lg-bug-0002', category: 'bug_regression', title: 'B', status: 'fixed', destructive: false, tags: null, error: null },
-  { id: 'lg-bug-0009', category: 'bug_regression', title: 'C', status: 'open', destructive: false, tags: null, error: null },
+  { id: 'bug-0001', category: 'bug_regression', title: 'A', status: 'fixed', destructive: false, tags: null, error: null },
+  { id: 'bug-0002', category: 'bug_regression', title: 'B', status: 'fixed', destructive: false, tags: null, error: null },
+  { id: 'bug-0009', category: 'bug_regression', title: 'C', status: 'open', destructive: false, tags: null, error: null },
 ];
 
 const FAKE_EXT_CASES = [
-  { id: 'lg-ext-pgvector', category: 'extension', title: 'pgvector', status: 'stable', destructive: false, tags: null, error: null },
-  { id: 'lg-ext-postgis', category: 'extension', title: 'postgis', status: 'stable', destructive: false, tags: null, error: null },
+  { id: 'ext-pgvector', category: 'extension', title: 'pgvector', status: 'stable', destructive: false, tags: null, error: null },
+  { id: 'ext-postgis', category: 'extension', title: 'postgis', status: 'stable', destructive: false, tags: null, error: null },
 ];
 
 // Fixture mirrors REAL backend behavior: run.status is 'done' lifecycle

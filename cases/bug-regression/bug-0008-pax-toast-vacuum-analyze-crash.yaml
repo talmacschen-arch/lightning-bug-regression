@@ -1,4 +1,4 @@
-id: lg-bug-0008-pax-toast-vacuum-analyze-crash
+id: bug-0008-pax-toast-vacuum-analyze-crash
 title: PAX 表含 TOAST 大数组与 NULL 行时 VACUUM FULL + ANALYZE 触发数据库 crash
 category: bug_regression
 status: fixed
@@ -80,7 +80,6 @@ teardown:
 created_by: chenqiang
 created_at: "2026-05-24"
 notes: |
-  来源：飞书《Lightning2.2~2.3原地升级及Synxdb4.3功能测试记录（LG）_202512》§9.11。
   关联 issue：https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/774
 
   **§4.1.2 + §13.7 跨 driver 状态 (revised 2026-05-24, user request)**：
@@ -104,4 +103,4 @@ notes: |
   synxdb-0001 (SynxDB-4.5.0-build130 / PG 14.4 / Cloudberry 2.1.0) → 全 main
   steps PASS. PR #74 (initial submit) + PR #75 (status flip). fixed_version
   above = verified-non-reproducing version, NOT necessarily the fix
-  introduction commit (not yet researched against 飞书 LG history / source).
+  introduction commit (not yet researched against 飞书 history / source).

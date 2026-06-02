@@ -20,7 +20,7 @@ def _reset_broker():
 async def test_publish_without_subscriber_is_noop():
     """A run that finishes before anyone subscribes must not error."""
     # No subscriber registered for run_id=999
-    event_broker.publish_case_done(999, "lg-bug-0001", "pass", duration_ms=12)
+    event_broker.publish_case_done(999, "bug-0001", "pass", duration_ms=12)
     event_broker.publish_run_done(999, {"total": 1, "passed": 1, "failed": 0, "skipped": 0})
     # No raise → pass
 
@@ -41,8 +41,8 @@ async def test_subscribe_receives_published_events():
     # Yield once so consumer registers
     await asyncio.sleep(0)
 
-    event_broker.publish_case_done(42, "lg-bug-0001", "pass", duration_ms=10)
-    event_broker.publish_case_done(42, "lg-bug-0002", "fail", duration_ms=20, error="boom")
+    event_broker.publish_case_done(42, "bug-0001", "pass", duration_ms=10)
+    event_broker.publish_case_done(42, "bug-0002", "fail", duration_ms=20, error="boom")
     event_broker.publish_run_done(42, {"total": 2, "passed": 1, "failed": 1, "skipped": 0})
 
     await asyncio.wait_for(task, timeout=2.0)

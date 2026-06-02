@@ -1,4 +1,4 @@
-id: lg-ext-pgvector-ivfflat-basic
+id: ext-pgvector-ivfflat-basic
 title: pgvector IVFFlat 索引基础功能验证
 category: extension
 status: stable
