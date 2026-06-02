@@ -5,25 +5,10 @@ import type { components } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatRelativeUtc } from '@/lib/time';
+import { caseStatusColor } from '@/lib/caseStatus';
 
 type CaseDetail = components['schemas']['CaseDetail'];
 type CaseRecentRunOut = components['schemas']['CaseRecentRunOut'];
-
-// ---------------------------------------------------------------------------
-// Status → Tailwind color map — data-driven per §14 R4b (no hardcoded category
-// strings; unknown statuses fall back to gray).
-// ---------------------------------------------------------------------------
-
-const CASE_STATUS_COLOR: Record<string, string> = {
-  pass: 'bg-green-500',
-  fail: 'bg-red-500',
-  skip: 'bg-gray-400',
-  error: 'bg-orange-500',
-};
-
-function caseStatusColor(status: string | null | undefined): string {
-  return CASE_STATUS_COLOR[(status ?? '').toLowerCase()] ?? 'bg-gray-300';
-}
 
 // ---------------------------------------------------------------------------
 // Helpers

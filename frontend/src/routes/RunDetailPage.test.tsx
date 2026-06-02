@@ -179,6 +179,37 @@ describe('RunDetailPage', () => {
     expect(esInstances.length).toBe(0);
   });
 
+  it('highlights failed and errored case rows, leaves pass/skip plain', async () => {
+    mockFetch.mockResolvedValueOnce(mockJsonResponse(fakeRunMixed));
+    renderWithRoute('77');
+    await waitFor(() => {
+      expect(screen.getByTestId('run-case-row-bug-fail-1')).toBeInTheDocument();
+    });
+
+    const failRow = screen.getByTestId('run-case-row-bug-fail-1');
+    const errorRow = screen.getByTestId('run-case-row-bug-error-1');
+    const passRow = screen.getByTestId('run-case-row-bug-pass');
+    const skipRow = screen.getByTestId('run-case-row-bug-skip');
+
+    // fail + error rows flagged + tinted; pass + skip stay plain.
+    expect(failRow).toHaveAttribute('data-problem', 'true');
+    expect(failRow.className).toContain('bg-red-50');
+    expect(failRow.className).toContain('border-l-red-500');
+
+    expect(errorRow).toHaveAttribute('data-problem', 'true');
+    expect(errorRow.className).toContain('bg-orange-50');
+    expect(errorRow.className).toContain('border-l-orange-500');
+
+    expect(passRow).not.toHaveAttribute('data-problem');
+    expect(passRow.className).not.toContain('bg-red-50');
+    expect(skipRow).not.toHaveAttribute('data-problem');
+
+    // status badge picks up its hue
+    expect(screen.getByTestId('run-case-status-bug-fail-1').className).toContain('bg-red-100');
+    expect(screen.getByTestId('run-case-status-bug-error-1').className).toContain('bg-orange-100');
+    expect(screen.getByTestId('run-case-status-bug-pass').className).toContain('bg-green-100');
+  });
+
   it('running run opens SSE and indicator shows "live"', async () => {
     mockFetch.mockResolvedValue(mockJsonResponse(fakeRunRunning));
     renderWithRoute('42');
