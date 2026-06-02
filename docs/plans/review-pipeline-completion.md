@@ -66,7 +66,7 @@ v3 核心代码工作 = **修根因 B(焊 foreman wiring) + 落 smoke.sh**。rev
 |---|------|------|------|
 | 1 | `.claude/agents/foreman.md` | loop 补 step 3.5(派 reviewer) + step 6(派 smoke-runner) + §15.1.3 state.json schema 加 `reviewer_verdict`/`smoke_verdict` + hard rule(verdict=REQUEST_CHANGES 或 smoke=NO-GO 不算 done) | ~40 |
 | 2 | `.claude/agents/reviewer.md` | **基本保留**;仅加一句定位说明"我是 foreman 流水线自动 reviewer,做 §14+6域;内置 /review 是用户手动补充,不归我" | ~5 |
-| 3 | `scripts/smoke.sh`(新) | 全链路自包含:自起 backend(8000,复用 README env 注入) → POST /runs 跑 1-2 个 `status:fixed` known-good case(如 lg-bug-0001-hashjoin-right-table) → 轮询 → 验 verdict=PASS → 自停;产物落 docs/status/smoke-<ts>.log;避开 destructive case | ~80-120 |
+| 3 | `scripts/smoke.sh`(新) | 全链路自包含:自起 backend(8000,复用 README env 注入) → POST /runs 跑 1-2 个 `status:fixed` known-good case(如 bug-0001-hashjoin-right-table) → 轮询 → 验 verdict=PASS → 自停;产物落 docs/status/smoke-<ts>.log;避开 destructive case | ~80-120 |
 | 4 | `.claude/agents/smoke-runner.md` | 删 L28 "until then, run a no-op precheck" 占位语,指向真实 smoke.sh | ~5 |
 | 5 | 测试 | foreman dispatch lint(check_agent_dispatch.sh)更新 + smoke.sh 自测/dry-run | ~20 |
 | 6 | `design.md` §8.1/§8.3/§15.1 + §0 v1.22 | reviewer 行注明"foreman 流水线自动 + 内置手动补充";§15.1 loop 补 dispatch 步骤;记账 | ~30 |

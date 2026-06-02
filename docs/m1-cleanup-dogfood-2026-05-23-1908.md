@@ -13,28 +13,28 @@
 
 ## Per-case results
 
-### lg-bug-0001-hashjoin-right-table — PASS
+### bug-0001-hashjoin-right-table — PASS
 
 - Title: ORCA off + analyze 后 hashjoin 右表应选小表 tmp_test02
 - Status (from runner): pass
 - YAML status: open
 - **Inferred BUG state**: upstream-fixed (BUG no longer reproduces — candidate to update YAML status to "fixed")
 - Duration: 2254 ms
-- Artifacts: artifacts/m1-dogfood/1/lg-bug-0001-hashjoin-right-table/
+- Artifacts: artifacts/m1-dogfood/1/bug-0001-hashjoin-right-table/
 - Assertions:
     - ORCA off + analyze 后 explain plan 检查 hash build 侧.plan_contains: pass — expected plan to contain all of ['Hash', 'tmp_test02'], got plan_text='Delete on tmp_test01 f  (cost=3.81..17007.71 rows=0 width=0)\n  ->  Hash Join  (cost=3.81..17007.71 rows=125 width=16)\n        Hash Cond: (f.i = b.i)\n        ->  Seq Scan on tmp_test01 f  (cost=0.00..13876.00 rows=1250000 width=14)\n        ->  Hash  (cost=2.25..2.25 rows=125 width=10)\n              ->  Seq Scan on tmp_test02 b  (cost=0.00..2.25 rows=125 width=10)\nOptimizer: Postgres query optimizer'
     - ORCA off + analyze 后 explain plan 检查 hash build 侧.not_contains: pass — expected stdout to NOT contain 'ERROR', got stdout="('Delete on tmp_test01 f  (cost=3.81..17007.71 rows=0 width=0)',)\n('  ->  Hash Join  (cost=3.81..17007.71 rows=125 width=16)',)\n('        Hash Cond: (f.i = b.i)',)\n('        ->  Seq Scan on tmp_test01 f  (cost=0.00..13876.00 rows=1250000 width=14)',)\n('        ->  Hash  (cost=2.25..2.25 rows=125 width=10)',)\n('              ->  Seq Scan on tmp_test02 b  (cost=0.00..2.25 rows=125 width=10)',)\n('Optimizer: Postgres query optimizer',)"
 - Setup results: 4 pass / 0 fail
 - Teardown results: 2 pass / 0 fail
 
-### lg-bug-0002-array-unnest-crash — PASS
+### bug-0002-array-unnest-crash — PASS
 
 - Title: 缺 immutable 的 plpgsql 函数中 array+unnest 触发数据库 crash
 - Status (from runner): pass
 - YAML status: open
 - **Inferred BUG state**: upstream-fixed (BUG no longer reproduces — candidate to update YAML status to "fixed")
 - Duration: 86 ms
-- Artifacts: artifacts/m1-dogfood/1/lg-bug-0002-array-unnest-crash/
+- Artifacts: artifacts/m1-dogfood/1/bug-0002-array-unnest-crash/
 - Assertions:
     - 测试 1：CTE 喂入数据，预期无报错（对照组）.not_contains: pass — expected stdout to NOT contain 'ERROR', got stdout='(None,)\n(None,)'
     - 测试 2：temp table 喂入数据，历史上触发 recover mode；修复后应无报错.not_contains: pass — expected stdout to NOT contain 'FATAL', got stdout='(None,)\n(None,)'
@@ -42,14 +42,14 @@
 - Setup results: 6 pass / 0 fail
 - Teardown results: 3 pass / 0 fail
 
-### lg-bug-0003-count-no-statistics — PASS
+### bug-0003-count-no-statistics — PASS
 
 - Title: ANALYZE 后 select count(*) 仍提示 "one or more columns ... do not have statistics"
 - Status (from runner): pass
 - YAML status: open
 - **Inferred BUG state**: upstream-fixed (BUG no longer reproduces — candidate to update YAML status to "fixed")
 - Duration: 58 ms
-- Artifacts: artifacts/m1-dogfood/1/lg-bug-0003-count-no-statistics/
+- Artifacts: artifacts/m1-dogfood/1/bug-0003-count-no-statistics/
 - Assertions:
     - AO_ROW + zstd 空表 ANALYZE 后 count(*) 不应提示无统计.scalar: pass — expected scalar == 0, got 0
     - AO_ROW + zstd 空表 ANALYZE 后 count(*) 不应提示无统计.not_contains: pass — expected stdout to NOT contain 'do not have statistics', got stdout='(0,)'
@@ -58,28 +58,28 @@
 - Setup results: 1 pass / 0 fail
 - Teardown results: 1 pass / 0 fail
 
-### lg-bug-0004-ctas-rowcount-zero — PASS
+### bug-0004-ctas-rowcount-zero — PASS
 
 - Title: ORCA off + clock_timestamp() + DISTRIBUTED REPLICATED 时 CTAS 产生 0 行
 - Status (from runner): pass
 - YAML status: open
 - **Inferred BUG state**: upstream-fixed (BUG no longer reproduces — candidate to update YAML status to "fixed")
 - Duration: 43 ms
-- Artifacts: artifacts/m1-dogfood/1/lg-bug-0004-ctas-rowcount-zero/
+- Artifacts: artifacts/m1-dogfood/1/bug-0004-ctas-rowcount-zero/
 - Assertions:
     - ORCA off + clock_timestamp() + DISTRIBUTED REPLICATED 的 CTAS.not_contains: pass — expected stdout to NOT contain 'ERROR', got stdout=''
     - tmp_test02 至少 1 行（与源表一致），不能 silent 0.scalar_ge: pass — expected scalar >= 1, got 1
 - Setup results: 3 pass / 0 fail
 - Teardown results: 2 pass / 0 fail
 
-### lg-bug-0005-lc-ctype-upper — PASS
+### bug-0005-lc-ctype-upper — PASS
 
 - Title: LC_CTYPE='C' 的 DB 里 SELECT upper(multibyte 字符串) 报 invalid multibyte
 - Status (from runner): pass
 - YAML status: open
 - **Inferred BUG state**: upstream-fixed (BUG no longer reproduces — candidate to update YAML status to "fixed")
 - Duration: 5439 ms
-- Artifacts: artifacts/m1-dogfood/1/lg-bug-0005-lc-ctype-upper/
+- Artifacts: artifacts/m1-dogfood/1/bug-0005-lc-ctype-upper/
 - Assertions:
     - 在 mydb 里跑 SELECT upper(multibyte 字符串).scalar: pass — expected scalar == 'AAAAAX/안녕 / XXXXXX', got 'AAAAAX/안녕 / XXXXXX'
     - 在 mydb 里跑 SELECT upper(multibyte 字符串).not_contains: pass — expected stdout to NOT contain 'invalid multibyte character', got stdout="('AAAAAX/안녕 / XXXXXX',)"

@@ -52,21 +52,21 @@
 
 ### 2.2 id_prefix
 
-YAML 文件名 + case id 都用这个前缀。要求：与 `lg-bug-` / `lg-ext-` 一致风格，3-5 char，**不与现有前缀有歧义**。
+YAML 文件名 + case id 都用这个前缀。要求：与 `bug-` / `ext-` 一致风格，3-5 char，**不与现有前缀有歧义**。
 
 | 选项 | 说明 |
 |---|---|
-| A. `lg-ext-sys-` | 语义清楚但**与 `lg-ext-` 前缀冲突**：现有 `id.startswith("lg-ext-")` 判 extension 的代码会假阳性命中 `lg-ext-sys-xxx`。需要改 prefix 比对逻辑为 `==` 不是 `startswith`，或长前缀优先匹配 — **risk** |
-| **B.** `lg-xs-` (xs = external systems) | 4 char，无冲突，唯一 — **推荐** |
-| C. `lg-es-` | 同 B，但 ES 容易跟 Elasticsearch 混淆，且与 `lg-ext-sys-` 哪个更直观见仁见智 |
-| D. `lg-ext-` 改成 `lg-pgx-`（extension 重命名） | 大动 (15+ files)，**否决** |
+| A. `ext-sys-` | 语义清楚但**与 `ext-` 前缀冲突**：现有 `id.startswith("ext-")` 判 extension 的代码会假阳性命中 `ext-sys-xxx`。需要改 prefix 比对逻辑为 `==` 不是 `startswith`，或长前缀优先匹配 — **risk** |
+| **B.** `xs-` (xs = external systems) | 4 char，无冲突，唯一 — **推荐** |
+| C. `es-` | 同 B，但 ES 容易跟 Elasticsearch 混淆，且与 `ext-sys-` 哪个更直观见仁见智 |
+| D. `ext-` 改成 `pgx-`（extension 重命名） | 大动 (15+ files)，**否决** |
 
-→ **推荐 B `lg-xs-`**。语义 `xs = external systems` 缩写。
+→ **推荐 B `xs-`**。语义 `xs = external systems` 缩写。
 
 **验证**：
 - 现有 startswith 检查逻辑 grep：
   - `yaml_loader.py` 用 `cat.id_prefix` 查表，不 startswith
-  - SKILL.md cross-check #6 写 "`bug_regression` 必须 `lg-bug-*`；`extension` 必须 `lg-ext-*`"——是描述性文字，加 `external_systems` 必须 `lg-xs-*` 即可。
+  - SKILL.md cross-check #6 写 "`bug_regression` 必须 `bug-*`；`extension` 必须 `ext-*`"——是描述性文字，加 `external_systems` 必须 `xs-*` 即可。
 
 ### 2.3 status_whitelist + default_status
 
@@ -117,7 +117,7 @@ external_systems = 30  ← 拟
 | 3 | `backend/tests/test_admin_categories.py`（更新） | fixture 期望从 2 行改 3 行（若 fixture 假设 2） | ~5 |
 | 4 | `backend/tests/test_yaml_loader.py`（更新） | 同上，CategoryMeta 测试用例补一组 | ~10 |
 | 5 | `frontend/src/routes/CasesPage.test.tsx`（更新） | 同上，mock data 加一行 | ~10 |
-| 6 | `.claude/skills/add-test-case/SKILL.md` cross-check #6 | 加 "`external_systems` 必须 `lg-xs-*`" 一行 | 1 |
+| 6 | `.claude/skills/add-test-case/SKILL.md` cross-check #6 | 加 "`external_systems` 必须 `xs-*`" 一行 | 1 |
 
 **预计**: ~70 行净增（含 migration + 测试 fixture + 1 行 skill spec 更新）。
 
@@ -159,15 +159,15 @@ external_systems = 30  ← 拟
 - [ ] cross-check #6 加 prefix 后，lint 仍 PASS（skill SKILL.md 改 1 行）
 
 **runtime 验证**（手工，sprint 内不强制）：
-- [ ] 假写一个 `cases/external-systems/lg-xs-zombodb-stub.yaml` 占位（`status: awaiting_env` + `steps: []`），看 `GET /cases` 列得出 + 前端 tab 显得出 + Validate 不报错。
+- [ ] 假写一个 `cases/external-systems/xs-zombodb-stub.yaml` 占位（`status: awaiting_env` + `steps: []`），看 `GET /cases` 列得出 + 前端 tab 显得出 + Validate 不报错。
 
 ---
 
 ## 6. 风险点 / 待澄清
 
-1. **id_prefix `lg-xs-` 与 `lg-ext-` 兼容性**：本设计已确认 backend 用 `cat.id_prefix` 查表（不是 startswith），但**前端**或 **skill** 是否有硬编码 startswith 检查？
+1. **id_prefix `xs-` 与 `ext-` 兼容性**：本设计已确认 backend 用 `cat.id_prefix` 查表（不是 startswith），但**前端**或 **skill** 是否有硬编码 startswith 检查？
    - SKILL.md cross-check #6 是描述性文字 → 加一行即可
-   - 前端 grep `lg-ext\|lg-bug` 命中 0
+   - 前端 grep `ext\|bug` 命中 0
    - **结论**: 无 startswith 风险
 
 2. **alembic migration 命名**：`0001_initial_schema.py` 是 baseline。新 migration 用 `0002_seed_external_systems_category.py` 还是 `0002_<sprint>_external_systems.py` 风格？
@@ -193,7 +193,7 @@ external_systems = 30  ← 拟
 1. **migration** `0002_seed_external_systems_category.py` + 跑 `alembic upgrade head`
 2. **目录** `cases/external-systems/.gitkeep`
 3. **测试 fixture 更新**（probe 实际有几处 + 改）
-4. **SKILL.md cross-check #6** 加 `lg-xs-*` 一行
+4. **SKILL.md cross-check #6** 加 `xs-*` 一行
 5. **本地 verification**：`curl /admin/categories` + `curl /cases?category=external_systems` + 前端浏览器看 tab + skill grounding 拉 3 项
 
 ---
@@ -201,7 +201,7 @@ external_systems = 30  ← 拟
 ## 8. 等用户拍板的决策（请回答）
 
 A. directory name → `cases/external-systems/`（推荐 kebab）OK 吗？
-B. id_prefix → `lg-xs-` OK 吗？还是用 `lg-ext-sys-`（要冒 startswith 风险）？
+B. id_prefix → `xs-` OK 吗？还是用 `ext-sys-`（要冒 startswith 风险）？
 C. status_whitelist → `stable / awaiting_env / deprecated / stub` + default `awaiting_env` OK 吗？
 D. display_order = 30 OK 吗？
 E. external_deps 字段本 sprint **不**真消费（保持文档性质）OK 吗？
@@ -212,7 +212,7 @@ E. external_deps 字段本 sprint **不**真消费（保持文档性质）OK 吗
 
 ## 9. 2026-05-26 status 语义补强（v1.21 修订）
 
-**触发**：用户在 lg-xs-pxf-hive-fdw-encoding-utf8 case 落库后指出 v1.10 设计的 `status: stable` 与项目主目的（BUG 回归测试）不符——external_systems 与 extension 拆分是因为**依赖外部服务进程**，但 case 本质仍是 BUG 复现（PXF / Hive / FDW / Zombodb 触发的 PG/Greenplum BUG），不是"扩展功能稳定性验证"。用户原话："external-systems 这个分类的 case 依赖外部系统，所以才单独出来的，要跟 bug_regression 一样表示 BUG 修复状态"。
+**触发**：用户在 xs-pxf-hive-fdw-encoding-utf8 case 落库后指出 v1.10 设计的 `status: stable` 与项目主目的（BUG 回归测试）不符——external_systems 与 extension 拆分是因为**依赖外部服务进程**，但 case 本质仍是 BUG 复现（PXF / Hive / FDW / Zombodb 触发的 PG/Greenplum BUG），不是"扩展功能稳定性验证"。用户原话："external-systems 这个分类的 case 依赖外部系统，所以才单独出来的，要跟 bug_regression 一样表示 BUG 修复状态"。
 
 **问题根源**：v1.10 §2.3 决策点把 status_whitelist 锁定在"环境就绪度"单一维度 (`stable` / `awaiting_env` / `deprecated` / `stub`)——这与 `extension` 类别的语义同源（都是"功能稳定性"），但没考虑 external_systems case 实际承载的 BUG 复现意图。3 个已落库 case 都用 `stable`，但有的 BUG 已修复有的未修复，`stable` 无法区分。
 
@@ -229,9 +229,9 @@ E. external_deps 字段本 sprint **不**真消费（保持文档性质）OK 吗
 
 | Case | v1.10 status | v1.21 status | 真实 BUG 状态 |
 |---|---|---|---|
-| `lg-xs-pxf-hdfs-order-by-writable` | stable | **fixed** | BUG 已修复 |
-| `lg-xs-pxf-hive-fdw-encoding-utf8` | stable | **open** | BUG 未修复（dogfood 实测 baseline pass + main fail） |
-| `lg-xs-zombodb-partition-text-search` | stable | **fixed** | BUG 已修复（SynxDB-4.5.0-build130 + zombodb 3000.1.8 + ES 7.10.2 验证） |
+| `xs-pxf-hdfs-order-by-writable` | stable | **fixed** | BUG 已修复 |
+| `xs-pxf-hive-fdw-encoding-utf8` | stable | **open** | BUG 未修复（dogfood 实测 baseline pass + main fail） |
+| `xs-zombodb-partition-text-search` | stable | **fixed** | BUG 已修复（SynxDB-4.5.0-build130 + zombodb 3000.1.8 + ES 7.10.2 验证） |
 
 **实施清单**（1 个 atomic PR，~110 行净改动）：
 

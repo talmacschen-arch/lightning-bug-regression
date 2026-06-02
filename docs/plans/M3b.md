@@ -32,7 +32,7 @@ reviewer 必须按 §14 cross-reference + §5.5.1 铁律逐项核对。
 ### Sprint M3b-backend — 2 个 grounding endpoint（可并行）
 
 - [ ] M3b-1 `GET /admin/step-kinds` endpoint：`backend/app/api/admin.py` 加新路由，返回 `[{kind: "sql", description: "...", required_fields: [...], optional_fields: [...]}, {kind: "shell", ...}, {kind: "log_grep", ...}]`。**唯一权威**——skill §5.5.7 cross-check 1 项强校验 step kind 是否在此 list。**§14 R26 强约束**：source-of-truth 必须是 backend 已有的 step kind 注册表（如果有），如果没有，本 PR 加一份 `backend/app/runner/step_kinds.py` 数据文件 + endpoint 读它 + orchestrator 也读它统一（避免双源不一致）。配测试 `test_api_admin_step_kinds.py` 验返回结构 + 列表非空
-- [ ] M3b-2 `GET /cases?q=<topic>&category=<name>` 查重增强：M1-10 已有 `?category=` 过滤（实测可用），本步加 `?q=` 全文搜索（在 case YAML 的 `id` / `title` / `description` 子串包含，case-insensitive；skill §5.5.3 step 2 fetch 用）。返回简表 `[{id, title, status, tags, category}]`。修 `backend/app/api/cases.py` 现有 list 端点。配测试 `test_api_cases_query.py` 覆盖：`?q=hashjoin` 匹配 lg-bug-0001 / `?q=foo` 不匹配任何 / `?q=optimizer&category=bug_regression` 组合过滤
+- [ ] M3b-2 `GET /cases?q=<topic>&category=<name>` 查重增强：M1-10 已有 `?category=` 过滤（实测可用），本步加 `?q=` 全文搜索（在 case YAML 的 `id` / `title` / `description` 子串包含，case-insensitive；skill §5.5.3 step 2 fetch 用）。返回简表 `[{id, title, status, tags, category}]`。修 `backend/app/api/cases.py` 现有 list 端点。配测试 `test_api_cases_query.py` 覆盖：`?q=hashjoin` 匹配 bug-0001 / `?q=foo` 不匹配任何 / `?q=optimizer&category=bug_regression` 组合过滤
 
 ### Sprint M3b-skill-write — SKILL.md 主体（顺序写，单 PR / 或拆 2~3 个 PR）
 
@@ -57,7 +57,7 @@ reviewer 必须按 §14 cross-reference + §5.5.1 铁律逐项核对。
 
 ### Sprint M3b-dogfood — 人类终端跑一次（依赖 M3a 已 done + skill 全写完）
 
-- [x] M3b-10 dogfood smoke：2026-05-24 13:40 (UTC+8) programmatic 跑完 (skill 经 `claude --print` subprocess → /tmp/m3b-yaml.txt → POST /cases/{validate,try,submit} 三段闸门 → PR #68 真 merge → 新 case `cases/extension/lg-ext-pgvector-ivfflat-basic.yaml` 在 main 上 + via API /cases?category=extension 可见)。skill 输出 97 行 YAML，2 main steps via /cases/try 真在 synxdb-0001 上跑 PASS (CREATE IVFFlat 7ms + EXPLAIN 1ms 断言走索引)。**暴露 1 个 backend bug** (assertions.py `_not_contains`/`_stdout_contains` 不接受 list 形式 → 已修 PR #67)。详 `docs/m3b-dogfood-2026-05-24-1340.md`
+- [x] M3b-10 dogfood smoke：2026-05-24 13:40 (UTC+8) programmatic 跑完 (skill 经 `claude --print` subprocess → /tmp/m3b-yaml.txt → POST /cases/{validate,try,submit} 三段闸门 → PR #68 真 merge → 新 case `cases/extension/ext-pgvector-ivfflat-basic.yaml` 在 main 上 + via API /cases?category=extension 可见)。skill 输出 97 行 YAML，2 main steps via /cases/try 真在 synxdb-0001 上跑 PASS (CREATE IVFFlat 7ms + EXPLAIN 1ms 断言走索引)。**暴露 1 个 backend bug** (assertions.py `_not_contains`/`_stdout_contains` 不接受 list 形式 → 已修 PR #67)。详 `docs/m3b-dogfood-2026-05-24-1340.md`
 
 ## 关键依赖图
 

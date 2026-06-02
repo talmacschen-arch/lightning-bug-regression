@@ -21,18 +21,18 @@ reviewer cross-reference §14 R4b：本 sprint 任何 PR 命中 R4b 反模式即
    - 当前 5 个真 case 全 `status: open` 过校验是偶然，加 `fixed`/`wontfix` 直接被拒
 2. `backend/app/storage/yaml_loader.py:57-66` 的 `_CATEGORY_PREFIX` dict：
    - 杜撰 `feature_validation / perf_regression / ops_runbook` 等 §4.5 不存在的 category
-   - **完全缺 `extension`**——`lg-ext-*.yaml` case 走到 line 246 `expected_prefix = None` → 静默 skip id 前缀检查，失去安全网
+   - **完全缺 `extension`**——`ext-*.yaml` case 走到 line 246 `expected_prefix = None` → 静默 skip id 前缀检查，失去安全网
 3. **§14 R4b 双层违反**：分类硬编码到 loader + 杜撰未来 category
 
 **修法**：
 
-- [x] **P0-A 修 yaml_loader 接收 §4.5 case_categories 元数据** — PR #22 (f2b664b refactor) + PR #21 (815473c design.md §4.1 pointer) 两步组合；`_VALID_STATUSES` 与 `_CATEGORY_PREFIX` 已删；新 `CategoryMeta` dataclass + `cases.py` API caller 同步改 + 5 个新测试（status=fixed 接受 / status=stable 接受 / status=closed 拒 / lg-ext- prefix enforced / prefix data-driven）；§14 R4b 反模式已修
+- [x] **P0-A 修 yaml_loader 接收 §4.5 case_categories 元数据** — PR #22 (f2b664b refactor) + PR #21 (815473c design.md §4.1 pointer) 两步组合；`_VALID_STATUSES` 与 `_CATEGORY_PREFIX` 已删；新 `CategoryMeta` dataclass + `cases.py` API caller 同步改 + 5 个新测试（status=fixed 接受 / status=stable 接受 / status=closed 拒 / ext- prefix enforced / prefix data-driven）；§14 R4b 反模式已修
   - 新增 `CategoryMeta` dataclass（或 TypedDict）含 `name / id_prefix / status_whitelist: set[str]`
   - `load_case()` 签名改为 `categories: Mapping[str, CategoryMeta]`（替换 `categories_whitelist: set[str]`）
   - 删 `_VALID_STATUSES` 模块常量、删 `_CATEGORY_PREFIX` 字典——这两份 source-of-truth 同时存在就是 R4b 反模式
   - status 校验改为 `if status_raw not in categories[category].status_whitelist:`
   - id-prefix 校验改为 `if not case_id.startswith(categories[category].id_prefix):`
-  - 测试 `test_yaml_loader.py` 更新 fixture：构造 CategoryMeta 字典传入；新增测试覆盖：(a) status=fixed 在 bug_regression 下接受 / (b) status=stable 在 extension 下接受 / (c) status=closed 任何 category 都拒（验证 sonnet 杜撰值已清掉）/ (d) lg-ext-* id 在 category=extension 下 prefix-enforced
+  - 测试 `test_yaml_loader.py` 更新 fixture：构造 CategoryMeta 字典传入；新增测试覆盖：(a) status=fixed 在 bug_regression 下接受 / (b) status=stable 在 extension 下接受 / (c) status=closed 任何 category 都拒（验证 sonnet 杜撰值已清掉）/ (d) ext-* id 在 category=extension 下 prefix-enforced
   - 更新 `backend/scripts/run_m1_dogfood.py` 调 yaml_loader 时构造的 CategoryMeta（暂硬编码，待 M2 接 DB 时换掉）
   - design.md §4.5 不动（已是 source of truth），design.md §4.1 加一句指向 §4.5 说明 "**status 与 id_prefix 由 §4.5 表驱动，schema doc 不再列枚举值**"
   - 单 PR；走 ci-gate 必须绿；reviewer cross-check §14 R4b 已修

@@ -4,13 +4,13 @@
 
 每次 lightning / synxdb 升级后，本工具一键回归三类用例集合：
 
-1. **`bug_regression`** —— 历史 BUG 的复现 / 修复验证（来源主要是飞书「LG 历史 BUG」章节）。
+1. **`bug_regression`** —— 历史 BUG 的复现 / 修复验证（来源主要是飞书历史 BUG 章节）。
 2. **`extension`** —— 周边 extension 的安装 + 基础功能 + 关键边界（pgvector / postgis / pgcrypto 等；研发侧测试因周边环境不充分而覆盖度不够）。
 3. **`external_systems`** —— 外部系统依赖测试（datalake_fdw / hive_connector / PXF / zombodb 等需要外部服务可达）。
 
 三类用例**共用**同一份 runner、schema、UI；通过 `category` 字段（DB 表驱动可扩展）区分，统计 / 看板 / Run 子集按 category 拆分。
 
-> 状态：**M0 ~ M7 全部交付 + post-M6 UX 迭代 wave 1+2 + 简易用户登录模块 + Release 流程文档 + target_versions registry + run.errored / error verdict / 进度条 / case 隔离 / 时区 root fix / Admin Bearer 迁移 + external_systems status 双轴语义改造 + review 流水线端到端跑通 + M7 LLM 从描述生成 case 草稿**（design.md v1.25，2026-06-02）。
+> 状态：**M0 ~ M7 全部交付 + post-M6 UX 迭代 wave 1+2 + 简易用户登录模块 + Release 流程文档 + target_versions registry + run.errored / error verdict / 进度条 / case 隔离 / 时区 root fix / Admin Bearer 迁移 + external_systems status 双轴语义改造 + review 流水线端到端跑通 + M7 LLM 从描述生成 case 草稿**（design.md v1.26，2026-06-02）。
 
 ---
 
