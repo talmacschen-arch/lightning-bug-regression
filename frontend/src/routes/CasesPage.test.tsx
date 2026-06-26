@@ -983,4 +983,103 @@ describe('CasesPage', () => {
       expect(screen.getByTestId('case-card-ALPHA-002')).toBeInTheDocument();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Status filter tests
+  // -------------------------------------------------------------------------
+
+  it('renders status chips only for statuses present in loaded cases', async () => {
+    render(
+      <MemoryRouter>
+        <CasesPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-card-ALPHA-001')).toBeInTheDocument();
+    });
+
+    // ALPHA-001 = 'active', ALPHA-002 = 'draft' → both chips present
+    expect(screen.getByTestId('cases-status-filter-active')).toBeInTheDocument();
+    expect(screen.getByTestId('cases-status-filter-draft')).toBeInTheDocument();
+    // 'deprecated' is in cat_alpha's whitelist but no loaded case has it → no chip
+    expect(
+      screen.queryByTestId('cases-status-filter-deprecated'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('status chip filter: selecting "draft" hides cases with other statuses', async () => {
+    render(
+      <MemoryRouter>
+        <CasesPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-card-ALPHA-001')).toBeInTheDocument();
+      expect(screen.getByTestId('case-card-ALPHA-002')).toBeInTheDocument();
+    });
+
+    // Select 'draft' — only ALPHA-002 is draft; ALPHA-001 (active) must hide
+    fireEvent.click(screen.getByTestId('cases-status-filter-draft'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-card-ALPHA-002')).toBeInTheDocument();
+      expect(screen.queryByTestId('case-card-ALPHA-001')).not.toBeInTheDocument();
+    });
+  });
+
+  it('status + tag compose with AND: no case matching both → empty state', async () => {
+    render(
+      <MemoryRouter>
+        <CasesPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-card-ALPHA-001')).toBeInTheDocument();
+      expect(screen.getByTestId('case-card-ALPHA-002')).toBeInTheDocument();
+    });
+
+    // 'smoke' tag matches only ALPHA-001 (active); 'draft' status matches only
+    // ALPHA-002. Their intersection is empty → empty state.
+    fireEvent.click(screen.getByTestId('cases-status-filter-draft'));
+    fireEvent.click(screen.getByTestId('cases-tag-filter-smoke'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cases-search-empty')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('cases-search-empty').textContent).toContain('status: draft');
+  });
+
+  it('status selection resets when switching category', async () => {
+    render(
+      <MemoryRouter>
+        <CasesPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('case-card-ALPHA-001')).toBeInTheDocument();
+    });
+
+    // Select 'draft' on alpha — ALPHA-001 (active) hidden
+    fireEvent.click(screen.getByTestId('cases-status-filter-draft'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('case-card-ALPHA-001')).not.toBeInTheDocument();
+    });
+
+    // Switch to beta then back to alpha
+    fireEvent.mouseDown(screen.getByTestId('tab-cat_beta'), { button: 0, ctrlKey: false });
+    await waitFor(() => {
+      expect(screen.getByTestId('case-card-BETA-001')).toBeInTheDocument();
+    });
+    fireEvent.mouseDown(screen.getByTestId('tab-cat_alpha'), { button: 0, ctrlKey: false });
+
+    await waitFor(() => {
+      // Selection reset — both alpha cases visible again
+      expect(screen.getByTestId('case-card-ALPHA-001')).toBeInTheDocument();
+      expect(screen.getByTestId('case-card-ALPHA-002')).toBeInTheDocument();
+    });
+  });
 });
