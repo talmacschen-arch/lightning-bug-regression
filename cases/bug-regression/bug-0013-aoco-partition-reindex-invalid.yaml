@@ -1,0 +1,234 @@
+id: bug-0013-aoco-partition-reindex-invalid
+title: ao_column 分区表父表索引 INVALID 后 REINDEX 无法修复
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "aoco-partition-reindex-invalid"
+  reported_at: "2026-06-27"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [ao_column, partition, index, reindex, indisvalid, catalog, maintenance]
+
+description: |
+  飞书《ao_colum分区表-索引INVALID后reindex无用》(SynxDB 4.5.0)：
+  (https://hashdata.feishu.cn/wiki/OVxIwjtK6ixGJPk15kXcyC6kn7b)：
+  USING ao_column 的 RANGE 分区表，父表上建 btree 索引。当父表（partitioned
+  index）的索引被置为 INVALID 后，REINDEX TABLE / REINDEX INDEX 都**无法**清除
+  INVALID 标志（子表索引仍 valid，父表索引始终 invalid），只有 DROP + 重建索引
+  能恢复。本 case 回归该路径：核心断言抓「REINDEX 后父表索引仍 INVALID」。
+
+  注：飞书说明现网真实触发条件无法复现，故用 utility 模式直改 pg_index
+  (set allow_system_table_mods=true; UPDATE ... indisvalid=false) 模拟 INVALID
+  现场——这也是飞书原文采用的复现手法。本机实测（SynxDB 4.5.0 build130）该手法
+  稳定生效、且 REINDEX 确实不清标志。
+
+procedure: |
+  1) prep-create: 建 schema + ao_column RANGE 分区父表 + 4 个 btree 父表索引
+     + 3 个子分区表 (LIKE) 并 ATTACH
+  2) prep-load: 每个子分区灌少量数据 + ANALYZE（仅为 explain 诊断步铺垫，
+     与 BUG 触发无关）
+  3) check-clean: 确认父表 4 个索引初始全 valid（invalid_parent=0）
+  4) make-invalid: utility 模式 set allow_system_table_mods + UPDATE pg_index
+     把父表 4 个索引置 indisvalid=false
+  5) check-invalid: 确认父表 4 个索引已 invalid（invalid_parent=4，确认现场制造成功）
+  6) reindex-table / reindex-indexes: REINDEX TABLE + 逐个 REINDEX INDEX
+  7) diag-explain-*: 诊断步（不参与判定）——打印父表/子表查询计划，记录
+     「走不走索引」的现网影响，供报告人读
+  8) assert-reindex-clears-invalid（核心断言）: REINDEX 后父表索引应恢复 valid，
+     即 invalid_parent=0。BUG 存在时仍为 4 → 断言失败 → 看板红 = 仍有此 BUG
+
+expected: |
+  - check-clean: invalid_parent = 0
+  - check-invalid: invalid_parent = 4（确认 INVALID 现场制造成功）
+  - **核心：assert-reindex-clears-invalid invalid_parent = 0**
+    （修复后行为；BUG 复现时父表索引 REINDEX 后仍为 4 → 断言失败）
+  - diag-explain-* 为诊断信息，不判定（走索引与否依赖 planner，详见 notes）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP SCHEMA IF EXISTS lbr_bug0013 CASCADE'"
+
+steps:
+  - name: "prep-create: schema + ao_column 分区父表 + 4 索引 + 3 子分区 ATTACH"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -f -" <<'EOSQL'
+      CREATE SCHEMA IF NOT EXISTS lbr_bug0013;
+      CREATE TABLE lbr_bug0013.aoco_part_reindex (
+        evt_dtm     timestamp without time zone,
+        etl_ldup_dt character varying(10),
+        lot_id      text,
+        cell_id     text
+      ) USING ao_column WITH (compresstype=zstd, compresslevel=7)
+      DISTRIBUTED RANDOMLY
+      PARTITION BY RANGE (evt_dtm);
+
+      CREATE INDEX aoco_part_reindex_idx1 ON lbr_bug0013.aoco_part_reindex USING btree (etl_ldup_dt);
+      CREATE INDEX aoco_part_reindex_idx2 ON lbr_bug0013.aoco_part_reindex USING btree (evt_dtm);
+      CREATE INDEX aoco_part_reindex_idx3 ON lbr_bug0013.aoco_part_reindex USING btree (lot_id);
+      CREATE INDEX aoco_part_reindex_idx4 ON lbr_bug0013.aoco_part_reindex USING btree (cell_id);
+
+      CREATE TABLE lbr_bug0013.aoco_part_reindex_p202601 (LIKE lbr_bug0013.aoco_part_reindex) USING ao_column WITH (compresstype=zstd, compresslevel=7) DISTRIBUTED RANDOMLY;
+      CREATE TABLE lbr_bug0013.aoco_part_reindex_p202602 (LIKE lbr_bug0013.aoco_part_reindex) USING ao_column WITH (compresstype=zstd, compresslevel=7) DISTRIBUTED RANDOMLY;
+      CREATE TABLE lbr_bug0013.aoco_part_reindex_p202603 (LIKE lbr_bug0013.aoco_part_reindex) USING ao_column WITH (compresstype=zstd, compresslevel=7) DISTRIBUTED RANDOMLY;
+
+      ALTER TABLE lbr_bug0013.aoco_part_reindex ATTACH PARTITION lbr_bug0013.aoco_part_reindex_p202601 FOR VALUES FROM ('2026-01-01 00:00:00') TO ('2026-02-01 00:00:00');
+      ALTER TABLE lbr_bug0013.aoco_part_reindex ATTACH PARTITION lbr_bug0013.aoco_part_reindex_p202602 FOR VALUES FROM ('2026-02-01 00:00:00') TO ('2026-03-01 00:00:00');
+      ALTER TABLE lbr_bug0013.aoco_part_reindex ATTACH PARTITION lbr_bug0013.aoco_part_reindex_p202603 FOR VALUES FROM ('2026-03-01 00:00:00') TO ('2026-04-01 00:00:00');
+      EOSQL
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+
+  - name: "prep-load: 每分区灌少量数据 + ANALYZE（仅为 explain 诊断铺垫）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -f -" <<'EOSQL'
+      INSERT INTO lbr_bug0013.aoco_part_reindex
+      SELECT '2026-01-01'::timestamp + (g || ' minutes')::interval,
+             to_char('2026-01-01'::date + (g%28), 'YYYYMMDD'), 'LOT'||g, 'CELL'||g
+      FROM generate_series(1,1000) g;
+      INSERT INTO lbr_bug0013.aoco_part_reindex
+      SELECT '2026-02-01'::timestamp + (g || ' minutes')::interval,
+             to_char('2026-02-01'::date + (g%28), 'YYYYMMDD'), 'LOT'||g, 'CELL'||g
+      FROM generate_series(1,1000) g;
+      INSERT INTO lbr_bug0013.aoco_part_reindex
+      SELECT '2026-03-01'::timestamp + (g || ' minutes')::interval,
+             to_char('2026-03-01'::date + (g%28), 'YYYYMMDD'), 'LOT'||g, 'CELL'||g
+      FROM generate_series(1,1000) g;
+      ANALYZE lbr_bug0013.aoco_part_reindex;
+      EOSQL
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+
+  - name: "check-clean: 父表 4 索引初始应全 valid (invalid_parent=0)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -At -c \"SELECT 'INVALID_PARENT_COUNT='||count(*)::text||';' FROM pg_index ix JOIN pg_class c ON c.oid=ix.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='lbr_bug0013' AND c.relname='aoco_part_reindex' AND c.relkind='p' AND NOT ix.indisvalid;\""
+    timeout_ms: 60000
+    expect:
+      stdout_contains: "INVALID_PARENT_COUNT=0;"
+
+  - name: "make-invalid: utility 模式改 pg_index 把父表 4 索引置 INVALID（模拟现场）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "PGOPTIONS='-c gp_role=utility' psql -d gpadmin -v ON_ERROR_STOP=1 -c \"set allow_system_table_mods=true; UPDATE pg_index SET indisvalid=false WHERE indexrelid IN ('lbr_bug0013.aoco_part_reindex_idx1'::regclass,'lbr_bug0013.aoco_part_reindex_idx2'::regclass,'lbr_bug0013.aoco_part_reindex_idx3'::regclass,'lbr_bug0013.aoco_part_reindex_idx4'::regclass);\""
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+
+  - name: "check-invalid: 确认父表 4 索引已 INVALID (invalid_parent=4，现场制造成功)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -At -c \"SELECT 'INVALID_PARENT_COUNT='||count(*)::text||';' FROM pg_index ix JOIN pg_class c ON c.oid=ix.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='lbr_bug0013' AND c.relname='aoco_part_reindex' AND c.relkind='p' AND NOT ix.indisvalid;\""
+    timeout_ms: 60000
+    expect:
+      stdout_contains: "INVALID_PARENT_COUNT=4;"
+
+  - name: "reindex-table: REINDEX TABLE 父表"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c \"REINDEX TABLE lbr_bug0013.aoco_part_reindex;\""
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+
+  - name: "reindex-indexes: 逐个 REINDEX INDEX（分区索引须独立事务，故各自 psql -c）"
+    kind: shell
+    cmd: |
+      for i in 1 2 3 4; do
+        su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c \"REINDEX INDEX lbr_bug0013.aoco_part_reindex_idx${i};\"" || exit 1
+      done
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+
+  - name: "diag-explain-parent: 父表查询计划（诊断，不判定）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -f -" <<'EOSQL'
+      \echo '== parent, optimizer=on (ORCA) =='
+      EXPLAIN SELECT * FROM lbr_bug0013.aoco_part_reindex WHERE evt_dtm >= '2026-01-05' AND evt_dtm < '2026-01-06';
+      \echo '== parent, optimizer=off (Postgres planner), enable_seqscan=off =='
+      SET optimizer=off; SET enable_seqscan=off;
+      EXPLAIN SELECT * FROM lbr_bug0013.aoco_part_reindex WHERE evt_dtm >= '2026-01-05' AND evt_dtm < '2026-01-06';
+      EOSQL
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+
+  - name: "diag-explain-child: 直查子分区计划（诊断，不判定 —— 子表索引仍 valid）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -f -" <<'EOSQL'
+      \echo '== child p202601 direct, optimizer=off, enable_seqscan=off =='
+      SET optimizer=off; SET enable_seqscan=off;
+      EXPLAIN SELECT * FROM lbr_bug0013.aoco_part_reindex_p202601 WHERE evt_dtm >= '2026-01-05' AND evt_dtm < '2026-01-06';
+      EOSQL
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+
+  - name: "assert-reindex-clears-invalid（核心断言）: REINDEX 后父表索引应恢复 valid (invalid_parent=0)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -At -c \"SELECT 'INVALID_PARENT_COUNT='||count(*)::text||';' FROM pg_index ix JOIN pg_class c ON c.oid=ix.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='lbr_bug0013' AND c.relname='aoco_part_reindex' AND c.relkind='p' AND NOT ix.indisvalid;\""
+    timeout_ms: 60000
+    expect:
+      stdout_contains: "INVALID_PARENT_COUNT=0;"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP SCHEMA IF EXISTS lbr_bug0013 CASCADE'"
+
+created_by: chenqiang
+created_at: "2026-06-27"
+notes: |
+  来源：飞书 wiki《ao_colum分区表-索引INVALID后reindex无用》(SynxDB 4.5.0)
+  https://hashdata.feishu.cn/wiki/OVxIwjtK6ixGJPk15kXcyC6kn7b
+  （无对应 GitLab issue；reported_at 取本 case 录入日期，现网首报日期未知。）
+
+  **BUG（核心，确定性）**：ao_column RANGE 分区表父表 (partitioned index) 索引被
+  置 INVALID 后，REINDEX TABLE 与逐个 REINDEX INDEX 均无法清除 INVALID 标志；
+  子分区索引始终 valid。唯一恢复手段是 DROP INDEX + 重建。
+
+  **现场制造手法（飞书原文同款）**：现网真实触发条件无法复现，故用
+  `PGOPTIONS='-c gp_role=utility' psql` + `set allow_system_table_mods=true` 直接
+  `UPDATE pg_index SET indisvalid=false` 把父表 4 个索引置 INVALID。本机实测
+  (SynxDB 4.5.0 build130) 该手法稳定生效。所有目录敏感步骤均用独立 `psql` 连接
+  （shell `su - gpadmin`），避免持久连接 relcache 读到旧目录状态。
+
+  **判定语义**（design.md §4.1.1：正面期望=修复后行为，红=仍有此 BUG）：
+  - check-clean (=0) / check-invalid (=4) 是前置确认步，确保「现场制造成功」；
+  - 核心断言 assert-reindex-clears-invalid 期望 invalid_parent=0（修复后应清标志）。
+    build130 实测 REINDEX 后仍为 4 → 该步失败 → case 红 = BUG 复现。故 status=open。
+
+  **本机验证（2026-06-27, build130）**：手工逐条复现确认——制造后父表 4 索引
+  INVALID；REINDEX TABLE 返回成功但父表索引仍 INVALID(=4)；逐个 REINDEX INDEX
+  亦不清标志(=4)；DROP+重建单个索引可令该索引恢复 valid。核心断言在 build130
+  预期为 FAIL（BUG 未修复）。
+
+  **explain 诊断步为何不判定**（实测结论，与飞书"父表走不了索引"表述不同）：
+  - Postgres planner (optimizer=off)：经父表查询**仍走子表的 valid 索引**
+    (Bitmap Index Scan on ..._p202601_evt_dtm_idx)，与直查子表一致——父表 INVALID
+    标志对计划**无可见影响**；
+  - ORCA (默认)：父表查询走 Dynamic Seq Scan，但**无论索引 valid 与否都如此**
+    （小数据下 ORCA 的代价选择），无法归因于本 BUG。
+  故「explain 走不走索引」在本 build 不是可靠的 BUG 信号，仅作诊断信息打印进报告；
+  唯一确定性、可归因的缺陷是目录状态（REINDEX 不清 INVALID）。
+
+  **多分区**：父表 partitioned index 的 INVALID 行为不依赖具体分区数；本 case 取
+  3 个子分区（多分区即可触发，无需照搬飞书 5 分区 × 100万行）；灌数仅 1000 行/分区
+  且只服务 explain 诊断步，与 BUG 触发无关。
