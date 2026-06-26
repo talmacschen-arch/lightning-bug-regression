@@ -38,6 +38,9 @@ function statusVariant(
 interface CasesListProps {
   category: CategoryOut;
   cases: CaseSummary[];
+  /** Currently selected status filters (client-side OR multi-select) */
+  selectedStatuses: string[];
+  onStatusToggle: (status: string) => void;
   /** Currently selected tag filters (client-side OR multi-select) */
   selectedTags: string[];
   /** All available tags for this category's loaded cases */
@@ -47,12 +50,34 @@ interface CasesListProps {
   q: string;
 }
 
-function CasesList({ category, cases, selectedTags, availableTags, onTagToggle, q }: CasesListProps) {
-  // Apply client-side tag filter (OR across selected tags) after server q
+function CasesList({
+  category,
+  cases,
+  selectedStatuses,
+  onStatusToggle,
+  selectedTags,
+  availableTags,
+  onTagToggle,
+  q,
+}: CasesListProps) {
+  // Status options actually present in this category's loaded cases, ordered
+  // by the category's status_whitelist. Data-driven (§14 R4b): status names
+  // like "open" come from the category config, never hardcoded here.
+  const availableStatuses = useMemo(() => {
+    const present = new Set(cases.map((c) => c.status));
+    return category.status_whitelist.filter((s) => present.has(s));
+  }, [cases, category.status_whitelist]);
+
+  // Client-side status filter (OR across selected), then tag filter (OR across
+  // selected). The two dimensions compose with AND, both after the server q.
+  const afterStatus =
+    selectedStatuses.length === 0
+      ? cases
+      : cases.filter((c) => selectedStatuses.includes(c.status));
   const filtered =
     selectedTags.length === 0
-      ? cases
-      : cases.filter(
+      ? afterStatus
+      : afterStatus.filter(
           (c) =>
             c.tags !== null &&
             c.tags !== undefined &&
@@ -63,21 +88,49 @@ function CasesList({ category, cases, selectedTags, availableTags, onTagToggle, 
 
   // Build empty message
   let emptyMsg = 'No cases found in this category.';
-  if (q || selectedTags.length > 0) {
+  if (q || selectedStatuses.length > 0 || selectedTags.length > 0) {
     const parts: string[] = [];
     if (q) parts.push(`"${q}"`);
+    if (selectedStatuses.length > 0) parts.push(`status: ${selectedStatuses.join(', ')}`);
     if (selectedTags.length > 0) parts.push(`tags: ${selectedTags.join(', ')}`);
     emptyMsg = `No cases match ${parts.join(' + ')}`;
   }
 
   return (
     <div>
+      {/* Status chips — rendered only when the loaded cases carry ≥1 status */}
+      {availableStatuses.length > 0 && (
+        <div
+          data-testid={`cases-status-filters-${category.name}`}
+          className="mt-4 flex flex-wrap items-center gap-1"
+        >
+          <span className="mr-1 text-xs text-muted-foreground">Status:</span>
+          {availableStatuses.map((status) => (
+            <button
+              key={status}
+              type="button"
+              data-testid={`cases-status-filter-${status}`}
+              onClick={() => onStatusToggle(status)}
+              className={[
+                'inline-flex items-center rounded-sm px-2 py-0.5 text-xs transition-colors',
+                selectedStatuses.includes(status)
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80',
+              ].join(' ')}
+            >
+              {status}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Tag chips — rendered only when there are tags available */}
       {availableTags.length > 0 && (
         <div
           data-testid={`cases-tag-filters-${category.name}`}
-          className="mt-4 flex flex-wrap gap-1"
+          className="mt-2 flex flex-wrap items-center gap-1"
         >
+          <span className="mr-1 text-xs text-muted-foreground">Tags:</span>
           {availableTags.map((tag) => (
             <button
               key={tag}
@@ -230,11 +283,13 @@ export default function CasesPage() {
     tabStatesRef.current = tabStates;
   });
 
-  // Client-side tag selection state (per-tab, OR multi-select)
+  // Client-side status + tag selection state (per-tab, OR multi-select)
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
-  // Reset tag selection when the active tab or server q changes
+  // Reset status/tag selection when the active tab or server q changes
   useEffect(() => {
+    setSelectedStatuses([]);
     setSelectedTags([]);
   }, [activeTab, serverQ]);
 
@@ -374,6 +429,12 @@ export default function CasesPage() {
     return Array.from(seen).sort();
   }, [activeState]);
 
+  const handleStatusToggle = useCallback((status: string) => {
+    setSelectedStatuses((prev) =>
+      prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status],
+    );
+  }, []);
+
   const handleTagToggle = useCallback((tag: string) => {
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
@@ -502,6 +563,8 @@ export default function CasesPage() {
                 <CasesList
                   category={cat}
                   cases={state.cases ?? []}
+                  selectedStatuses={cat.name === activeTab ? selectedStatuses : []}
+                  onStatusToggle={handleStatusToggle}
                   selectedTags={cat.name === activeTab ? selectedTags : []}
                   availableTags={cat.name === activeTab ? availableTags : []}
                   onTagToggle={handleTagToggle}
