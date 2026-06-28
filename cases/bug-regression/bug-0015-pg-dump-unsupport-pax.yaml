@@ -1,0 +1,234 @@
+id: bug-0015-pg-dump-unsupport-pax
+title: "pg_dump 不支持导出 PAX 表（warning: unsupport am pax yet，DDL 被静默丢弃）"
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-06-29"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [pg_dump, pax, ddl, backup, partition, table-and-children, schema_dump]
+
+description: |
+  pg_dump 不支持导出 PAX 表：对任意 access method = pax 的关系，pg_dump 在收集
+  catalog 时打印告警
+
+      pg_dump: warning: unsupport am pax yet, current relation "<rel>" will be ignore
+
+  并**静默跳过该表的结构**——dump 文件里根本没有该表的 `CREATE TABLE`。这意味着
+  用 pg_dump 备份 schema 时 PAX 表（含分区表的父表与各子分区）会全部丢失，恢复时
+  无法重建，属于备份/DDL 静默丢失，危害较高。
+
+  **复现（用户给出的原始步骤）**：
+    1) 非分区 PAX 表：
+       pg_dump -d gpadmin -t <schema>.<pax_table> -s -f /tmp/x.sql
+    2) 分区 PAX 表（同时导出主表 + 各子分区的结构）：
+       pg_dump -d gpadmin --table-and-children=<schema>.<parent>*  -s -f ...
+       pg_dump -d gpadmin --table-and-children=<schema>.<parent>   -s -f ...
+
+  **重要的环境差异（已在本机 build143161 核实）**：本案运行的部署版本
+  `pg_dump (Apache Cloudberry) 14.4 / SynxDB 2.5.0 build 143161` **不认识**
+  `--table-and-children` 选项（`pg_dump: unrecognized option`，exit 1）。若按字面
+  写进用例，每次只会因「选项解析失败」而 error，根本测不到 PAX 这个 BUG。故分区
+  步骤改用本版本可用、语义等价的写法 **`-t '<schema>.<parent>*'`（表名通配）**——
+  实测它会把父表 + 全部 `_1_prt_*` 子分区一并纳入导出（在 heap 分区表上验证：父表与
+  3 个子分区的 CREATE TABLE 都出现），正是用户 step2 test1（`store_sales*` 带 `*`）
+  想要的「主表 + 子分区」效果。若将来在带 `--table-and-children` 的版本上跑，可把该
+  步换回原选项，断言不变。
+
+procedure: |
+  1) prep-create: 建 schema lbr_bug0015 + 一张非分区 PAX 表 warehouse_pax0015 +
+     一张分区 PAX 表 store_sales_pax0015（RANGE 3 个子分区，全部 am=pax）
+  2) assert-nonpart-dump（核心断言1）: pg_dump -t warehouse_pax0015 -s，期望
+     dump 含该表 CREATE TABLE 且 stderr 无本表的 "unsupport am pax yet" 告警。
+     BUG 存在时：dump 无 CREATE TABLE + 有告警 → 断言失败 → 红。
+  3) assert-part-dump（核心断言2）: pg_dump -t 'store_sales_pax0015*'（= 用户
+     --table-and-children 的本版本等价写法），期望 dump 含父表与子分区的
+     CREATE TABLE 且 stderr 无本表族告警。BUG 存在时同样失败 → 红。
+  4) assert-restore（核心断言3）: 把前两步导出的 DDL 文件先 DROP 原表再 psql -f
+     回灌，复核 PAX 表（含子分区）能按导出的表结构成功重建。期望 lbr_bug0015 下
+     重新出现 am=pax 的 warehouse_pax0015 / store_sales_pax0015 / 子分区。
+     BUG 存在时 dump 里根本没有 DDL，回灌后什么都没建出来 → 断言失败 → 红。
+  5) teardown: DROP SCHEMA
+
+expected: |
+  - assert-nonpart-dump: dump 含 "CREATE TABLE lbr_bug0015.warehouse_pax0015"，
+    且不含 'current relation "warehouse_pax0015" will be ignore'（修复后行为）。
+    BUG 复现时：dump 无该 CREATE TABLE、stderr 有该告警 → 断言失败 → 红。
+  - assert-part-dump: dump 含父表 "CREATE TABLE lbr_bug0015.store_sales_pax0015 ("
+    与子分区 "CREATE TABLE lbr_bug0015.store_sales_pax0015_1_prt_1 ("，且不含父表/子分区的
+    "...will be ignore" 告警（修复后行为）。BUG 复现时失败 → 红。
+  - assert-restore: DROP 原表后用导出的 DDL 文件 psql -f 回灌，复核 lbr_bug0015 下
+    重新出现 am=pax 的 warehouse_pax0015 / store_sales_pax0015 / store_sales_pax0015_1_prt_1
+    （即导出的表结构能成功建表）。BUG 复现时 dump 无 DDL、回灌建不出表 → 失败 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP SCHEMA IF EXISTS lbr_bug0015 CASCADE'"
+
+steps:
+  - name: "prep-create: schema + 非分区 PAX 表 + 分区 PAX 表（全部 am=pax）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -f -" <<'EOSQL'
+      CREATE SCHEMA IF NOT EXISTS lbr_bug0015;
+      CREATE TABLE lbr_bug0015.warehouse_pax0015 (
+        w_warehouse_sk   integer NOT NULL,
+        w_warehouse_id   char(16),
+        w_warehouse_name varchar(20)
+      ) USING PAX DISTRIBUTED BY (w_warehouse_sk);
+      INSERT INTO lbr_bug0015.warehouse_pax0015
+        SELECT g, 'ID'||g, 'WH'||g FROM generate_series(1,5) g;
+      CREATE TABLE lbr_bug0015.store_sales_pax0015 (
+        ss_sold_date_sk integer,
+        ss_item_sk      integer,
+        ss_quantity     integer
+      ) USING PAX DISTRIBUTED BY (ss_item_sk)
+      PARTITION BY RANGE (ss_sold_date_sk) (START (1) END (4) EVERY (1));
+      INSERT INTO lbr_bug0015.store_sales_pax0015
+        SELECT (g%3)+1, g, g*2 FROM generate_series(1,30) g;
+      EOSQL
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+
+  - name: "assert-nonpart-dump（核心断言1）: pg_dump 非分区 PAX 表应导出 CREATE TABLE、无 unsupport-pax 告警"
+    kind: shell
+    cmd: |
+      su - gpadmin -c '
+        pg_dump -d gpadmin -t lbr_bug0015.warehouse_pax0015 -s -f /tmp/lbr_bug0015_wh.sql 2>/tmp/lbr_bug0015_wh.err
+        echo "===== pg_dump stderr (仅本表的 PAX 告警) ====="
+        grep "warehouse_pax0015" /tmp/lbr_bug0015_wh.err || echo "(本表无 PAX 告警)"
+        echo "===== dump 中的 CREATE TABLE ====="
+        grep "CREATE TABLE" /tmp/lbr_bug0015_wh.sql || echo "(dump 中无 CREATE TABLE)"
+      '
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains: ["CREATE TABLE lbr_bug0015.warehouse_pax0015"]
+      not_contains: ['current relation "warehouse_pax0015" will be ignore']
+
+  - name: "assert-part-dump（核心断言2）: pg_dump 分区 PAX 表（-t 通配=table-and-children 等价）应导出父表+子分区 CREATE TABLE、无告警"
+    kind: shell
+    cmd: |
+      su - gpadmin -c '
+        pg_dump -d gpadmin -t "lbr_bug0015.store_sales_pax0015*" -s -f /tmp/lbr_bug0015_ss.sql 2>/tmp/lbr_bug0015_ss.err
+        echo "===== pg_dump stderr (仅本表族的 PAX 告警) ====="
+        grep "store_sales_pax0015" /tmp/lbr_bug0015_ss.err || echo "(本表族无 PAX 告警)"
+        echo "===== dump 中的 CREATE TABLE ====="
+        grep "CREATE TABLE" /tmp/lbr_bug0015_ss.sql || echo "(dump 中无 CREATE TABLE)"
+      '
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "CREATE TABLE lbr_bug0015.store_sales_pax0015 ("
+        - "CREATE TABLE lbr_bug0015.store_sales_pax0015_1_prt_1 ("
+      not_contains:
+        - 'current relation "store_sales_pax0015" will be ignore'
+        - 'current relation "store_sales_pax0015_1_prt_1" will be ignore'
+
+  - name: "assert-restore（核心断言3）: 用前两步导出的 DDL 文件能重新建出 PAX 表（含子分区）"
+    kind: shell
+    cmd: |
+      set -e
+      su - gpadmin -c "psql -d gpadmin -c 'DROP TABLE IF EXISTS lbr_bug0015.store_sales_pax0015 CASCADE; DROP TABLE IF EXISTS lbr_bug0015.warehouse_pax0015 CASCADE'"
+      echo "===== restore 非分区 PAX dump (/tmp/lbr_bug0015_wh.sql) ====="
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -f /tmp/lbr_bug0015_wh.sql"
+      echo "===== restore 分区 PAX dump (/tmp/lbr_bug0015_ss.sql) ====="
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -f /tmp/lbr_bug0015_ss.sql"
+      echo "===== 复核：从 dump 重建后 lbr_bug0015 下仍为 PAX 的关系 ====="
+      su - gpadmin -c "psql -d gpadmin -tA -f -" <<'EOSQL'
+      SELECT 'RESTORED_PAX=' || c.relname
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_am am ON am.oid = c.relam
+      WHERE n.nspname = 'lbr_bug0015' AND am.amname = 'pax'
+      ORDER BY 1;
+      EOSQL
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "RESTORED_PAX=warehouse_pax0015"
+        - "RESTORED_PAX=store_sales_pax0015"
+        - "RESTORED_PAX=store_sales_pax0015_1_prt_1"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP SCHEMA IF EXISTS lbr_bug0015 CASCADE'"
+
+created_by: chenqiang
+created_at: "2026-06-29"
+notes: |
+  来源：用户直接给出的 pg_dump 不支持 PAX 表 BUG（非来自飞书某节；feishu_anchor /
+  issue_url 暂空，拿到工单号后补）。
+
+  **BUG（核心，确定性）**：pg_dump 遇到 access method = pax 的关系，在收集 catalog
+  时打印 `unsupport am pax yet, current relation "<rel>" will be ignore` 并把该表
+  从导出集合里剔除——dump 文件无其 `CREATE TABLE`。对分区 PAX 表，父表与每个
+  `_1_prt_*` 子分区都各打一条告警、各自被丢弃。
+
+  **判定语义**（design.md §4.1.1：正面期望=修复后行为，红=仍有此 BUG）：两条核心
+  断言都期望「dump 里有该表的 CREATE TABLE」+「stderr 无该表的 unsupport-pax 告警」。
+  build143161 上实测两者都不满足（无 CREATE TABLE、有告警）→ 断言失败 → case 红 =
+  BUG 复现。故 status=open。
+
+  **断言为何是“表级特定”而非全局 grep 告警**：实测 pg_dump 在做全库 catalog 扫描时
+  会**对库里所有 PAX 关系**打 unsupport-pax 告警，**与 -t/-n 过滤无关**（即便
+  `-t mytable`，tpcds 等库内其它 PAX 表的告警也照样出现）。因此：
+  - 不能用全局 `not_contains: ["unsupport am pax yet"]`（会被无关 schema 的 PAX
+    表污染）；
+  - 改用唯一表名（warehouse_pax0015 / store_sales_pax0015）+ 表级断言：
+    「dump 含本表 CREATE TABLE」只依赖本案自建对象，确定且自洽；
+    `not_contains 'current relation "<本表>" will be ignore'` 也只匹配本表。
+  - step 脚本里 `grep "<本表名>" *.err` 仅把本表族的告警回显到 stdout，artifact 干净。
+  两条断言（DDL 必须出现 + 本表告警必须消失）一起卡，确保测的是「wiring 真的导出了
+  DDL」，而不仅是「告警文案变了」。
+
+  **--table-and-children 选项不可用（重要）**：部署版本 pg_dump (Apache Cloudberry)
+  14.4 / SynxDB 2.5.0 build143161 **无** `--table-and-children`
+  （`pg_dump: unrecognized option`, exit 1）。用户 step2 的两条命令在本版本均无法直接
+  运行。本案分区步改用语义等价、本版本可用的 `-t '<schema>.<parent>*'`（表名通配），
+  实测能把父表 + 全部子分区一并导出（对照 heap 分区表验证：父表与 3 个子分区的
+  CREATE TABLE 都出现；而 `-t <parent>`（精确名、无 `*`）只导父表、不含子分区——这正是
+  用户 step2 “不带 `*`” 那条之所以要 `--table-and-children` 的原因）。
+  若将来在支持该选项的版本上跑，可把 step 的 `-t '...*'` 换回
+  `--table-and-children=...`，断言保持不变。
+
+  **assert-restore（修复后“能否按导出文件建表”复核）**：用户要求——pg_dump 支持
+  PAX 表结构导出后，还要复核导出的表结构文件能否成功建表。本步先 DROP 掉原表，再用
+  前两步导出的 /tmp/lbr_bug0015_wh.sql 与 /tmp/lbr_bug0015_ss.sql 做 `psql -v
+  ON_ERROR_STOP=1 -f` 回灌，最后查 pg_class⋈pg_am 复核 lbr_bug0015 下重新出现
+  am=pax 的 warehouse_pax0015 / store_sales_pax0015 / 子分区。
+  - 跨 step 文件依赖：本步复用前两 assert 步写到 /tmp 的 dump 文件；steps 默认顺序
+    执行（无 `on:` 分组），故文件已就绪。
+  - BUG 现状下：dump 文件里没有任何 CREATE TABLE，回灌 psql -f 只会跑 SET/头部
+    （exit 0、无报错），但**建不出任何表** → 复核查询零行 → 三个 RESTORED_PAX
+    断言全 missing → 失败 → 红。即“导出已坏 ⇒ 重建必然失败”，与上游导出 BUG 同因。
+  - 回灌/重建机制已在 heap 等价表（pg_dump 本就能导出 DDL）上验证可行：dump→DROP→
+    `psql -f` 回灌父表+全部子分区 CREATE TABLE/ATTACH PARTITION 成功、复核查询列出
+    父表与各子分区 → 证明本步 wiring 正确，修复后即应转绿。
+
+  **本机验证（2026-06-29, SynxDB 2.5.0 build143161 / PG 14.4 / Cloudberry 2.5.0）**：
+  手工逐条复现确认——
+  - 非分区 warehouse_pax0015：pg_dump 打 `unsupport am pax yet, current relation
+    "warehouse_pax0015" will be ignore`，dump 文件无任何 CREATE TABLE（被丢弃）；
+  - 分区 store_sales_pax0015：`-t 'store_sales_pax0015*'` 对父表 + 3 个子分区各打
+    一条 unsupport-pax 告警，dump 文件无任何 CREATE TABLE；
+  - 对照（证明等价写法在“可导出时”确实能拿到子分区）：同结构 heap 分区表用
+    `-t 'heap_part*'` 导出父表 + 3 子分区的 CREATE TABLE（+ ATTACH PARTITION），
+    而 `-t heap_part`（无 `*`）只导父表 → 坐实“分区步必须用通配/`--table-and-children`
+    才能带上子分区”，且本版本 pax 路径把它们全丢了。
+  → 两条核心断言在 build143161 预期 FAIL（BUG 未修复），prep/teardown 预期 PASS。
