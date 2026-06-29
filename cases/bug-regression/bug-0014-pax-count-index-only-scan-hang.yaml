@@ -1,14 +1,14 @@
 id: bug-0014-pax-count-index-only-scan-hang
 title: 9.15 PAX 表 enable_seqscan(off)+ORCA(off) 下 count(*) 走 Index Only Scan 时 hang 住
 category: bug_regression
-status: open
+status: fixed
 severity: high
 destructive: false
 
 source:
   feishu_anchor: "section-9.15-pax-count-index-only-scan-hang"
   reported_at: "2026-06-27"
-  fixed_version: ""
+  fixed_version: "Lightning 2.5.1 build 143187"
   ext_doc_url: ""
 issue_url: https://code.hashdata.xyz/field-engineering/dev_collaboration/-/issues/826
 tags: [pax, ao_row, count, index_only_scan, orca, enable_seqscan, hang, planner]
@@ -41,9 +41,10 @@ procedure: |
   4) prep-create-ao: 建 AO_ROW 对照表 _bk（appendonly+row，schema 与 PAX 表一致）
   5) prep-insert-ao: AO_ROW 表灌同样 5,000,000 行
   6) prep-index-analyze-ao: AO_ROW 表同样 atul_cell_id 建 btree 索引 + ANALYZE
-  7) diag-plan-pax（诊断，证明走到 BUG 路径）: enable_seqscan=off + optimizer=off 下
-     EXPLAIN PAX count(*)，断言计划含 "Index Only Scan" —— 证明 count(*) 确实被
-     规划成出问题的 IOS 计划（wiring 证据）
+  7) diag-plan-pax（诊断，证明 BUG 已修复）: enable_seqscan=off + optimizer=off 下
+     EXPLAIN PAX count(*)，断言计划含 "Bitmap Heap Scan" —— 修复 MR !1190 彻底关闭
+     pax-index-only-scan 后，count(*) 不再被规划成 IOS（BUG 复现时此处为 "Index Only
+     Scan" → 该步失败 → 红）
   8) diag-plan-ao（诊断，证明对照走不同计划）: 同条件 EXPLAIN AO_ROW count(*)，
      断言计划含 "Bitmap Heap Scan" —— 证明 AO_ROW 走 Bitmap 而非 IOS
   9) ctrl-ao-row-ok（对照断言）: 同条件 AO_ROW count(*) 应秒回 5000000 ——
@@ -56,7 +57,8 @@ procedure: |
   12) teardown: DROP SCHEMA
 
 expected: |
-  - diag-plan-pax: EXPLAIN 计划含 "Index Only Scan"（确认 PAX 走到 BUG 路径）
+  - diag-plan-pax: EXPLAIN 计划含 "Bitmap Heap Scan"（修复后 PAX 不再走 IOS；BUG 复现时
+    此处为 "Index Only Scan" → 该步失败 → 红）
   - diag-plan-ao: EXPLAIN 计划含 "Bitmap Heap Scan"（确认 AO_ROW 走不同计划）
   - ctrl-ao-row-ok: AO_ROW count(*) 返回 5000000（对照：同条件 AO_ROW 不 hang）
   - diag-workaround: PAX enable_indexonlyscan=off 后 count(*) 返回 5000000（数据正常）
@@ -158,13 +160,13 @@ steps:
     expect:
       exit_code: 0
 
-  - name: "diag-plan-pax: 证明 PAX count(*) 走 Index Only Scan（BUG 路径 wiring 证据）"
+  - name: "diag-plan-pax: 修复后 PAX count(*) 不再走 Index Only Scan，改走 Bitmap Heap Scan（MR !1190 修复证据）"
     kind: shell
     cmd: |
       su - gpadmin -c "psql -d gpadmin -c \"SET enable_seqscan=off; SET optimizer=off; EXPLAIN SELECT count(*) FROM lbr_bug0014.pax_iohs;\""
     timeout_ms: 60000
     expect:
-      stdout_contains: "Index Only Scan"
+      stdout_contains: "Bitmap Heap Scan"
 
   - name: "diag-plan-ao: 证明 AO_ROW count(*) 走 Bitmap Heap Scan（对照走不同计划）"
     kind: shell
@@ -225,7 +227,8 @@ notes: |
   **判定语义**（design.md §4.1.1：正面期望=修复后行为，红=仍有此 BUG）：
   核心断言 assert-no-hang 期望 PAX count(*) 返回 5000000。build130 实测该查询
   hang，靠 `statement_timeout=30000` 服务端取消（实测能干净取消、无残留 backend），
-  取消后 stdout 拿不到 "5000000" → 断言失败 → case 红 = BUG 复现。故 status=open。
+  取消后 stdout 拿不到 "5000000" → 断言失败 → case 红 = BUG 复现。故创建时 status=open
+  （已于 2026-06-29 在 build 143187 验证修复、改 status=fixed，见末尾「修复验证」段）。
   对照步 ctrl-ao-row-ok 在 build130 应 PASS（AO_ROW 无此问题）；它**不**改变 case
   红/绿（case 因 PAX 核心断言失败而红），只是把「问题专属 PAX」写进证据。
 
@@ -246,6 +249,21 @@ notes: |
     5000000 → 证明数据与计数正确，只有 PAX 的 IOS 路径 hang；
   - 核心断言 assert-no-hang 在 build130 预期为 FAIL（BUG 未修复），ctrl-ao-row-ok
     与全部 diag 步预期 PASS。
+
+  **修复验证（2026-06-29）**：status open→fixed，fixed_version=「Lightning 2.5.1
+  build 143187」（实测验证修好的 build，非 MR !1190 首次合入的 build——后者两版之间，
+  本环境无从精确定位）。证据链（同一 case、不同 build 自动跑）：
+  - build 143161（run 64）：EXPLAIN 仍为 `Index Only Scan using pax_iohs_idx2`，
+    assert-no-hang 步 `ERROR: canceling statement due to statement timeout`（仍 hang）
+    → case 红 = **仍复现**；
+  - build 143187（run 66）：EXPLAIN 已变 `Bitmap Heap Scan on pax_iohs`（+ Bitmap
+    Index Scan），count(*) 秒回 5000000 → **已修复**（对应 MR !1190 彻底关闭
+    pax-index-only-scan）。
+  原 diag-plan-pax 步把 BUG 期的计划形状「Index Only Scan」写死成通过条件，修复后
+  PAX 不再走 IOS，该诊断步在 143187 上反而失败、把 case 卡在第 6 步（跑不到核心断言）。
+  故 2026-06-29 将该步断言翻转为「Bitmap Heap Scan」（与 diag-plan-ao 对称，作 MR
+  !1190 修复证据）：BUG 复现时此处为 "Index Only Scan" → 失败 → 红；修复后为 Bitmap
+  → 绿。核心断言 assert-no-hang（count 返回 5000000）保持不变，仍是行为护栏。
 
   **数据规模（实测阈值）**：本机 8 段集群上 100K/300K/500K/1M 行**不** hang（IOS
   仍被选中但秒回）；1.5M 行起 hang，阈值约总行数 1.2M（每段 ~150K）。本 case
