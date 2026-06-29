@@ -1,0 +1,111 @@
+id: bug-0016-gppkg-clean-syncpackages-ret
+title: gppkg --clean 报 "'SyncPackages' object has no attribute 'ret'"（OperationWorkerPool 位置传参误绑 should_stop）
+category: bug_regression
+status: fixed
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-05-03"
+  fixed_version: "HashData Lightning 2.5.1 build 143187"
+  ext_doc_url: "https://code.hashdata.xyz/cloudberry/database/hashdata-lightning/-/commit/b56e95c9df1d32016a42dff70bf92d27b6098976"
+issue_url: ""
+tags: [gppkg, gppylib, operationworkerpool, worker_pool, regression, upstream-commit, b56e95c9]
+
+description: |
+  upstream 修复 commit b56e95c9《Fix gppkg error: 'SyncPackages' object has no
+  attribute 'ret'.》的回归守护。
+
+  **BUG**：`gpMgmt/bin/gppylib/commands/base.py` 的 `OperationWorkerPool.__init__`
+  把 `operations` 以**位置参数**传给基类 `WorkerPool.__init__(numWorkers, should_stop,
+  items)`，于是 `operations` 被误绑到 `should_stop` 而非 `items`。结果 worker pool
+  拿不到 items、`SyncPackages` 走不到正常路径，`gppkg --clean` 报
+  `'SyncPackages' object has no attribute 'ret'` 而失败。
+
+  **修复**：改为关键字传参 `super(...).__init__(numWorkers, items=operations)`。
+
+  本 case 双断言守护"当前 build 已含此修复"：
+  (1) 源码断言 —— grep 已安装的 `$GPHOME/.../commands/base.py`，断言那行是修复后的
+      `items=operations` 关键字形式、且**不含** buggy 的位置传参形式；
+  (2) 行为断言 —— 实际跑 `gppkg --clean`，断言 exit 0 + "Successfully cleaned the
+      cluster"、且**不含** `has no attribute` / `Traceback`。
+  任一断言失败 = 该 build 退回/未含此修复 → 看板红。
+
+procedure: |
+  1) assert-source-fixed: grep $GPHOME/lib/python/gppylib/commands/base.py 里
+     OperationWorkerPool 的 super().__init__ 调用，断言 = 修复后的关键字形式
+     `numWorkers, items=operations`，且不含 buggy 位置形式 `(numWorkers, operations)`
+  2) assert-gppkg-clean-ok: 跑 `gppkg --clean`，exit 0 + stdout 含 "Successfully
+     cleaned the cluster"，不含 "has no attribute" / "Traceback"
+
+expected: |
+  - assert-source-fixed: 已安装 base.py 含 "items=operations"，不含 "(numWorkers, operations)"
+  - assert-gppkg-clean-ok: gppkg --clean exit 0、stdout 含 "Successfully cleaned the
+    cluster"，不含 "has no attribute" / "Traceback"（buggy 版此处会抛
+    'SyncPackages' object has no attribute 'ret'）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "assert-source-fixed: 已安装 base.py 的 OperationWorkerPool super().__init__ 用 items= 关键字传参（修复形式）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'grep -n "super(OperationWorkerPool, self).__init__" "$GPHOME/lib/python/gppylib/commands/base.py"'
+    timeout_sec: 30
+    expect:
+      exit_code: 0
+      stdout_contains: ["items=operations"]
+      not_contains: ["(numWorkers, operations)", "Traceback", "No such file"]
+
+  - name: "assert-gppkg-clean-ok: gppkg --clean 正常返回（buggy 版报 'SyncPackages' object has no attribute 'ret'）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "gppkg --clean 2>&1"
+    timeout_sec: 300
+    expect:
+      exit_code: 0
+      stdout_contains: ["Successfully cleaned the cluster"]
+      not_contains: ["has no attribute", "Traceback", "object has no attribute 'ret'"]
+
+teardown: []
+
+created_by: chenqiang
+created_at: "2026-06-29"
+notes: |
+  来源：upstream commit b56e95c9（rc/2.5.1，2026-06-25 合入；作者 woblerr，
+  authored 2026-05-03）。一行修复：
+    - super(OperationWorkerPool, self).__init__(numWorkers, operations)        # buggy：位置传参 → 误绑 should_stop
+    + super(OperationWorkerPool, self).__init__(numWorkers, items=operations)  # fixed：关键字传参给 items
+  改动文件 `gpMgmt/bin/gppylib/commands/base.py`，随发行版以**源码形式**安装到
+  `$GPHOME/lib/python/gppylib/commands/base.py`（非编译进二进制），故可直接 grep 比对。
+
+  **为何双断言**：
+  - 源码断言（assert-source-fixed）= 直接 wiring 证据：那行确实是修复形式，且 buggy
+    位置形式已消失。"items=operations" 仅出现在修复版；"(numWorkers, operations)"
+    是 buggy 精确形式（修复行是 "(numWorkers, items=operations)"，不含该子串）。
+  - 行为断言（assert-gppkg-clean-ok）= 端到端：实跑触发 BUG 的命令，证明修复在运行时
+    真生效。buggy 版必报 'SyncPackages' object has no attribute 'ret'。
+  两者其一退回即红，互为补强（防"源码打了补丁但部署的是旧文件"或反之）。
+
+  **gppkg --clean 副作用**：清理集群内不一致的扩展包；包一致时为 no-op（本机实测
+  输出 "The packages on <host> are consistent." + "Successfully cleaned the
+  cluster"，exit 0）。不涉及 gpstop / 数据删除，destructive=false。
+
+  **可移植性**：用 $GPHOME 拼路径（gpadmin 登录 shell 经 greenplum_path.sh 已设
+  GPHOME 且 gppkg 在 PATH），不写死 /usr/local/hashdata-lightning-2.5.1，换 build 仍可跑。
+
+  **本机验证（2026-06-29, HashData Lightning 2.5.1 build 143187）**：
+  - base.py:233 = `super(OperationWorkerPool, self).__init__(numWorkers, items=operations)`（修复形式）；
+  - `gppkg --clean` exit 0，输出 "Successfully cleaned the cluster"，无 attribute error。
+  - 故 status=fixed；fixed_version 栏 = verified-non-reproducing build（build 143187），
+    非首个含修复的 build（修复 2026-06-25 入 rc/2.5.1，两者间精确 build 本环境无从定位）。
