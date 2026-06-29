@@ -52,6 +52,11 @@ setup:
   - su - gpadmin -c "psql -d gpadmin -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('mydb', 'testdb') AND pid != pg_backend_pid()\""
   - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS mydb'"
   - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS testdb'"
+  # 自愈：上一轮若在 teardown 前被中断，会残留一个带 MASKED 共享 label 的 user_anon
+  # （pg_shseclabel 是 cluster 级跨库 catalog）。此刻 testdb 刚被 drop、该 role 的
+  # anon/mask 权限已随库消失（grant-free），可安全 DROP；否则下一步 anon.start_dynamic_masking
+  # 会按 MASKED label 给它重新授权，导致主 step-04 的 DROP ROLE 因依赖对象删不掉而 ERROR。
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP ROLE IF EXISTS user_anon'"
   - su - gpadmin -c "psql -d gpadmin -c 'CREATE DATABASE testdb'"
   # ALTER DATABASE SET anon.transparent_dynamic_masking 只对新 session 生效；
   # 必须在 step 连进 testdb 之前 set。
@@ -108,6 +113,14 @@ steps:
     kind: sql
     database: testdb
     sql: |
+      -- 防御：若 user_anon 残留且已被 start_dynamic_masking 授予 anon/mask 权限，
+      -- 裸 DROP ROLE 会因依赖对象报 DependentObjectsStillExist。先在本库回收其权限。
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'user_anon') THEN
+          EXECUTE 'DROP OWNED BY user_anon CASCADE';
+        END IF;
+      END $$;
       DROP ROLE IF EXISTS user_anon;
       CREATE ROLE user_anon WITH LOGIN PASSWORD 'pwd_123456';
       SECURITY LABEL FOR anon ON ROLE user_anon IS 'MASKED';
@@ -216,6 +229,32 @@ notes: |
       条目），但 user 显式要求逐项清，更可读 + 防 DROP DATABASE 万一失败
       时 role label 残留在 testdb（虽然 testdb 本身可能也没被清，但至少
       catalog 整洁）。teardown 是 best-effort，任一步失败不影响后续。
+
+  **间歇性 DROP ROLE ERROR 根因 + 修复（2026-06-29）**：
+    历史上本 case 间歇报 step-04 `DependentObjectsStillExist: role "user_anon"
+    cannot be dropped because some objects depend on it`（依赖 anon/mask schema
+    全部对象）。根因链（已本机复现确认）：
+    1) `anon.start_dynamic_masking()`（step-03）会给带 MASKED label 的 role 授予
+       anon 与 mask schema 下全部对象的权限；持有这些权限的 role 在所在库存活期间
+       无法被 DROP（报 DependentObjectsStillExist）；
+    2) `SECURITY LABEL FOR anon ON ROLE` 写在 **共享 catalog pg_shseclabel**
+       （cluster 级、跨库），role 本身也是 cluster 级。teardown 之所以能删，是
+       因为先 DROP DATABASE（连带回收库内权限）再 DROP ROLE；
+    3) 但只要某轮在 teardown 跑完前被中断/kill，带 MASKED label 的 user_anon
+       会 cluster 级残留。下一轮 step-03 的 start_dynamic_masking 又在全新 testdb
+       里按 label 给它重新授权 → 主 step-04 开头的 `DROP ROLE IF EXISTS` 因依赖
+       对象删不掉 → ERROR（间歇性即来源于此：仅当存在残留 role 时触发）。
+    修复（两道防线，均已验证）：
+    a) setup：DROP DATABASE testdb 后、CREATE 之前加 `DROP ROLE IF EXISTS
+       user_anon`——此刻残留 role 的权限已随旧 testdb 消失（grant-free），可安全
+       删除，从根上阻止 step-03 重新授权；
+    b) step-04：DROP ROLE 前加守卫 `IF role 存在 THEN DROP OWNED BY user_anon
+       CASCADE`，在本库回收其 anon/mask 权限后再删，作兜底（万一 setup 的
+       DROP DATABASE 因残连失败、testdb 未被清时仍能自愈）。
+    验证（run 71）：先种下"被中断的上一轮"残留态（user_anon + MASKED label +
+    testdb 内 anon 权限，裸 DROP ROLE 确认报错），再经真 runner 跑本 case →
+    PASS，无 error.txt，脱敏断言全对（06******11 / len 4 / != Conor），teardown
+    干净，跑完 user_anon 与 testdb 均为 0。
 
   **§5.5.7 cross-check 13 项 self-check**：
     - #12 non-tx-safe DDL：CREATE/DROP DATABASE 走 psql -c ✓
