@@ -1,0 +1,136 @@
+id: ext-plr-dplyr-basic
+title: PL/R + dplyr 包可用性与基础函数验证
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-07-04"
+  fixed_version: ""
+  ext_doc_url: "https://github.com/postgres-plr/plr"
+issue_url: ""
+tags: [extension, plr, dplyr, r-language, untrusted-language, package-availability]
+
+description: |
+  PL/R (plr) 是 PostgreSQL 的 R 过程语言扩展（untrusted）。本 case 验证
+  lightning 集群上 plr + dplyr 包的完整链路：
+    (1) plr 扩展可装（CREATE EXTENSION）；
+    (2) verify_dplyr(): R 侧 requireNamespace 探测 dplyr 是否可加载，
+        返回其版本字符串 —— 硬断言排除 "dplyr not installed" 半成功；
+    (3) r_add(a,b): 在函数体内 library(dplyr) 真加载 dplyr，再做简单
+        加法 —— library() 在 dplyr 缺失时会直接报错，作为第二重兜底。
+  覆盖 R↔PG 类型转换（TEXT / float）+ R 包加载路径两条能力。
+procedure: |
+  1) 前置：plr 在 pg_available_extensions（未装会被 §11 admin 检查到，
+     本 case 不负责自动安装）
+  2) setup: 清旧函数 + IF NOT EXISTS 装 plr 扩展
+  3) 主 step 1: CREATE verify_dplyr() + r_add(float,float) 两个 plr 函数
+  4) 主 step 2: SELECT verify_dplyr() → 应含 "dplyr version:"，
+     不得含 "dplyr not installed"
+  5) 主 step 3: SELECT r_add(101,200) → 301（library(dplyr) 加载成功）
+  6) teardown: DROP 两个函数（保留 plr 扩展，可能其他业务依赖）
+expected: |
+  - plr 扩展可装（precondition 软检查 count=1）
+  - CREATE 两个 plr 函数无 ERROR / FATAL
+  - verify_dplyr() 输出含 "dplyr version:" 且不含 "not installed"
+  - r_add(101,200) 与 301 在 1e-9 容差内（证明 library(dplyr) 加载成功）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+setup:
+  - DROP FUNCTION IF EXISTS verify_dplyr()
+  - DROP FUNCTION IF EXISTS r_add(float, float)
+  - CREATE EXTENSION IF NOT EXISTS plr
+
+steps:
+  - name: "precondition: plr 在 pg_available_extensions"
+    kind: sql
+    sql: |
+      SELECT count(*)::int
+      FROM   pg_available_extensions
+      WHERE  name = 'plr'
+    timeout_sec: 30
+    expect:
+      scalar: 1
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "CREATE 2 个 plr 函数 (verify_dplyr / r_add)"
+    kind: sql
+    sql: |
+      CREATE OR REPLACE FUNCTION verify_dplyr()
+      RETURNS TEXT AS $$
+          if (!requireNamespace("dplyr", quietly = TRUE)) {
+              return("dplyr not installed")
+          }
+          return(paste("dplyr version:", packageVersion("dplyr")))
+      $$ LANGUAGE plr;
+
+      CREATE OR REPLACE FUNCTION r_add(a float, b float)
+      RETURNS float AS $$
+          library(dplyr)
+          return(a + b)
+      $$ LANGUAGE 'plr';
+    timeout_sec: 60
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "verify_dplyr(): dplyr 可加载且报出版本 (排除 not installed)"
+    kind: sql
+    sql: |
+      SELECT verify_dplyr()
+    timeout_sec: 30
+    expect:
+      not_contains: ["dplyr not installed", "ERROR", "FATAL"]
+
+  - name: "r_add(101,200) = 301 (证明 library(dplyr) 加载成功, 1e-9 容差)"
+    kind: sql
+    sql: |
+      SELECT abs(r_add(101, 200) - 301) < 1e-9
+    timeout_sec: 30
+    expect:
+      scalar: true
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - DROP FUNCTION IF EXISTS verify_dplyr()
+  - DROP FUNCTION IF EXISTS r_add(float, float)
+
+created_by: chenqiang
+created_at: "2026-07-04"
+notes: |
+  来源：user 直接给的测试步骤（extension 集成 plr + dplyr）。
+
+  **为何两个函数用不同的 dplyr 探测方式（故意的）**：
+  - verify_dplyr() 用 `requireNamespace("dplyr", quietly=TRUE)`：dplyr
+    缺失时**不报错**，只返回字符串 "dplyr not installed"。因此单靠"函数
+    执行成功"无法区分 dplyr 是否真装 —— 必须断言输出内容。本 case 用
+    `not_contains: ["dplyr not installed"]` 做硬闸，避免"plr 装了但 dplyr
+    没装"这种半成功被误判为 PASS（同 plpython3u case 抓 ModuleNotFoundError
+    的教训）。
+  - r_add() 用 `library(dplyr)`：dplyr 缺失时会**直接抛错**（plr 函数执行
+    报 ERROR），因此 r_add(101,200) 的调用本身就是第二重兜底 —— 断言结果
+    301 通过即证明 library(dplyr) 加载无误。
+
+  **LANGUAGE 写法**：verify_dplyr 用 `LANGUAGE plr`、r_add 用 `LANGUAGE 'plr'`
+  —— 两种写法均合法（带引号是历史语法），保留用户原文，顺带覆盖两种声明形式。
+
+  **断言策略 — 浮点容差**：r_add 返回 float8，101+200=301 虽为整数运算，
+  仍统一用 `abs(actual - expected) < 1e-9` 单 bool 断言，与 §5.5.7 推荐的
+  浮点比较模式一致。
+
+  **idempotency**：
+  - setup 用 DROP FUNCTION IF EXISTS × 2 + CREATE EXTENSION IF NOT EXISTS。
+  - CREATE OR REPLACE FUNCTION 本身幂等。
+  - teardown 同 DROP FUNCTION IF EXISTS × 2；**不** DROP EXTENSION plr
+    （其他业务可能依赖；DROP CASCADE 会牵连无关对象）。
+
+  **plr 是 runtime 型扩展**：CREATE EXTENSION plr 即用，**不进**
+  shared_preload_libraries、**不需**重启 DB，故 destructive=false、无
+  restart step。
