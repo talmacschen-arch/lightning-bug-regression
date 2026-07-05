@@ -1,0 +1,246 @@
+id: ext-madlib-linregr-naive-bayes
+title: MadLib 线性回归 + 朴素贝叶斯基础集成验证
+category: extension
+status: stable
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-07-05"
+  fixed_version: ""
+  ext_doc_url: "https://madlib.apache.org/docs/latest/"
+issue_url: ""
+tags: [extension, madlib, linear-regression, naive-bayes, machine-learning, plpython]
+
+description: |
+  验证 Apache MADlib 在 lightning 环境下的机器学习函数集成链路，覆盖官方
+  文档两个入门 Demo：
+    (1) 版本闸门：madlib.migrationhistory 里最新一条 version = 2.1.0 ——
+        硬断言排除 "madlib 装了但版本不对 / 装了半截" 的半成功；
+    (2) Demo1 线性回归：linregr_train 训练模型 → 模型表恰好 1 行 →
+        linregr_predict 对 4 条样本逐行预测并算残差，返回 4 行；
+    (3) Demo2 朴素贝叶斯：create_nb_prepared_data_tables 建先验/特征概率表 →
+        create_nb_probs_view 建分类概率视图 → 视图对 3 条待分类样本 × 2 个
+        类别产出分类概率，恰好 6 行。
+  MADlib 训练/预测函数遇错会直接抛 PG ERROR（psycopg 侧即 step ERROR），
+  故"函数调用无报错"由 step 状态本身兜底；再叠加 scalar / row_count 断言
+  证明确有模型产出、确有预测输出，而不仅仅是"跑完了"。
+procedure: |
+  1) 前置：madlibtest 库已建、MADlib 2.1.0 已 madpack 安装（本 case 不负责
+     自动装 —— 装不上是 §3.1 外部依赖/部署问题）
+  2) setup：清旧对象（含 linregr_train 产出的 _model / _model_summary、
+     naive bayes 产出的 feature_probs / priors 表 + classified 视图）+ 建两个
+     Demo 的输入表并灌入官方样例数据（幂等）
+  3) 主 step 1：SELECT 最新 madlib 版本 → 断言 = 2.1.0
+  4) 主 step 2：SELECT madlib.linregr_train(...) 训练线性回归模型（无报错）
+  5) 主 step 3：SELECT * FROM regr_example_model → 断言 row_count = 1
+  6) 主 step 4：linregr_predict 逐行预测 + 残差 → 断言 row_count = 4
+  7) 主 step 5：SELECT madlib.create_nb_prepared_data_tables(...)（无报错）
+  8) 主 step 6：SELECT madlib.create_nb_probs_view(...)（无报错）
+  9) 主 step 7：SELECT * FROM example_classified → 断言 row_count = 6
+     （3 待分类样本 × 2 类别）
+  10) teardown：DROP 两个 Demo 的全部产出对象（保留 madlib 安装本身）
+expected: |
+  - madlib.migrationhistory 最新 version = 2.1.0（版本闸门）
+  - linregr_train 训练无 ERROR / FATAL
+  - regr_example_model 恰好 1 行（单组线性回归产出 1 个模型）
+  - linregr_predict 预测查询返回 4 行（4 样本 × 1 模型的交叉连接）
+  - create_nb_prepared_data_tables / create_nb_probs_view 无 ERROR / FATAL
+  - example_classified 恰好 6 行（3 条待分类样本 × 2 个类别 {1,2}）
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: madlibtest
+
+sessions: []
+
+setup:
+  - DROP TABLE IF EXISTS regr_example CASCADE
+  - DROP TABLE IF EXISTS regr_example_model CASCADE
+  - DROP TABLE IF EXISTS regr_example_model_summary CASCADE
+  - DROP TABLE IF EXISTS class_example CASCADE
+  - DROP TABLE IF EXISTS class_example_topredict CASCADE
+  - DROP TABLE IF EXISTS example_feature_probs CASCADE
+  - DROP TABLE IF EXISTS example_priors CASCADE
+  - DROP VIEW IF EXISTS example_classified CASCADE
+  - |
+    CREATE TABLE regr_example (
+       id int,
+       y int,
+       x1 int,
+       x2 int
+    )
+  - |
+    INSERT INTO regr_example VALUES
+       (1,  5, 2, 3),
+       (2, 10, 7, 2),
+       (3,  6, 4, 1),
+       (4,  8, 3, 4)
+  - |
+    CREATE TABLE class_example (
+       id int, class int, attributes int[])
+  - |
+    INSERT INTO class_example VALUES
+       (1, 1, '{1, 2, 3}'),
+       (2, 1, '{1, 4, 3}'),
+       (3, 2, '{0, 2, 2}'),
+       (4, 1, '{1, 2, 1}'),
+       (5, 2, '{1, 2, 2}'),
+       (6, 2, '{0, 1, 3}')
+  - |
+    CREATE TABLE class_example_topredict (
+       id int, attributes int[])
+  - |
+    INSERT INTO class_example_topredict VALUES
+       (1, '{1, 3, 2}'),
+       (2, '{4, 2, 2}'),
+       (3, '{2, 1, 1}')
+
+steps:
+  - name: "版本闸门: madlib 最新 version = 2.1.0"
+    kind: sql
+    sql: |
+      SELECT version FROM madlib.migrationhistory ORDER BY applied DESC
+    timeout_sec: 30
+    expect:
+      scalar: "2.1.0"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "Demo1: linregr_train 训练线性回归模型 (无报错)"
+    kind: sql
+    sql: |
+      SELECT madlib.linregr_train (
+         'regr_example',
+         'regr_example_model',
+         'y',
+         'ARRAY[1, x1, x2]'
+      )
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "Demo1: 模型表恰好 1 行 (单组回归产出 1 个模型)"
+    kind: sql
+    sql: |
+      SELECT * FROM regr_example_model
+    timeout_sec: 30
+    expect:
+      row_count: 1
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "Demo1: linregr_predict 逐行预测 + 残差, 返回 4 行"
+    kind: sql
+    sql: |
+      SELECT regr_example.*,
+             madlib.linregr_predict ( ARRAY[1, x1, x2], m.coef ) AS predict,
+             y - madlib.linregr_predict ( ARRAY[1, x1, x2], m.coef ) AS residual
+      FROM   regr_example, regr_example_model m
+    timeout_sec: 60
+    expect:
+      row_count: 4
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "Demo2: create_nb_prepared_data_tables 建先验/特征概率表 (无报错)"
+    kind: sql
+    sql: |
+      SELECT madlib.create_nb_prepared_data_tables (
+          'class_example',
+          'class',
+          'attributes',
+          3,
+          'example_feature_probs',
+          'example_priors'
+      )
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "Demo2: create_nb_probs_view 建分类概率视图 (无报错)"
+    kind: sql
+    sql: |
+      SELECT madlib.create_nb_probs_view (
+          'example_feature_probs',
+          'example_priors',
+          'class_example_topredict',
+          'id',
+          'attributes',
+          3,
+          'example_classified'
+      )
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "Demo2: example_classified 恰好 6 行 (3 样本 x 2 类别)"
+    kind: sql
+    sql: |
+      SELECT * FROM example_classified
+    timeout_sec: 30
+    expect:
+      row_count: 6
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - DROP VIEW IF EXISTS example_classified CASCADE
+  - DROP TABLE IF EXISTS example_feature_probs CASCADE
+  - DROP TABLE IF EXISTS example_priors CASCADE
+  - DROP TABLE IF EXISTS class_example_topredict CASCADE
+  - DROP TABLE IF EXISTS class_example CASCADE
+  - DROP TABLE IF EXISTS regr_example_model_summary CASCADE
+  - DROP TABLE IF EXISTS regr_example_model CASCADE
+  - DROP TABLE IF EXISTS regr_example CASCADE
+
+created_by: chenqiang
+created_at: "2026-07-05"
+notes: |
+  来源：user 直接给的测试步骤（MADlib extension 集成，两个官方入门 Demo）。
+
+  **为何 defaults.database = madlibtest（不是 gpadmin）**：user 的第 1 步
+  就是 `psql -d madlibtest`。MADlib 一般装在专用库里（madpack -s madlib 落进
+  madlib schema），故本 case 全程连 madlibtest；库不存在 = 部署问题，会在
+  step 1 连接阶段直接暴露。
+
+  **版本闸门为何用 ORDER BY applied DESC 不加 LIMIT**：sql_driver 的 scalar
+  取"最后一个结果集第一行第一列"，本查询按 applied 降序，第一行即最近一次
+  migration = 当前版本，故 scalar 天然等于 2.1.0；保留 user 原查询不改。
+  这一步是最强的"排除半成功"闸门 —— 只要 madlib 未装 / 版本不对，scalar
+  断言立刻 FAIL，不会让后面的 Demo 假装 PASS（同 plpython3u / plr case 的
+  "硬断言版本/输出内容"教训）。
+
+  **断言策略 —— 为什么不是只写 not_contains ERROR**：MADlib 训练/预测函数
+  遇错会抛 PG ERROR，psycopg 侧即 step 状态 ERROR、case 直接失败（orchestrator
+  从不把 ERROR 翻成 PASS），所以"无报错"由 step 状态兜底，not_contains 只是
+  第二重防线。真正验证"意图"的是：
+    - regr_example_model `row_count: 1` —— 证明确有模型产出（单组 linregr_train
+      恰好 1 行）；
+    - predict 查询 `row_count: 4` —— 4 样本 × 1 模型交叉连接，证明逐行预测真跑通；
+    - example_classified `row_count: 6` —— 证明 3 条待分类样本都进了结果视图。
+
+  **example_classified 为何断言恰好 6 行**：create_nb_probs_view 产出
+  (key, class, prob) 概率视图，行数 = 待分类样本数 × 类别数 = 3 样本 ×
+  2 类别 {1,2} = 6 行。按 user 要求从早前的稳健下界 `scalar_ge: 3` 收紧为
+  精确 `row_count: 6`（同时去掉了单独的 count(*) step，`SELECT *` 直接断言
+  行数即可）。**已实测证实**：2026-07-05 在 SynxDB4 4.5.1-rc.2 + MADlib 2.1.0
+  上走 orchestrator（Try 内核）跑本 case，example_classified 恰好 6 行、
+  case 整体 PASS，故此精确值不是推断而是实测。若未来换 MADlib 版本导致
+  create_nb_probs_view 输出行数变化，据实测行数回调即可。
+
+  **kind 选择**：全部 kind: sql。两个 Demo 无 VACUUM / 顶层 ANALYZE /
+  CREATE DATABASE 等 non-tx-safe DDL（§4.1.2）；MADlib 函数内部的建表/动态 SQL
+  在事务内执行本就 tx-safe，故不需要走 psql -c / shell driver。
+
+  **idempotency**：
+  - setup 先 DROP ... IF EXISTS CASCADE 清掉两个 Demo 的**全部**产出对象
+    （含 linregr_train 隐式产出的 regr_example_model_summary、naive bayes 的
+    feature_probs / priors 表、以及 example_classified 视图），再重建输入表 +
+    灌样例数据；重复跑不残留。
+  - teardown 逆序 DROP ... IF EXISTS 收尾；**不** DROP/卸载 MADlib 本身
+    （madpack 安装，其他业务可能依赖，且卸载非 case 职责）。
+
+  **前置依赖（本 case 不自动准备）**：madlibtest 库存在 + MADlib 2.1.0 已装。
+  若 step 1 报 "schema madlib does not exist" 或连不上 madlibtest，是部署问题，
+  应在 §3.1 外部依赖准备阶段解决，而非改本 case。
