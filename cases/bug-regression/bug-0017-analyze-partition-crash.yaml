@@ -1,0 +1,169 @@
+id: bug-0017-analyze-partition-crash
+title: 空叶子分区 delete+vacuum 后 ANALYZE ROOTPARTITION 触发数据库 crash
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-07-14"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [partition, analyze, rootpartition, vacuum, delete, crash, planner_stats]
+
+description: |
+  范围分区表 pt（2 个叶子分区 pt_1_prt_1 / pt_1_prt_2）：其中一个叶子分区
+  灌入的 c 列全为 NULL，另一个叶子分区 c 列有值。先对两个叶子分区各自
+  ANALYZE，再把第一个叶子分区 DELETE 清空 + VACUUM，最后执行
+  `ANALYZE ROOTPARTITION pt` 时数据库 crash。
+
+  crash 表现（客户端 psql 同时返回）：
+    server closed the connection unexpectedly
+            This probably means the server terminated abnormally
+            before or while processing the request.
+    The connection to the server was lost. Attempting reset: Failed.
+
+  即 ANALYZE ROOTPARTITION 在「叶子分区已有统计信息、其中一个又被清空并
+  vacuum 过」的状态下合并 root 级统计时导致后端进程异常终止、连接断开。
+procedure: |
+  1) setup: DROP + 建范围分区表 pt(a,b,c) DISTRIBUTED BY (a)
+     PARTITION BY RANGE(b) (START(1) END(3) EVERY(1))，生成 pt_1_prt_1 /
+     pt_1_prt_2 两个叶子分区；
+  2) setup: 灌 100 行 (b=1, c=NULL) → 全部落 pt_1_prt_1；
+  3) setup: 灌 100 行 (b=2, c=i) → 全部落 pt_1_prt_2；
+  4) analyze-leaf-1: ANALYZE pt_1_prt_1；
+  5) analyze-leaf-2: ANALYZE pt_1_prt_2；
+  6) delete-leaf-1: DELETE FROM pt_1_prt_1（清空第一个叶子分区）；
+  7) vacuum-leaf-1: VACUUM pt_1_prt_1；
+  8) assert-analyze-rootpartition-no-crash（核心）: ANALYZE ROOTPARTITION pt，
+     期望 psql 退出 0 且输出不含连接断开文案；BUG 存在时后端 crash → psql
+     连接丢失、退出非 0 → 断言失败 → 红。
+expected: |
+  - 步骤 4~7 各 psql -c 退出 0（前置状态构造成功）；
+  - 核心步骤 8 ANALYZE ROOTPARTITION pt 退出 0，输出不含
+    "server closed the connection" / "connection to the server was lost"
+    / "terminated abnormally"（修复后行为）；
+  - BUG 复现时步骤 8 数据库 crash、连接断开 → psql 退出非 0 → case 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  - DROP TABLE IF EXISTS pt
+  - |
+    CREATE TABLE pt (a int, b int, c int)
+    DISTRIBUTED BY (a)
+    PARTITION BY RANGE (b) (START (1) END (3) EVERY (1))
+  - INSERT INTO pt SELECT i, 1, NULL FROM generate_series(1, 100) i
+  - INSERT INTO pt SELECT i, 2, i FROM generate_series(1, 100) i
+
+steps:
+  - name: "analyze-leaf-1: ANALYZE 叶子分区 pt_1_prt_1（c 全 NULL）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c 'ANALYZE pt_1_prt_1'"
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+
+  - name: "analyze-leaf-2: ANALYZE 叶子分区 pt_1_prt_2（c 有值）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c 'ANALYZE pt_1_prt_2'"
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+
+  - name: "delete-leaf-1: 清空第一个叶子分区 pt_1_prt_1"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c 'DELETE FROM pt_1_prt_1'"
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+
+  - name: "vacuum-leaf-1: VACUUM 已清空的 pt_1_prt_1（non-tx-safe → psql -c）"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c 'VACUUM pt_1_prt_1'"
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+
+  - name: "assert-analyze-rootpartition-no-crash（核心）: ANALYZE ROOTPARTITION pt 不应 crash"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -c 'ANALYZE ROOTPARTITION pt'" 2>&1
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      not_contains:
+        - "server closed the connection"
+        - "connection to server was lost"
+        - "terminated abnormally"
+
+teardown:
+  - DROP TABLE IF EXISTS pt
+
+created_by: chenqiang
+created_at: "2026-07-14"
+notes: |
+  来源：用户提供的复现脚本（2026-07-14）。原始复现：
+
+    drop table if exists pt;
+    create table pt(a int, b int, c int) distributed by (a)
+    partition by range(b) (start(1) end(3) every(1));
+    insert into pt select i, 1, NULL from generate_series(1,100) i;
+    insert into pt select i, 2, i    from generate_series(1,100) i;
+    analyze pt_1_prt_1;
+    analyze pt_1_prt_2;
+    delete from pt_1_prt_1;
+    vacuum pt_1_prt_1;
+    analyze rootpartition pt;   -- 此时数据库 crash
+
+  **crash 判定（确定性）**：ANALYZE ROOTPARTITION 使后端进程异常终止，psql
+  客户端返回 "server closed the connection unexpectedly / The connection to the
+  server was lost. Attempting reset: Failed."。psql -c 在连接丢失时退出非 0，
+  故核心断言以 `exit_code: 0` 为主信号——不依赖文本、最稳。
+
+  **为何 not_contains 要配 `2>&1`**：orchestrator 的 stdout_contains /
+  not_contains / regex 断言只读 **stdout**（orchestrator.py:203-205），而上述
+  crash 文案 psql 打在 **stderr**。核心步骤 cmd 末尾加 `2>&1` 把 stderr 并进
+  stdout，not_contains 才能真正匹配到 crash 文案，与 exit_code 形成双保险。
+  （前置步骤不 crash，`exit_code: 0` + `ON_ERROR_STOP=1` 已足够，故不加 2>&1。）
+
+  **not_contains 用 `-c` 非交互措辞**（2026-07-14 真集群 build 360 实测校准）：
+  `psql -c` crash 时 stderr 精确输出 "server closed the connection unexpectedly
+  / This probably means the server terminated abnormally / connection to server
+  was lost"——注意是 "connection to **server** was lost"（无 "the"）。description
+  里 "The connection to the server was lost. Attempting reset: Failed." 是**交互式**
+  psql 的 reset 提示，`-c` 模式不会出现，故断言不能用那句措辞（曾误写，实测挂在
+  该 pattern 不命中而修正）。
+
+  **为何 ANALYZE / VACUUM 走 kind: shell + psql -c**（硬约束 #11 / design.md
+  §4.1.2）：ANALYZE / VACUUM 是 non-tx-safe DDL，走 psycopg (kind: sql) 会撞
+  autocommit 状态机；必须每步独立 psql -c。CREATE TABLE / INSERT 是 tx-safe，
+  放 setup 走 psycopg，sql_driver 每步末尾 conn.commit()，后续 psql -c 子进程
+  可见（与 bug-0008 同款切分）。
+
+  **触发状态关键**：pt_1_prt_1 灌入 c 全 NULL 且随后被 DELETE 清空 + VACUUM，
+  pt_1_prt_2 的 c 有值；两叶子分区都先各自 ANALYZE 过。root 级统计合并时踩到
+  这一「已有叶子统计 + 其一被清空 vacuum」状态导致 crash。分区表 / 叶子分区名
+  按 GPDB legacy EVERY 语法自动生成（pt_1_prt_1 / pt_1_prt_2），与用户复现一致。
+
+  **判定语义**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
+  核心断言期望 ANALYZE ROOTPARTITION 干净返回。BUG 复现的 build 上此步 crash →
+  psql 退出非 0 → case 红 = BUG 仍在。orchestrator 内置 recover-guard 会在每步后
+  扫 server.log 的 recover-mode 兜底（若集群 server_log_path 已配），作为 crash 的
+  第二证据源。
+
+  **status=open**：用户未提供修复版本；待在目标 build 上 Try/Run 验证行为后，
+  若已修复再 flip 到 fixed 并回填 source.fixed_version（+ 证据链）。
