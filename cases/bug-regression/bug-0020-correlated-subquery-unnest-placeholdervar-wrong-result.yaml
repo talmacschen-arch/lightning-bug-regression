@@ -355,11 +355,16 @@ notes: |
   "multiple segworker groups" 是另一路径（SECURITY DEFINER 函数在子查询里读分布表），
   二者是否同批修好未定，届时按实际行为可拆分/调整本 case。
 
-  **判定语义**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
-  2026-07-16 在 SynxDB4.5.1 build 360 上实测两种 optimizer **均直接报错**（问题1/2
-  文案与飞书一致）→ 本 case 判红 = BUG 仍在。正确基线为飞书 GP6.33 输出（6 行各
-  不相同）。待在含修复的 build（对标 GP7.6.0+）上验证行为后，若已修复再 flip 到
-  fixed 并回填 source.fixed_version（+ 证据链）。
+  **判定语义 + 验证进展**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
+  正确基线为飞书 GP6.33 输出（6 行各不相同）。实测进展：
+    - 2026-07-16 SynxDB4.5.1 build 360：两种 optimizer **均直接报错**（问题1/2 文案
+      与飞书一致）→ 两步全红 = BUG 仍在。
+    - 2026-07-16 升级到 HashData Lightning **2.5.2 build 145469** 后：**step1(PG,
+      optimizer off) 转绿** = PG 优化器的 PlaceHolderVar 问题**已修复**（每行正确结果，
+      含 Calibration Error / Sensor Offline / Overheating,Overheating）；**step2(ORCA,
+      optimizer on) 仍红** = ORCA 路径仍在修（用户确认"先搁置，还在继续修"）。
+  按"完整修复"守卫语义，两步都绿才算修完，故 status 暂保持 open；待 ORCA 也修好、
+  两步全绿后再 flip fixed 并回填 source.fixed_version（PG 部分已可标注为 2.5.2 修复）。
 
   **库名/清理**：独占库 bug0020_lgdb（非客户的 lgdb），避免撞常驻会话导致 DROP
   失败 + 满足 setup 幂等；断言步是一次性 psql -f -（跑完即断开），teardown 时无
