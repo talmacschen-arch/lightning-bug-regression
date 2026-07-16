@@ -332,12 +332,19 @@ notes: |
   （ON_ERROR_STOP=1）。
 
   **两步都 gate（编排取舍）**：飞书把 问题1(PG 报错)/问题2(ORCA 报错)/问题3(结果错)
-  列为同一 bug 的三层，最终目标是两种 optimizer 都返回正确结果，故编成两个断言步
-  都要求正确结果，作为"完整修复"守卫。修复计划是"优先修复 pg 优化器"，故 step1
-  (optimizer off) 为核心；若只修好 PG、ORCA 未修，本 case 会红在 step2(ORCA) —— 如实
-  反映"尚未完全修复"。Broadcom 定位的 Root Cause（PlaceHolderVar）在 Postgres-based
-  planner，ORCA 的 "multiple segworker groups" 是另一路径（SECURITY DEFINER 函数在
-  子查询里读分布表），二者是否同批修好未定，届时按实际行为可拆分/调整本 case。
+  列为同一 bug 的三层，最终目标是两种 optimizer 都返回正确结果，故编成两个断言步都
+  要求正确结果，作为"完整修复"守卫。修复计划是"优先修复 pg 优化器"，故 step1
+  (optimizer off) 为核心；任一步失败 → case 红。
+
+  **单组顺序执行的语义说明（重要）**：两步同属默认 session 组，orchestrator
+  「同组内首个非 pass 即 break 后续」（orchestrator.py:22/455-490），故 step1(PG)
+  失败时 step2(ORCA) 会被跳过、不产生结果行——但这**不影响判定语义**：PG 未修时
+  case 本就该红（step1 已给出红信号），跳过 step2 不丢失任何"通过/失败"信息；等 PG
+  修好 step1 转绿后，step2 才会跑并暴露 ORCA 状态。曾试过用独立 session(on:) 让两步
+  都独立报告，但 on: 必须绑定 sessions 映射且偏向 SQL 会话语义，对纯 shell step 是
+  过度设计，故回退到简单单组。Broadcom 定位的 Root Cause（PlaceHolderVar）在
+  Postgres-based planner，ORCA 的 "multiple segworker groups" 是另一路径（SECURITY
+  DEFINER 函数在子查询里读分布表），二者是否同批修好未定，届时按实际行为可拆分调整。
 
   **判定语义**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
   2026-07-16 在 SynxDB4.5.1 build 360 上实测两种 optimizer **均直接报错**（问题1/2
