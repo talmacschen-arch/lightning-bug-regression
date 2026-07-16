@@ -1,0 +1,162 @@
+id: bug-0018-orca-force-split-window-tpcds-q44-crash
+title: ORCA + optimizer_force_split_window_function 跑 TPC-DS query44 触发数据库 crash
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-07-16"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [orca, optimizer, window-function, rank, tpcds, query44, crash, segv, dxl, planner]
+
+description: |
+  在 GPORCA 优化器下（optimizer=on）打开 GUC
+  `optimizer_force_split_window_function=on`，执行 TPC-DS query44 时数据库在
+  **规划（planning）阶段** crash（Master 进程 SIGSEGV），尚未进入执行即崩。
+
+  crash 表现（客户端 psql 一开始就立刻返回，非跑了很久才断）：
+    server closed the connection unexpectedly
+            This probably means the server terminated abnormally
+            before or while processing the request.
+    The connection to server was lost. Attempting reset: Failed.
+
+  根因（见外部分析文档 tpcds-q44-orca-segv-分析.md）：ORCA DXL→PlStmt 翻译
+  `CTranslatorDXLToPlStmt::TranslateDXLProjList` 读投影列别名时，承载别名的
+  `CDXLScalarProjElem` 节点整体已被释放（结构性 use-after-free / 悬空指针），
+  崩在 `CDXLScalarProjElem::GetMdNameAlias()` 入口（this 悬空）。query44 的
+  「窗口函数 rank() over(order by ... asc/desc) + having 内相关标量子查询」组合
+  在 `optimizer_force_split_window_function=on` 下生成复杂 DXL，恰好命中该路径。
+procedure: |
+  1) 核心步骤：在 gpadmin 库上以 dsbench 角色、search_path=tpcds300pax,public，
+     打开 optimizer=on 与 optimizer_force_split_window_function=on，
+     用单个 psql 会话执行 TPC-DS query44 原样 SQL（升/降序对称 rank() 子查询 +
+     having 内相关标量子查询），期望 psql 退出 0 且输出不含连接断开文案；
+  2) BUG 存在时该 SQL 在规划阶段即 crash → 后端异常终止 → psql 连接丢失、
+     退出非 0 → 断言失败 → case 红。
+expected: |
+  - 核心步骤 psql 退出 0，输出不含 "server closed the connection" /
+    "connection to server was lost" / "terminated abnormally"（修复后行为）；
+  - BUG 复现时该步在规划阶段 crash、连接断开 → psql 退出非 0 → case 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "assert-q44-orca-force-split-window-no-crash（核心）: TPC-DS query44 不应 crash"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -v ON_ERROR_STOP=1 -f -' 2>&1 <<'SQL'
+      set role dsbench;
+      set search_path=tpcds300pax,public;
+      set optimizer=on;
+      set statement_mem="7GB";
+      set work_mem to "512MB";
+      set optimizer_force_split_window_function to on;
+
+      -- TPC-DS query44 (template query44.tpl, seed 1317408053)
+      select  asceding.rnk, i1.i_product_name best_performing, i2.i_product_name worst_performing
+      from(select *
+           from (select item_sk,rank() over (order by rank_col asc) rnk
+                 from (select ss_item_sk item_sk,avg(ss_net_profit) rank_col
+                       from store_sales ss1
+                       where ss_store_sk = 233
+                       group by ss_item_sk
+                       having avg(ss_net_profit) > 0.9*(select avg(ss_net_profit) rank_col
+                                                        from store_sales
+                                                        where ss_store_sk = 233
+                                                          and ss_addr_sk is null
+                                                        group by ss_store_sk))V1)V11
+           where rnk  < 11) asceding,
+          (select *
+           from (select item_sk,rank() over (order by rank_col desc) rnk
+                 from (select ss_item_sk item_sk,avg(ss_net_profit) rank_col
+                       from store_sales ss1
+                       where ss_store_sk = 233
+                       group by ss_item_sk
+                       having avg(ss_net_profit) > 0.9*(select avg(ss_net_profit) rank_col
+                                                        from store_sales
+                                                        where ss_store_sk = 233
+                                                          and ss_addr_sk is null
+                                                        group by ss_store_sk))V2)V21
+           where rnk  < 11) descending,
+      item i1,
+      item i2
+      where asceding.rnk = descending.rnk
+        and i1.i_item_sk=asceding.item_sk
+        and i2.i_item_sk=descending.item_sk
+      order by asceding.rnk
+      limit 100;
+      SQL
+    timeout_sec: 600
+    expect:
+      exit_code: 0
+      not_contains:
+        - "server closed the connection"
+        - "connection to server was lost"
+        - "terminated abnormally"
+
+teardown: []
+
+created_by: chenqiang
+created_at: "2026-07-16"
+notes: |
+  来源：用户提供的复现脚本 /data0/144.dsbench.44.sql（2026-07-16），原始复现命令：
+
+    psql -f /data0/144.dsbench.44.sql
+
+  本 case 把该文件的 SQL **原样内联**进核心 step（去掉注释掉的 GUC 行），
+  语义完全一致：单个 psql 会话内先 set role / search_path / GUC，再跑 query44。
+
+  **crash 判定（确定性，与 bug-0017 同款）**：query44 在 ORCA 规划阶段使后端
+  进程 SIGSEGV，psql 客户端立刻返回 "server closed the connection unexpectedly
+  / This probably means the server terminated abnormally / connection to server
+  was lost"。psql 在连接丢失时退出非 0，故核心断言以 `exit_code: 0` 为主信号，
+  not_contains 为辅——不依赖文本、最稳。
+
+  **为何断言要配 `2>&1`**：orchestrator 的 stdout_contains / not_contains / regex
+  只读 **stdout**（orchestrator.py:203-205），而 crash 文案 psql 打在 **stderr**。
+  核心步骤 cmd 末尾 `2>&1` 把 stderr 并进 stdout，not_contains 才能匹配到 crash
+  文案，与 exit_code 形成双保险。
+
+  **not_contains 用 `-f -` 非交互措辞**（与 bug-0017 build 360 校准一致）：非交互
+  psql（-c / -f -）crash 时 stderr 精确输出 "connection to **server** was lost"
+  （无 "the"）；description 里 "The connection to the server was lost. Attempting
+  reset: Failed." 是**交互式** psql 的 reset 提示，非交互模式不出现，故断言不用那句。
+
+  **为何走 kind: shell + 单个 psql 会话**：`set role` / `set search_path` /
+  `optimizer_force_split_window_function` 这些 GUC 与随后的 SELECT **必须在同一
+  会话**才生效；用 psql heredoc（`-f -`）一次连接跑完整个脚本，等价于用户的
+  `psql -f 文件`。走 psycopg（kind: sql）会被 autocommit / 每 statement 独立
+  execute 打散会话语义，故用 shell driver。
+
+  **数据前置（重要，无自动 gate）**：本 case 依赖目标集群 gpadmin 库里已加载
+  300 规模 TPC-DS pax 数据集（schema `tpcds300pax`，含 store_sales / item）与
+  `dsbench` 角色。这是本机数据前置，无法在 setup 里构造（300 规模数据量太大），
+  故 external_deps 留空、无自动 skip gate。**若集群未加载该数据集**，核心步会因
+  `set role dsbench` 失败或 `relation ... does not exist` 报错而退出非 0 → case 红，
+  但那是**数据前置未满足**，不是本 BUG——排障时先确认 tpcds300pax 数据在位。
+
+  **判定语义**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
+  核心断言期望 query44 干净返回。BUG 复现的 build 上此步在规划阶段 crash →
+  psql 退出非 0 → case 红 = BUG 仍在。orchestrator 内置 recover-guard 会在每步后
+  扫 server.log 的 recover-mode 兜底（若集群 server_log_path 已配），作为 crash 的
+  第二证据源。
+
+  **临时规避（非根治）**：对该 SQL `SET LOCAL optimizer=off;` 走 Postgres planner
+  可绕开 ORCA DXL 翻译路径（见 tpcds-q44-orca-segv-分析.md §7）。
+
+  **status=open**：用户未提供修复版本；2026-07-16 在 SynxDB4 4.5.1-rc.2 build 360
+  上实测仍复现（Master SIGSEGV）。待在含修复的 build 上 Try/Run 验证行为后，
+  若已修复再 flip 到 fixed 并回填 source.fixed_version（+ 证据链）。
