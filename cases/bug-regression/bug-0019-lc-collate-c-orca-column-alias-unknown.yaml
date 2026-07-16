@@ -1,0 +1,123 @@
+id: bug-0019-lc-collate-c-orca-column-alias-unknown
+title: LC_COLLATE/LC_CTYPE='C' 的库里 ORCA 下多字节列别名表头显示成 UNKNOWN
+category: bug_regression
+status: open
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: ""
+  reported_at: "2026-07-16"
+  fixed_version: ""
+  ext_doc_url: ""
+issue_url: ""
+tags: [locale, lc_collate, lc_ctype, orca, optimizer, column-alias, multibyte, resname]
+
+description: |
+  在 LC_COLLATE='C' + LC_CTYPE='C' 的数据库里（TEMPLATE template0 创建，
+  encoding 仍为 UTF8），开启 GPORCA 优化器（optimizer=on）执行带多字节字符
+  列别名的查询 `select '한글' as "한글"`，返回结果集的**列头名**异常显示为
+  `UNKNOWN`，而不是别名 `한글`：
+
+    ORCA on（BUG）:          ORCA off（正确）:
+     UNKNOWN                  한글
+    ---------                -------
+     한글                     한글
+    (1 row)                  (1 row)
+
+  即 ORCA 生成 target list 列名（resname）时，在 LC_CTYPE='C' locale 下对多字节
+  别名做转换失败、回退成占位串 "UNKNOWN"。只在 LC_COLLATE/CTYPE='C' 的库 +
+  optimizer=on 时出现；ORCA off（Postgres planner）表头正常。
+procedure: |
+  1) setup: 用 TEMPLATE template0 + LC_COLLATE 'C' + LC_CTYPE 'C' 创建独占库
+     bug0019_lgdb（非 tx-safe DDL 走 psql -c；如已存在先 DROP）；
+  2) 核心步骤: 连到该库，set optimizer=on，执行 `select '한글' as "한글"`，
+     期望 psql 退出 0 且输出**不含** "UNKNOWN"（表头应为 "한글"）；
+  3) BUG 存在时表头渲染成 "UNKNOWN" → not_contains 命中 → 断言失败 → case 红。
+expected: |
+  - 核心步骤 psql 退出 0，输出含 "한글"、**不含** "UNKNOWN"（修复后行为：
+    表头正常显示别名 한글）；
+  - BUG 复现时表头为 "UNKNOWN"（psql 本身不报错、退出仍 0）→ not_contains
+    命中 → case 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  # CREATE/DROP DATABASE 是 non-tx-safe DDL，走 psql -c（design.md §4.1.2，
+  # 与 bug-0005 同款）：psycopg autocommit=False 会把 DDL 包进 tx 被 PG 拒；
+  # 套 su - gpadmin 因 shell_driver 在 root 下跑、root PATH 没 psql（§3.1）。
+  # 用独占库名 bug0019_lgdb（非用户复现里的 lgdb）：库名与 BUG 无关，触发条件
+  # 是 LC_COLLATE/CTYPE='C'；独占命名避免撞上集群里已存在、且有常驻会话的
+  # lgdb（DROP 会因 "being accessed by other users" 失败）。不指定 ENCODING，
+  # TEMPLATE template0 下实测 encoding=UTF8（与用户 lgdb 一致，한글 才能渲染）。
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0019_lgdb'"
+  - su - gpadmin -c "psql -d gpadmin -c \"CREATE DATABASE bug0019_lgdb TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'\""
+
+steps:
+  - name: "assert-column-alias-not-unknown（核心）: ORCA 下多字节列别名表头不应为 UNKNOWN"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d bug0019_lgdb -v ON_ERROR_STOP=1 -f -' 2>&1 <<'SQL'
+      set optimizer = on;
+      select '한글' as "한글";
+      SQL
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      not_contains: "UNKNOWN"
+      stdout_contains: "한글"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0019_lgdb'"
+
+created_by: chenqiang
+created_at: "2026-07-16"
+notes: |
+  来源：用户提供的复现脚本（2026-07-16）。原始复现：
+
+    psql -d gpadmin
+    drop database if exists lgdb;
+    CREATE DATABASE lgdb TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C';
+    \c lgdb
+    set optimizer = on;
+    select '한글' as "한글";   -- 表头显示 UNKNOWN
+
+  **判定信号 = not_contains "UNKNOWN"（关键）**：本 BUG 只是**列头名渲染错**，
+  psql 本身**不报错、退出码仍为 0**（2026-07-16 build 360 实测：ORCA on 表头
+  "UNKNOWN" 但 EXIT=0）。故 `exit_code: 0` **不能**作为 BUG 信号（buggy 时它也是
+  0），只作 sanity；真正的确定性信号是 `not_contains: "UNKNOWN"`——buggy build
+  表头为 "UNKNOWN"（此查询里唯一 "UNKNOWN" 来源）→ 命中 → 红；修复后表头为
+  "한글"、无 "UNKNOWN" → 绿。
+
+  **stdout_contains "한글" 是弱正向**：用户原查询 `'한글' as "한글"` 里 한글 同时
+  出现在表头与数据行，数据行**恒**含 한글，故 stdout_contains 无法区分表头对错，
+  仅作"输出确实渲染出来"的 sanity。表头对错完全由 not_contains "UNKNOWN" 判定。
+
+  **为何配 `2>&1`**：orchestrator 断言只读 stdout；psql 结果表本就在 stdout，
+  但统一加 `2>&1` 兜底（若未来 buggy 变体把异常打到 stderr 也能被 not_contains
+  看到），与 bug-0017 / bug-0018 一致。
+
+  **为何走 kind: shell + psql -f -（非 kind: sql）**：判定对象是 psql **文本输出的
+  列头行**，psql 文本渲染最直观（用户复现即 psql 表格）。set optimizer=on 与
+  SELECT 必须同会话，heredoc 一次连接跑完等价用户的交互式 `\c lgdb; set...; select`。
+
+  **触发条件**：LC_COLLATE='C' + LC_CTYPE='C' 的库 + optimizer=on（ORCA）。
+  ORCA off（Postgres planner）表头正常显示 한글（实测对照组已确认）。属 [[lbr-madlib...]]
+  无关；与 bug-0005（同类 LC_CTYPE='C' + 多字节）同族但现象不同（那个是 upper 报
+  invalid multibyte，这个是 ORCA 列名 resname 回退 UNKNOWN）。
+
+  **判定语义**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
+  2026-07-16 在 SynxDB4 4.5.1-rc.2 build 360 上实测**仍复现**（表头 UNKNOWN）→
+  本 case 在 build 360 判红 = BUG 仍在。待在含修复的 build 上验证行为后，若已修复
+  再 flip 到 fixed 并回填 source.fixed_version（+ 证据链）。
+
+  **库名/清理**：用独占库 bug0019_lgdb 而非 lgdb（避免撞常驻会话导致 DROP 失败）；
+  teardown DROP DATABASE 前若核心步的 psql 会话仍驻留会失败——本 case 核心步是
+  一次性 psql -f -（跑完即断开），teardown 时无驻留连接，可干净 DROP（实测通过）。
