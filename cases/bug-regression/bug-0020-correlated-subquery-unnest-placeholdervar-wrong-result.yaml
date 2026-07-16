@@ -1,0 +1,371 @@
+id: bug-0020-correlated-subquery-unnest-placeholdervar-wrong-result
+title: 关联子查询用 UNNEST() 时 PG planner 误判 PlaceHolderVar 致结果错/报错（GP6/GP7.6 正确，GP7.5.x/SynxDB4.5 错）
+category: bug_regression
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "wiki/YnuUw175SiggMXk8MoSc0Gqkned"
+  reported_at: "2026-07-16"
+  fixed_version: ""
+  ext_doc_url: "https://hashdata.feishu.cn/wiki/YnuUw175SiggMXk8MoSc0Gqkned"
+issue_url: ""
+tags: [correlated-subquery, unnest, srf, placeholdervar, planner, orca, wrong-result, string_agg, locale, lc_collate]
+
+description: |
+  关联（correlated）子查询里用集合返回函数 UNNEST()（把外层列
+  sh.ae_rule_id_ctn 逗号切分后 UNNEST，再 JOIN 规则表聚合 STRING_AGG）时，
+  Postgres-based planner 对 PlaceHolderVar 处理有缺陷：未看进 wrapper 内部、
+  误判子查询不依赖外层表 → 只对子查询求值一次、把这一个静态结果广播给外层
+  每一行 → 查询结果错。
+
+  Broadcom Root Cause（GP7 legacy Postgres planner bug，见飞书文档）：
+    "correlated subqueries returned incorrect results due to improper handling
+     of PlaceHolderVar"。GP6.33 正确、GP7.5.2~7.5.5 结果错、GP7.6.0+ 已修复。
+
+  本 SQL 在 SynxDB4.5.1 上更严重——两种优化器都**直接报错**（尚未走到"结果
+  错"这步）：
+    - optimizer off（PG planner）: ERROR: correlated subquery with skip-level
+      correlations is not supported                             （问题1）
+    - optimizer on（ORCA）: ERROR: query plan with multiple segworker groups
+      is not supported / CONTEXT: PL/pgSQL function common.f_get_name_2 （问题2）
+  LG 客户环境（某 GUC 下）SynxDB4.5 能跑但结果错（与 GP7.5.x 一致）。（问题3）
+
+  修复后（GP6/GP7.6+ 的正确行为）每行按各自 ae_rule_id_ctn 正确关联，6 行结果
+  各不相同；BUG 时要么报错、要么 6 行 rule_ctrl 全是同一个被广播的值。
+procedure: |
+  1) setup: 建 LC_COLLATE/CTYPE='C' 的库（客户习惯，与飞书复现一致）+ schema
+     esko_mfg / common + 主表 tb_mspcb_spcp_ae_cmn_h（6 行）+ 规则表
+     tb_mspcb_spcp_ae_rule_n（4 条 R_01~R_04，故意不建 R_04 里引用的 R_99）+
+     两个 plpgsql 函数 f_empty_chk / f_get_name_2；
+  2) assert-pg-planner-correct-result（核心，对应修复优先级"优先修复 pg 优化器"）:
+     optimizer off 跑原查询，期望**正确的每行结果**——输出含 "Calibration Error"
+     / "Sensor Offline" / "Overheating,Overheating"（这三个值只在每行各自正确
+     关联时出现），且不含报错文案；
+  3) assert-orca-correct-result: optimizer on 跑同一查询，同样期望正确每行结果。
+expected: |
+  - 两个断言步 psql 退出 0，输出含 "Calibration Error" / "Sensor Offline" /
+    "Overheating,Overheating" / "(6 rows)"，且不含 "ERROR" / "skip-level
+    correlations" / "multiple segworker groups"（= 修复后每行正确关联的行为）；
+  - BUG 复现时：要么直接报错（SynxDB4.5.1 现状，问题1/2）→ 三个鉴别值缺失 +
+    报错文案出现 → 红；要么返回广播的错误结果（GP7.5.x/问题3，rule_ctrl 每行
+    都是 "Overheating,R_02"）→ 三个鉴别值仍缺失 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions:                # 两步放独立 session → 独立分组 → 各自都跑、各自都报告；
+  pg: {driver: shell}    # 否则同组「首个非 pass 即 break」会在 step1(PG) 失败时
+  orca: {driver: shell}  # 跳过 step2(ORCA)，只看到一条。两步都是只读 SELECT、
+                         # 各开独立 psql 连接，并发无冲突（driver: shell = 不建 SQL 连接）。
+
+setup:
+  # CREATE/DROP DATABASE 是 non-tx-safe DDL，走 psql -c（design.md §4.1.2，与
+  # bug-0005/0019 同款）。独占库 bug0020_lgdb（客户复现用 lgdb；库名与 BUG 无关，
+  # 触发条件是关联子查询 + UNNEST + PlaceHolderVar；独占命名避免撞集群里已存在、
+  # 有常驻会话的 lgdb 导致 DROP 失败 + 满足 setup 幂等）。LC_COLLATE/CTYPE='C'
+  # 与飞书复现一致（客户习惯 C 字符集；不指定 ENCODING，template0 下实测 UTF8）。
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0020_lgdb'"
+  - su - gpadmin -c "psql -d gpadmin -c \"CREATE DATABASE bug0020_lgdb TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C'\""
+  # schema / 表 / 函数 / 数据一次性灌进新库（psql -f - heredoc，ON_ERROR_STOP=1
+  # 任一条失败即中止并给清晰 psql 报错行）。表 SQL 与飞书复现原样一致（ao_row +
+  # zstd + DISTRIBUTED RANDOMLY）。规则表只建 R_01~R_04，故意不建 R_99（复现
+  # "R_04,R_99 只关联到 R_04"）。
+  - |
+    su - gpadmin -c 'psql -d bug0020_lgdb -v ON_ERROR_STOP=1 -f -' <<'SQL'
+    create schema if not exists esko_mfg;
+    create schema if not exists common;
+
+    drop table if exists esko_mfg.tb_mspcb_spcp_ae_cmn_h;
+    CREATE TABLE esko_mfg.tb_mspcb_spcp_ae_cmn_h (
+        pldo_cd               varchar(20)    NOT NULL,
+        proc_id               varchar(50)    NOT NULL,
+        ftr_id                varchar(300)   NOT NULL,
+        eqp_id                varchar(50)    NOT NULL,
+        ctx_gr_nm             varchar(500)   NOT NULL,
+        evt_dtm               timestamp      NOT NULL,
+        lot_gr_id             varchar(50)    NOT NULL,
+        lot_id                varchar(200)   NOT NULL,
+        mat_gr_id             varchar(50)    NOT NULL,
+        mat_cd                varchar(50)    NOT NULL,
+        seq_nvl               numeric(10)    NOT NULL,
+        smry_tp_cd            varchar(50)    NULL,
+        ae_rule_id_ctn        varchar(200)   NULL,
+        ae_occr_dtm           timestamp      NULL,
+        raw_data_srce_id_ctn  varchar(2000)  NULL,
+        raw_data_ctn          varchar(4000)  NULL,
+        ae_cart_ctn           varchar(200)   NULL,
+        ae_rule_gr_id         varchar(50)    NULL,
+        eqp_hld_yn            varchar(1)     NULL,
+        lot_hld_yn            varchar(1)     NULL,
+        sms_sndo_yn           varchar(1)     NULL,
+        eml_sndo_yn           varchar(1)     NULL,
+        tact_stat_cd          varchar(20)    NULL,
+        tact_fin_ffil_user_id varchar(50)    NULL,
+        tact_st_dtm           timestamp      NULL,
+        tact_end_dtm          timestamp      NULL,
+        fin_upd_dtm           timestamp      NULL,
+        caus_cd               varchar(50)    NULL,
+        caus_ctn              varchar(4000)  NULL,
+        tact_cd               varchar(50)    NULL,
+        tact_ctn              varchar(2000)  NULL,
+        ncr_yn                varchar(1)     NULL,
+        patn_area_id          varchar(50)    NULL,
+        etl_ldup_dt           varchar(8)     NULL,
+        data_ldup_dtm         timestamp      NULL,
+        alm_id                text           NULL
+    )
+    USING ao_row WITH (compresstype=zstd,compresslevel=7)
+    DISTRIBUTED RANDOMLY;
+
+    drop TABLE if exists esko_mfg.tb_mspcb_spcp_ae_rule_n;
+    CREATE TABLE esko_mfg.tb_mspcb_spcp_ae_rule_n (
+        ae_rule_id        varchar(50)    NOT NULL,
+        ae_rule_nm        varchar(200)   NULL,
+        ae_rule_desc      varchar(1000)  NULL,
+        use_yn            varchar(1)     NULL,
+        fin_upd_user_id   varchar(50)    NULL,
+        fin_upd_dtm       timestamp      NULL,
+        user_def_yn       varchar(1)     NULL,
+        r_fnc_use_yn      varchar(1)     NULL,
+        rule_def_ctn      varchar(4000)  NULL,
+        smpl_size         numeric(18, 5) NULL,
+        hit_cnt           numeric(18)    NULL,
+        val_tp_cd         varchar(50)    NULL,
+        oprr_ctn          varchar(10)    NULL,
+        lmtn_tp_cd_ctn    varchar(100)   NULL,
+        main_apl_yn       varchar(1)     NULL,
+        sub_apl_yn        varchar(1)     NULL,
+        sub_n2_apl_yn     varchar(1)     NULL,
+        patn_area_id      varchar(50)    NULL,
+        etl_ldup_dt       varchar(8)     NULL,
+        data_ldup_dtm     timestamp      NULL
+    )
+    USING ao_row WITH (compresstype=zstd,compresslevel=7)
+    DISTRIBUTED RANDOMLY;
+
+    CREATE OR REPLACE FUNCTION common.f_empty_chk(column_text text)
+      RETURNS text
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+    AS $function$
+    DECLARE
+        empth_chk_text TEXT;
+    BEGIN
+        SELECT case when column_text = '' then null else column_text end
+          into empth_chk_text;
+        RETURN empth_chk_text;
+            EXCEPTION
+                when others then
+                    raise exception 'f_empty_chk ::: Exception => %', sqlstate;
+    END;
+    $function$;
+
+    CREATE OR REPLACE FUNCTION common.f_get_name_2(lang_input text, column_text text)
+      RETURNS text
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+    AS $function$
+    DECLARE
+        BASE_LANGUAGE TEXT := 'ko-KR';
+        LANGUAGE_SELECTION TEXT;
+        SPLIT_TEXT TEXT;
+    BEGIN
+        SELECT CASE WHEN LANG_INPUT IN ('ko-KR','zh-CN','en-US','pl-PL') THEN LANG_INPUT ELSE BASE_LANGUAGE END
+          INTO LANGUAGE_SELECTION;
+        SPLIT_TEXT := REPLACE(coalesce(common.f_empty_chk(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION(COALESCE(LANGUAGE_SELECTION,BASE_LANGUAGE) IN COLUMN_TEXT)
+                        ,length(COLUMN_TEXT)),'|',1),COALESCE(LANGUAGE_SELECTION,BASE_LANGUAGE),2))
+                            ,common.f_empty_chk(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION('en-US' IN COLUMN_TEXT),length(COLUMN_TEXT)),'|',1),'en-US',2))
+                            ,common.f_empty_chk(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION('ko-KR' IN COLUMN_TEXT),length(COLUMN_TEXT)),'|',1),'ko-KR',2))
+                            ,COLUMN_TEXT),'\','');
+        RETURN SPLIT_TEXT;
+            EXCEPTION
+                when others then
+                    raise exception 'F_GET_NAME ::: Exception => %', sqlstate;
+    END;
+    $function$;
+
+    TRUNCATE TABLE esko_mfg.tb_mspcb_spcp_ae_rule_n;
+    INSERT INTO esko_mfg.tb_mspcb_spcp_ae_rule_n (ae_rule_id, ae_rule_nm, ae_rule_desc)
+    VALUES
+        ('R_01', 'Overheating',       'ko-KR|Temperature > 100C'),
+        ('R_02',  NULL,               'ko-KR|Pressure < 50Pa'),
+        ('R_03', 'Calibration Error',  NULL),
+        ('R_04', 'Sensor Offline',    'ko-KR|Sensor disconnected');
+
+    TRUNCATE TABLE esko_mfg.tb_mspcb_spcp_ae_cmn_h;
+    INSERT INTO esko_mfg.tb_mspcb_spcp_ae_cmn_h
+        (pldo_cd, proc_id, ftr_id, eqp_id, ctx_gr_nm, evt_dtm,
+         lot_gr_id, lot_id, mat_gr_id, mat_cd, seq_nvl,
+         ae_rule_id_ctn, ae_occr_dtm)
+    VALUES
+        ('PL01','P01','F01','EQP01','CTX01','2026-06-10 08:59:49','LG01','LOT01','MG01','MAT01',1,'R_01,R_02','2026-06-10 08:59:49'),
+        ('PL01','P01','F01','EQP01','CTX01','2026-06-10 08:59:50','LG01','LOT01','MG01','MAT01',2,'R_03',      '2026-06-10 08:59:50'),
+        ('PL01','P01','F01','EQP01','CTX01','2026-06-10 08:59:51','LG01','LOT01','MG01','MAT01',3,'',          '2026-06-10 08:59:51'),
+        ('PL01','P01','F01','EQP01','CTX01','2026-06-10 08:59:52','LG01','LOT01','MG01','MAT01',4,'R_04,R_99', '2026-06-10 08:59:52'),
+        ('PL01','P01','F01','EQP01','CTX01','2026-06-10 08:59:53','LG01','LOT01','MG01','MAT01',5,'R_01,R_01', '2026-06-10 08:59:53'),
+        ('PL01','P01','F01','EQP01','CTX01','2026-06-10 08:59:54','LG01','LOT01','MG01','MAT01',6,'',          '2026-06-10 08:59:54');
+    SQL
+
+steps:
+  - name: "assert-pg-planner-correct-result（核心）: optimizer off 关联子查询+UNNEST 每行结果应正确"
+    kind: shell
+    "on": pg               # 必须给 key 加引号：YAML 1.1 裸 on 会被解析成布尔 true
+    cmd: |
+      su - gpadmin -c 'psql -d bug0020_lgdb -v ON_ERROR_STOP=1 -f -' 2>&1 <<'SQL'
+      set optimizer to off;
+      SELECT ae_rule_id_ctn
+          , ( SELECT STRING_AGG(rul_nm ,',' ORDER BY ae_rule_id)
+              FROM ( SELECT COALESCE(ae_rule_nm, ae_rule_id) AS rul_nm, ae_rule_id
+                     FROM esko_mfg.tb_mspcb_spcp_ae_rule_n t1
+                     JOIN ( SELECT UNNEST(string_to_array(sh.ae_rule_id_ctn,',')) ) t2(column2)
+                       ON t1.ae_rule_id = t2.column2 ) t
+            ) AS rule_ctrl
+          , ( SELECT STRING_AGG(rul_desc ,',' ORDER BY ae_rule_id)
+              FROM ( SELECT COALESCE(
+                            common.f_get_name_2('ko-K0R', t1.ae_rule_desc), ae_rule_id) AS rul_desc
+                          , ae_rule_id
+                     FROM esko_mfg.tb_mspcb_spcp_ae_rule_n t1
+                     join (select UNNEST(string_to_array(sh.ae_rule_id_ctn,',')) ) t2(column2)
+                     on t1.ae_rule_id = t2.column2 ) t
+            ) AS specOutRuleDescListName
+      FROM esko_mfg.tb_mspcb_spcp_ae_cmn_h sh
+      WHERE 1=1
+        AND sh.ae_occr_dtm >= '2026-06-10 06:00:00'
+        AND sh.ae_occr_dtm < '2026-06-11 06:00:00'
+        AND sh.evt_dtm BETWEEN '2026-06-10 06:00:00'::TIMESTAMP - INTERVAL '1 DAYS'
+                           AND '2026-06-11 06:00:00'::TIMESTAMP + INTERVAL '1 DAYS'
+      ORDER BY pldo_cd, proc_id, ftr_id, eqp_id, ctx_gr_nm, evt_dtm
+             , lot_gr_id, lot_id, mat_gr_id, mat_cd, seq_nvl
+             , ae_rule_id_ctn;
+      SQL
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Calibration Error"
+        - "Sensor Offline"
+        - "Overheating,Overheating"
+        - "(6 rows)"
+      not_contains:
+        - "ERROR"
+        - "skip-level correlations"
+        - "multiple segworker groups"
+
+  - name: "assert-orca-correct-result: optimizer on 关联子查询+UNNEST 每行结果应正确"
+    kind: shell
+    "on": orca             # 同上，key 加引号避免被当布尔
+    cmd: |
+      su - gpadmin -c 'psql -d bug0020_lgdb -v ON_ERROR_STOP=1 -f -' 2>&1 <<'SQL'
+      set optimizer to on;
+      SELECT ae_rule_id_ctn
+          , ( SELECT STRING_AGG(rul_nm ,',' ORDER BY ae_rule_id)
+              FROM ( SELECT COALESCE(ae_rule_nm, ae_rule_id) AS rul_nm, ae_rule_id
+                     FROM esko_mfg.tb_mspcb_spcp_ae_rule_n t1
+                     JOIN ( SELECT UNNEST(string_to_array(sh.ae_rule_id_ctn,',')) ) t2(column2)
+                       ON t1.ae_rule_id = t2.column2 ) t
+            ) AS rule_ctrl
+          , ( SELECT STRING_AGG(rul_desc ,',' ORDER BY ae_rule_id)
+              FROM ( SELECT COALESCE(
+                            common.f_get_name_2('ko-K0R', t1.ae_rule_desc), ae_rule_id) AS rul_desc
+                          , ae_rule_id
+                     FROM esko_mfg.tb_mspcb_spcp_ae_rule_n t1
+                     join (select UNNEST(string_to_array(sh.ae_rule_id_ctn,',')) ) t2(column2)
+                     on t1.ae_rule_id = t2.column2 ) t
+            ) AS specOutRuleDescListName
+      FROM esko_mfg.tb_mspcb_spcp_ae_cmn_h sh
+      WHERE 1=1
+        AND sh.ae_occr_dtm >= '2026-06-10 06:00:00'
+        AND sh.ae_occr_dtm < '2026-06-11 06:00:00'
+        AND sh.evt_dtm BETWEEN '2026-06-10 06:00:00'::TIMESTAMP - INTERVAL '1 DAYS'
+                           AND '2026-06-11 06:00:00'::TIMESTAMP + INTERVAL '1 DAYS'
+      ORDER BY pldo_cd, proc_id, ftr_id, eqp_id, ctx_gr_nm, evt_dtm
+             , lot_gr_id, lot_id, mat_gr_id, mat_cd, seq_nvl
+             , ae_rule_id_ctn;
+      SQL
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Calibration Error"
+        - "Sensor Offline"
+        - "Overheating,Overheating"
+        - "(6 rows)"
+      not_contains:
+        - "ERROR"
+        - "skip-level correlations"
+        - "multiple segworker groups"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0020_lgdb'"
+
+created_by: chenqiang
+created_at: "2026-07-16"
+notes: |
+  来源：飞书 wiki/YnuUw175SiggMXk8MoSc0Gqkned（LG 客户，2026-07；含 Broadcom SR
+  Root Cause，注意保密）。SQL / 表结构 / 函数 / 造数均按飞书复现原样内联。
+
+  **判定信号 = rule_ctrl 列的每行鉴别值（关键，且与函数版本无关）**：
+  鉴别值 "Calibration Error"（R_03 行）/ "Sensor Offline"（R_04,R_99 行）/
+  "Overheating,Overheating"（R_01,R_01 行）都来自第 2 列 rule_ctrl =
+  COALESCE(ae_rule_nm, ae_rule_id)，**不经过 f_get_name_2 函数**，因此不受函数
+  实现/版本影响（飞书里客户实际函数输出 "[ko-KR] Translated:" 与本文档给的函数
+  版本不同，只影响第 3 列 specOutRuleDescListName，不影响这三个鉴别值）。
+  这三个值**只在每行按各自 ae_rule_id_ctn 正确关联**时才出现；BUG 两种表现都不
+  出现它们：
+    - SynxDB4.5.1 现状：直接报错（问题1/2），根本没有结果行；
+    - GP7.5.x/问题3：子查询被广播，6 行 rule_ctrl 全是 "Overheating,R_02"
+      （第 1 行的值），故 "Calibration Error"/"Sensor Offline"/
+      "Overheating,Overheating" 全缺失。
+  → stdout_contains 全含判正确、not_contains 判无报错，双向卡死。
+
+  **not_contains "ERROR" 安全**：大小写敏感子串匹配，"Calibration Error"（Error）
+  不会命中 "ERROR"（psql 报错前缀 "ERROR:" 全大写）。
+
+  **为何配 2>&1**：shell_driver 分开捕获 stdout/stderr（create_subprocess_shell），
+  断言只读 stdout（orchestrator.py:203-205）；cmd 末尾 2>&1 把 psql 打在 stderr 的
+  报错文案并进 stdout，not_contains 才能匹配到，与 exit_code 形成多重信号。
+
+  **为何走 kind: shell + psql -f - heredoc**：set optimizer 与 SELECT 必须同会话；
+  两个断言步各自一次 psql 连接跑完 set+select，等价客户交互式复现。CREATE/DROP
+  DATABASE 是 non-tx-safe 走 psql -c；对象+数据用一条 psql -f - heredoc 灌进新库
+  （ON_ERROR_STOP=1）。
+
+  **两步都 gate + 独立 session（编排取舍）**：飞书把 问题1(PG 报错)/问题2(ORCA 报错)/
+  问题3(结果错) 列为同一 bug 的三层，最终目标是两种 optimizer 都返回正确结果，故编成
+  两个断言步都要求正确结果，作为"完整修复"守卫。修复计划是"优先修复 pg 优化器"，故
+  step1(optimizer off) 为核心；任一步失败 → case 红。
+
+  **为何两步放独立 session（sessions: {pg,orca} + "on":）**：若同属一个 session 组，
+  orchestrator「同组内首个非 pass 即 break 后续」（orchestrator.py:22/455-490）会在
+  step1(PG) 失败时**跳过 step2(ORCA)、只显示一条**——问题2(ORCA 报错) 就看不到了。
+  放到独立 session → 两步各自独立分组、并发跑、各自独立报告（实测 build 360 上两步
+  都跑出 fail：step1=skip-level correlations、step2=multiple segworker groups）。两步
+  都是只读 SELECT、各开独立 psql 连接、各自 set 自己的 optimizer，并发无冲突；session
+  config 写 driver: shell 表示不建 SQL 连接（SqlSessionPool.acquire 惰性，shell step
+  从不调它）。**注意 YAML 1.1 坑**：step 里的 on key 必须写成带引号的 "on"，否则裸 on
+  会被 PyYAML 解析成布尔 true、丢失分组（曾踩：两步又落回同一默认组）。
+
+  Broadcom 定位的 Root Cause（PlaceHolderVar）在 Postgres-based planner，ORCA 的
+  "multiple segworker groups" 是另一路径（SECURITY DEFINER 函数在子查询里读分布表），
+  二者是否同批修好未定，届时按实际行为可拆分/调整本 case。
+
+  **判定语义 + 验证进展**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
+  正确基线为飞书 GP6.33 输出（6 行各不相同）。实测进展：
+    - 2026-07-16 SynxDB4.5.1 build 360：两种 optimizer **均直接报错**（问题1/2 文案
+      与飞书一致）→ 两步全红 = BUG 仍在。
+    - 2026-07-16 升级到 HashData Lightning **2.5.2 build 145469** 后：**step1(PG,
+      optimizer off) 转绿** = PG 优化器的 PlaceHolderVar 问题**已修复**（每行正确结果，
+      含 Calibration Error / Sensor Offline / Overheating,Overheating）；**step2(ORCA,
+      optimizer on) 仍红** = ORCA 路径仍在修（用户确认"先搁置，还在继续修"）。
+  按"完整修复"守卫语义，两步都绿才算修完，故 status 暂保持 open；待 ORCA 也修好、
+  两步全绿后再 flip fixed 并回填 source.fixed_version（PG 部分已可标注为 2.5.2 修复）。
+
+  **库名/清理**：独占库 bug0020_lgdb（非客户的 lgdb），避免撞常驻会话导致 DROP
+  失败 + 满足 setup 幂等；断言步是一次性 psql -f -（跑完即断开），teardown 时无
+  驻留连接，可干净 DROP。
