@@ -59,7 +59,10 @@ external_deps: []
 defaults:
   database: gpadmin
 
-sessions: []
+sessions:                # 两步放独立 session → 独立分组 → 各自都跑、各自都报告；
+  pg: {driver: shell}    # 否则同组「首个非 pass 即 break」会在 step1(PG) 失败时
+  orca: {driver: shell}  # 跳过 step2(ORCA)，只看到一条。两步都是只读 SELECT、
+                         # 各开独立 psql 连接，并发无冲突（driver: shell = 不建 SQL 连接）。
 
 setup:
   # CREATE/DROP DATABASE 是 non-tx-safe DDL，走 psql -c（design.md §4.1.2，与
@@ -212,6 +215,7 @@ setup:
 steps:
   - name: "assert-pg-planner-correct-result（核心）: optimizer off 关联子查询+UNNEST 每行结果应正确"
     kind: shell
+    "on": pg               # 必须给 key 加引号：YAML 1.1 裸 on 会被解析成布尔 true
     cmd: |
       su - gpadmin -c 'psql -d bug0020_lgdb -v ON_ERROR_STOP=1 -f -' 2>&1 <<'SQL'
       set optimizer to off;
@@ -255,6 +259,7 @@ steps:
 
   - name: "assert-orca-correct-result: optimizer on 关联子查询+UNNEST 每行结果应正确"
     kind: shell
+    "on": orca             # 同上，key 加引号避免被当布尔
     cmd: |
       su - gpadmin -c 'psql -d bug0020_lgdb -v ON_ERROR_STOP=1 -f -' 2>&1 <<'SQL'
       set optimizer to on;
@@ -331,20 +336,24 @@ notes: |
   DATABASE 是 non-tx-safe 走 psql -c；对象+数据用一条 psql -f - heredoc 灌进新库
   （ON_ERROR_STOP=1）。
 
-  **两步都 gate（编排取舍）**：飞书把 问题1(PG 报错)/问题2(ORCA 报错)/问题3(结果错)
-  列为同一 bug 的三层，最终目标是两种 optimizer 都返回正确结果，故编成两个断言步都
-  要求正确结果，作为"完整修复"守卫。修复计划是"优先修复 pg 优化器"，故 step1
-  (optimizer off) 为核心；任一步失败 → case 红。
+  **两步都 gate + 独立 session（编排取舍）**：飞书把 问题1(PG 报错)/问题2(ORCA 报错)/
+  问题3(结果错) 列为同一 bug 的三层，最终目标是两种 optimizer 都返回正确结果，故编成
+  两个断言步都要求正确结果，作为"完整修复"守卫。修复计划是"优先修复 pg 优化器"，故
+  step1(optimizer off) 为核心；任一步失败 → case 红。
 
-  **单组顺序执行的语义说明（重要）**：两步同属默认 session 组，orchestrator
-  「同组内首个非 pass 即 break 后续」（orchestrator.py:22/455-490），故 step1(PG)
-  失败时 step2(ORCA) 会被跳过、不产生结果行——但这**不影响判定语义**：PG 未修时
-  case 本就该红（step1 已给出红信号），跳过 step2 不丢失任何"通过/失败"信息；等 PG
-  修好 step1 转绿后，step2 才会跑并暴露 ORCA 状态。曾试过用独立 session(on:) 让两步
-  都独立报告，但 on: 必须绑定 sessions 映射且偏向 SQL 会话语义，对纯 shell step 是
-  过度设计，故回退到简单单组。Broadcom 定位的 Root Cause（PlaceHolderVar）在
-  Postgres-based planner，ORCA 的 "multiple segworker groups" 是另一路径（SECURITY
-  DEFINER 函数在子查询里读分布表），二者是否同批修好未定，届时按实际行为可拆分调整。
+  **为何两步放独立 session（sessions: {pg,orca} + "on":）**：若同属一个 session 组，
+  orchestrator「同组内首个非 pass 即 break 后续」（orchestrator.py:22/455-490）会在
+  step1(PG) 失败时**跳过 step2(ORCA)、只显示一条**——问题2(ORCA 报错) 就看不到了。
+  放到独立 session → 两步各自独立分组、并发跑、各自独立报告（实测 build 360 上两步
+  都跑出 fail：step1=skip-level correlations、step2=multiple segworker groups）。两步
+  都是只读 SELECT、各开独立 psql 连接、各自 set 自己的 optimizer，并发无冲突；session
+  config 写 driver: shell 表示不建 SQL 连接（SqlSessionPool.acquire 惰性，shell step
+  从不调它）。**注意 YAML 1.1 坑**：step 里的 on key 必须写成带引号的 "on"，否则裸 on
+  会被 PyYAML 解析成布尔 true、丢失分组（曾踩：两步又落回同一默认组）。
+
+  Broadcom 定位的 Root Cause（PlaceHolderVar）在 Postgres-based planner，ORCA 的
+  "multiple segworker groups" 是另一路径（SECURITY DEFINER 函数在子查询里读分布表），
+  二者是否同批修好未定，届时按实际行为可拆分/调整本 case。
 
   **判定语义**（design.md §4.1.1：正面 expect = 修复后行为，红 = 仍有此 BUG）：
   2026-07-16 在 SynxDB4.5.1 build 360 上实测两种 optimizer **均直接报错**（问题1/2
