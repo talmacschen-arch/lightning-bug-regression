@@ -4,6 +4,7 @@
 查 DB 拿 verdict + classify + response counts——断言每种漂移在真实 wiring 下
 都被算到。四个 fixture case 各命中一类漂移。
 """
+
 from __future__ import annotations
 
 import json
@@ -23,10 +24,10 @@ from app.storage.models import Base, CaseCategory
 # 每个 case → 每个 run 的 verdict（run 顺序 = 旧→新，即 run1, run2, run3）。
 # newest(run3) 决定 REGRESSION/EXPECTED 判定。
 CASE_VERDICTS = {
-    "bug-t-reg": ("fixed", ["pass", "pass", "fail"]),   # fixed 但最新 fail → REGRESSION
-    "bug-t-cand": ("open", ["pass", "pass", "pass"]),   # open 连续 3 pass → CANDIDATE
-    "bug-t-exp": ("open", ["fail", "fail", "fail"]),    # open 仍 fail → EXPECTED
-    "bug-t-ok": ("fixed", ["pass", "pass", "pass"]),    # fixed 仍 pass → OK
+    "bug-t-reg": ("fixed", ["pass", "pass", "fail"]),  # fixed 但最新 fail → REGRESSION
+    "bug-t-cand": ("open", ["pass", "pass", "pass"]),  # open 连续 3 pass → CANDIDATE
+    "bug-t-exp": ("open", ["fail", "fail", "fail"]),  # open 仍 fail → EXPECTED
+    "bug-t-ok": ("fixed", ["pass", "pass", "pass"]),  # fixed 仍 pass → OK
     "bug-t-wontfix": ("wontfix", ["skip", "skip", "skip"]),  # 不在 BUG 修复轴 → 应被排除
 }
 
@@ -64,8 +65,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     # 2) in-memory DB + patch engine
     engine = create_engine(
-        "sqlite:///:memory:", future=True,
-        connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        "sqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(
@@ -76,25 +79,36 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(sqlite_store, "init_engine", lambda url: None)
 
     with SessionLocal() as sess:
-        sess.add(CaseCategory(
-            name="bug_regression", display_name="BUG", description=None,
-            id_prefix="bug-", dir_path="bug-regression",
-            status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
-            default_status="open", display_order=10, is_active=True,
-        ))
+        sess.add(
+            CaseCategory(
+                name="bug_regression",
+                display_name="BUG",
+                description=None,
+                id_prefix="bug-",
+                dir_path="bug-regression",
+                status_whitelist=json.dumps(["open", "fixed", "wontfix", "stub"]),
+                default_status="open",
+                display_order=10,
+                is_active=True,
+            )
+        )
         sess.commit()
         # 3) seed 3 个 done run（run1..run3，旧→新），每 run 给每个 case 一条 verdict
         for i in range(3):
             run = sqlite_store.create_run(
-                sess, started_at=datetime(2026, 1, 1 + i, tzinfo=UTC),
-                target_version="BUILD-777", total=len(CASE_VERDICTS),
+                sess,
+                started_at=datetime(2026, 1, 1 + i, tzinfo=UTC),
+                target_version="BUILD-777",
+                total=len(CASE_VERDICTS),
             )
             for cid, (_status, verdicts) in CASE_VERDICTS.items():
                 sqlite_store.insert_case_result(
                     sess, run_id=run.id, case_id=cid, status=verdicts[i]
                 )
             sqlite_store.finish_run(
-                sess, run.id, status="done",
+                sess,
+                run.id,
+                status="done",
                 finished_at=datetime(2026, 1, 1 + i, tzinfo=UTC),
             )
         sess.commit()

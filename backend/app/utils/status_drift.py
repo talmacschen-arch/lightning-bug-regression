@@ -12,6 +12,7 @@
 ``classify``。这样查询实现可以各按环境不同（脚本用 sqlite3 直连，后端走 ORM），
 但**易错的判定阈值只有这一份**。
 """
+
 from __future__ import annotations
 
 # status 语义按「BUG 修复轴」推导；只有落在这条轴上的 status 才参与漂移对账。
@@ -20,23 +21,32 @@ from __future__ import annotations
 BUGFIX_AXIS: frozenset[str] = frozenset({"open", "fixed"})
 
 # 漂移类别，按「需人处理」的优先级从高到低。UI / CLI 排序都用这个次序。
-REGRESSION = "REGRESSION"          # fixed 却又 fail —— 修好的坏了（最高优先级）
-CANDIDATE = "CANDIDATE"            # open 却连续 N 次全 pass —— 疑似已修，可 flip
-THIN_EVIDENCE = "THIN-EVIDENCE"    # open 且最近 pass 但采样不足 N —— 先别 flip
-NO_DATA = "NO-DATA"                # 最近 run 无有效 verdict（全 skip / 无记录）
-EXPECTED = "EXPECTED"              # open 且最近仍 fail —— BUG 仍复现，符合预期
-OK = "OK"                          # fixed 且最近 pass —— 一致
+REGRESSION = "REGRESSION"  # fixed 却又 fail —— 修好的坏了（最高优先级）
+CANDIDATE = "CANDIDATE"  # open 却连续 N 次全 pass —— 疑似已修，可 flip
+THIN_EVIDENCE = "THIN-EVIDENCE"  # open 且最近 pass 但采样不足 N —— 先别 flip
+NO_DATA = "NO-DATA"  # 最近 run 无有效 verdict（全 skip / 无记录）
+EXPECTED = "EXPECTED"  # open 且最近仍 fail —— BUG 仍复现，符合预期
+OK = "OK"  # fixed 且最近 pass —— 一致
 
 DRIFT_ORDER: tuple[str, ...] = (
-    REGRESSION, CANDIDATE, THIN_EVIDENCE, NO_DATA, EXPECTED, OK,
+    REGRESSION,
+    CANDIDATE,
+    THIN_EVIDENCE,
+    NO_DATA,
+    EXPECTED,
+    OK,
 )
 
 # 需要人关注/处理的类别（UI 摘要与 CLI 默认只列这些）。
 ACTIONABLE: frozenset[str] = frozenset({REGRESSION, CANDIDATE, THIN_EVIDENCE})
 
 ICON: dict[str, str] = {
-    REGRESSION: "🔴", CANDIDATE: "🟢", THIN_EVIDENCE: "⏳",
-    NO_DATA: "⚪", EXPECTED: "✓", OK: "·",
+    REGRESSION: "🔴",
+    CANDIDATE: "🟢",
+    THIN_EVIDENCE: "⏳",
+    NO_DATA: "⚪",
+    EXPECTED: "✓",
+    OK: "·",
 }
 
 
