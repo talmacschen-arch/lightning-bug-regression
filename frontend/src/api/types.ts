@@ -193,6 +193,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cases/status-drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Status Drift
+         * @description 对账 YAML `status` 与最近 N 次 run 的 verdict，报漂移。**只读，不改任何文件**。
+         *
+         *     `status`（open/fixed/...）是手工元数据，与 run verdict 是两条独立的轴
+         *     （design.md §4.3 L388）。本 endpoint 扫盘拿每个 case 的 status，查最近 N 个
+         *     done run 拿 verdict，用共享的 `app.utils.status_drift.classify` 判定漂移：
+         *       - 🔴 REGRESSION   : fixed 却又 fail（修好的坏了）
+         *       - 🟢 CANDIDATE    : open 却连续 N 次全 pass（疑似已修，可 flip）
+         *       - ⏳ THIN-EVIDENCE: open 且 pass 但采样不足 N（先别 flip，防假阳性）
+         *       - ⚪ NO-DATA / ✓ EXPECTED / · OK
+         *
+         *     只覆盖落在「BUG 修复轴」的 status（open/fixed）；wontfix/stub/extension 成熟度
+         *     轴的值自然被过滤掉。flip 仍需人确认走 PR——本 endpoint 只对账不写。
+         */
+        get: operations["get_status_drift_cases_status_drift_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cases/{case_id}": {
         parameters: {
             query?: never;
@@ -1065,6 +1096,49 @@ export interface components {
             until_date?: string | null;
         };
         /**
+         * StatusDriftItem
+         * @description One case's drift verdict (GET /cases/status-drift).
+         */
+        StatusDriftItem: {
+            /** Id */
+            id: string;
+            /** Category */
+            category?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status: string;
+            /** Drift */
+            drift: string;
+            /** Detail */
+            detail: string;
+            /** Verdicts */
+            verdicts: string[];
+            /** Suggestion */
+            suggestion?: string | null;
+        };
+        /**
+         * StatusDriftResponse
+         * @description Reconciliation of hand-maintained YAML `status` against recent run
+         *     verdicts (GET /cases/status-drift). Read-only — never mutates a case.
+         */
+        StatusDriftResponse: {
+            /** Rounds */
+            rounds: number;
+            /** Run Ids */
+            run_ids: number[];
+            /** Latest Target */
+            latest_target?: string | null;
+            /** Regression Count */
+            regression_count: number;
+            /** Candidate Count */
+            candidate_count: number;
+            /** Thin Evidence Count */
+            thin_evidence_count: number;
+            /** Items */
+            items: components["schemas"]["StatusDriftItem"][];
+        };
+        /**
          * StepKindOut
          * @description One entry in the `/admin/step-kinds` response.
          *
@@ -1465,6 +1539,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_status_drift_cases_status_drift_get: {
+        parameters: {
+            query?: {
+                rounds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusDriftResponse"];
                 };
             };
             /** @description Validation Error */

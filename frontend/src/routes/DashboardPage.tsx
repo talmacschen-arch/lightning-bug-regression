@@ -27,11 +27,15 @@ import { Button } from '@/components/ui/button';
 type CategoryOut = components['schemas']['CategoryOut'];
 type CaseSummary = components['schemas']['CaseSummary'];
 type RunSummary = components['schemas']['RunSummary'];
+type StatusDrift = components['schemas']['StatusDriftResponse'];
 
 interface DashboardData {
   categories: CategoryOut[];
   casesByCategory: Record<string, CaseSummary[]>;
   recentRuns: RunSummary[];
+  // null = 漂移对账不可用（后端未更新到含 /cases/status-drift 的版本，或该次
+  // fetch 失败）。drift 是增强卡片，绝不能让它拖垮整个 dashboard。
+  drift: StatusDrift | null;
 }
 
 function formatRelative(dateStr: string): string {
@@ -241,6 +245,110 @@ function RecentActivity({ runs }: RecentActivityProps) {
   );
 }
 
+// ---- Status drift ----------------------------------------------------------
+
+const DRIFT_ICON: Record<string, string> = {
+  REGRESSION: '🔴',
+  CANDIDATE: '🟢',
+  'THIN-EVIDENCE': '⏳',
+  'NO-DATA': '⚪',
+  EXPECTED: '✓',
+  OK: '·',
+};
+
+function driftBadgeClass(drift: string): string {
+  if (drift === 'REGRESSION') return 'badge-danger';
+  if (drift === 'CANDIDATE') return 'badge-success';
+  if (drift === 'THIN-EVIDENCE') return 'badge-warning';
+  return 'badge-muted';
+}
+
+interface StatusDriftSectionProps {
+  drift: StatusDrift | null;
+}
+
+/**
+ * 只读对账卡片：YAML `status`（手工元数据）vs 最近 N 次 run 的 verdict。
+ * 只列需处理的类别（REGRESSION / CANDIDATE / THIN-EVIDENCE）。flip 仍走 PR —
+ * 这里不提供任何写操作（design.md：case 是设计层，走 PR 不走运维 UI）。
+ */
+function StatusDriftSection({ drift }: StatusDriftSectionProps) {
+  if (drift === null) {
+    return (
+      <div data-testid="dashboard-status-drift" className="dashboard-section">
+        <div className="dashboard-section-title">Status 漂移对账</div>
+        <div
+          data-testid="dashboard-status-drift-unavailable"
+          className="dashboard-recent-empty"
+        >
+          漂移对账暂不可用（后端可能未更新到含 /cases/status-drift 的版本）。
+        </div>
+      </div>
+    );
+  }
+  const actionable = drift.items.filter(
+    (it) =>
+      it.drift === 'REGRESSION' ||
+      it.drift === 'CANDIDATE' ||
+      it.drift === 'THIN-EVIDENCE',
+  );
+  const runLabel = drift.run_ids.length
+    ? `最近 ${drift.run_ids.length} 次 run（#${drift.run_ids.join(', #')}）`
+    : '暂无已完成的 run';
+
+  return (
+    <div data-testid="dashboard-status-drift" className="dashboard-section">
+      <div className="dashboard-section-title flex items-baseline justify-between">
+        <span>Status 漂移对账</span>
+        <span
+          data-testid="dashboard-status-drift-summary"
+          className="dashboard-section-link"
+        >
+          🔴 {drift.regression_count} · 🟢 {drift.candidate_count} · ⏳{' '}
+          {drift.thin_evidence_count}
+        </span>
+      </div>
+      <div className="kpi-tile-sub">
+        {runLabel}
+        {drift.latest_target ? ` · 目标 ${drift.latest_target}` : ''} · 阈值{' '}
+        {drift.rounds}
+      </div>
+      {actionable.length === 0 ? (
+        <div
+          data-testid="dashboard-status-drift-empty"
+          className="dashboard-recent-empty"
+        >
+          ✅ 无漂移：所有 open/fixed 的 case 与最近测试结果一致。
+        </div>
+      ) : (
+        <ul className="dashboard-activity-list">
+          {actionable.map((it) => (
+            <li
+              key={it.id}
+              data-testid={`dashboard-status-drift-row-${it.id}`}
+              className="dashboard-activity-item"
+            >
+              <Link to={`/cases/${it.id}`}>
+                <span className={`badge ${driftBadgeClass(it.drift)}`}>
+                  {DRIFT_ICON[it.drift] ?? ''} {it.drift}
+                </span>
+                <span className="run-id">{it.id}</span>
+                <span className={`badge ${statusToBadgeClass(it.status)}`}>
+                  {it.status}
+                </span>
+                <span className="run-summary">{it.detail}</span>
+                {it.suggestion ? (
+                  <span className="run-time">{it.suggestion}</span>
+                ) : null}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ---- Quick actions ---------------------------------------------------------
 
 interface QuickActionsProps {
@@ -314,10 +422,21 @@ export default function DashboardPage() {
         const runs = (await apiFetch('/runs', 'get')) as RunSummary[];
         if (cancelled) return;
 
+        // 独立降级：endpoint 缺失（旧后端 404）或该次 fetch 失败时，drift 置
+        // null，dashboard 其余部分照常渲染——不整页报错。
+        let drift: StatusDrift | null = null;
+        try {
+          drift = (await apiFetch('/cases/status-drift', 'get')) as StatusDrift;
+        } catch {
+          drift = null;
+        }
+        if (cancelled) return;
+
         setData({
           categories: catsSorted,
           casesByCategory,
           recentRuns: runs,
+          drift,
         });
       } catch (e) {
         if (cancelled) return;
@@ -388,6 +507,8 @@ export default function DashboardPage() {
           />
         ))}
       </div>
+
+      <StatusDriftSection drift={data.drift} />
 
       <RecentActivity runs={data.recentRuns} />
     </div>
