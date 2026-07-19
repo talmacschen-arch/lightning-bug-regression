@@ -1,7 +1,7 @@
 id: bug-0009-union-all-const-distributed-row-order
 title: UNION ALL (常量 SELECT) 与 (分布式表 SELECT) 拼接时常量行未稳定出现在结果集首行
 category: bug_regression
-status: open
+status: wontfix
 severity: medium
 destructive: false
 
@@ -271,3 +271,10 @@ notes: |
   **教训**：间歇性 BUG 的 dogfood Try 必须 ≥10 次重复采样，3 次不够；3 次
   PASS 不是 fixed 证据。candidate §14 R 反模式："间歇性 BUG 用低重复次数
   验证 = 假阳性 fixed flip 风险高"。
+
+  ---
+  **Reclassified open→wontfix (2026-07-19)**：经排查此非缺陷——行为与 GPDB7 一致，
+  根因是 Cloudberry commit 75c4769a00e “Improve Append plan when General children
+  exist.”（2020-03-09, prajnamort）引入的性能优化；放弃该优化不可取，改用 workaround。
+  故标 wontfix 并保留在 skip-list（run 时 skip，不计入 pass/fail）。fixed_version 留空。
+  （上文写于 open 阶段的“status: open 保留直到…验证非复现再迁 fixed”说明已作废，以本段为准。）

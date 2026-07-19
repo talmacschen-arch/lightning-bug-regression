@@ -1,14 +1,14 @@
 id: bug-0017-analyze-partition-crash
 title: 空叶子分区 delete+vacuum 后 ANALYZE ROOTPARTITION 触发数据库 crash
 category: bug_regression
-status: open
+status: fixed
 severity: high
 destructive: false
 
 source:
   feishu_anchor: ""
   reported_at: "2026-07-14"
-  fixed_version: ""
+  fixed_version: "SynxDB4 4.5.2 build 387"
   ext_doc_url: ""
 issue_url: ""
 tags: [partition, analyze, rootpartition, vacuum, delete, crash, planner_stats]
@@ -167,3 +167,9 @@ notes: |
 
   **status=open**：用户未提供修复版本；待在目标 build 上 Try/Run 验证行为后，
   若已修复再 flip 到 fixed 并回填 source.fixed_version（+ 证据链）。
+
+  ---
+  **Verified fixed on SynxDB4 4.5.2 build 387 (2026-07-19, run #104)**：回归用例在最新 build 上全
+  step PASS（BUG 不复现），据此把 status open→fixed 并回填 source.fixed_version。
+  fixed_version = 验证不复现的 build，非引入修复的 commit。本 case notes 上文写于
+  open 阶段的“status=open / 待验证”说明已被本次验证取代，以本段为准。
