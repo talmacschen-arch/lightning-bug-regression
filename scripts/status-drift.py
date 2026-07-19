@@ -7,20 +7,9 @@
   是两条独立的轴。时间一长，`status` 会与实际 verdict 漂移——最典型的是 BUG
   早就修好、跑绿了，但 YAML 还停在 `open`（stale label）。
 
-本脚本做的是**对账 + 提示**，不改任何文件：
-  - 🔴 REGRESSION   : status=fixed 但最近 N 次 run 里出现过 fail（修好的又坏了）
-  - 🟢 CANDIDATE    : status=open 但最近 N 次 run **连续全 pass**（疑似已修，可 flip）
-  - ⏳ THIN-EVIDENCE: status=open 且最近 pass 但采样不足 N 次（不建议 flip，防假阳性）
-  - ✓  EXPECTED     : status=open 且最近仍 fail（BUG 仍复现，符合预期）
-  - ⚪ NO-DATA      : 最近 run 里该 case 全是 skip / 没有记录
-
-为什么用「连续 N 次 run 全 pass」而不是「最近一次 pass」：
-  bug-0009 的教训（§14 R28）——间歇性 BUG 单次跑绿是假阳性。跨 run 的连续 pass
-  是额外的稳健性闸门。注意这与 case **单次 run 内**的重复轮次（rounds，由 case
-  YAML 自己控制，如 bug-0009 的 10 轮）是不同维度，二者叠加。
-
-  CANDIDATE / REGRESSION 只是**给人看的建议**，flip status 仍需人确认 + 走 PR
-  回填 fixed_version + 证据链。wontfix 永远是人的判定，本脚本不碰。
+本脚本做的是**对账 + 提示**，不改任何文件。漂移分类与阈值判定复用后端的单一真源
+  `backend/app/utils/status_drift.py`（§14 R26/铁律5：classify 不许两处实现），
+  与 `GET /cases/status-drift` 前端卡片用的是同一份逻辑。
 
 退出码：有 REGRESSION → 2；否则 → 0（CANDIDATE 只提示不改退出码）。
 用法：
@@ -37,13 +26,15 @@ from pathlib import Path
 
 import yaml
 
-# status 语义按「BUG 修复轴」推导；只处理落在这条轴上的 status 值。
-# extension 的 stable/experimental/... 是「成熟度轴」，不参与，自然被过滤掉。
-BUGFIX_AXIS = {"open", "fixed"}
-
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+# 复用后端判定核心。脚本本就读 backend/data/runs.db，这里把 backend 加进
+# sys.path 以 import 那份纯逻辑（classify / 常量 / ICON 全在那）。
+sys.path.insert(0, str(repo_root() / "backend"))
+from app.utils import status_drift  # noqa: E402
 
 
 def load_case_status(cases_dir: Path) -> list[dict]:
@@ -91,30 +82,14 @@ def recent_verdicts(db: Path, rounds: int) -> tuple[list[int], dict[str, list[st
         con.close()
 
 
-def classify(status: str, verdicts: list[str], rounds: int) -> tuple[str, str]:
-    """返回 (category, 说明)。verdicts 为该 case 最近若干 run 的 verdict（新→旧）。"""
-    non_skip = [v for v in verdicts if v in ("pass", "fail", "error")]
-    if status == "fixed":
-        if any(v in ("fail", "error") for v in non_skip):
-            return "REGRESSION", f"最近 {len(non_skip)} 次有 fail/error（修好的又坏了）"
-        if non_skip:
-            return "OK", "最近仍 pass，一致"
-        return "NO-DATA", "最近 run 无有效 verdict（全 skip/无记录）"
-    # status == open
-    if not non_skip:
-        return "NO-DATA", "最近 run 无有效 verdict（全 skip/无记录）"
-    if all(v == "pass" for v in non_skip):
-        if len(non_skip) >= rounds:
-            return "CANDIDATE", f"最近连续 {len(non_skip)} 次全 pass（≥阈值 {rounds}，疑似已修）"
-        return "THIN-EVIDENCE", f"最近 {len(non_skip)} 次 pass 但 < 阈值 {rounds}（采样不足，先别 flip）"
-    return "EXPECTED", "最近仍 fail（BUG 仍复现，符合 open 预期）"
-
-
-ORDER = ["REGRESSION", "CANDIDATE", "THIN-EVIDENCE", "NO-DATA", "EXPECTED", "OK"]
-ICON = {
-    "REGRESSION": "🔴", "CANDIDATE": "🟢", "THIN-EVIDENCE": "⏳",
-    "NO-DATA": "⚪", "EXPECTED": "✓", "OK": "·",
-}
+def suggestion(drift: str, latest_target: str | None) -> str:
+    if drift == status_drift.REGRESSION:
+        return "查回归，勿盲目改 status"
+    if drift == status_drift.CANDIDATE:
+        return f"人核后 flip fixed + 回填 fixed_version={latest_target!r}"
+    if drift == status_drift.THIN_EVIDENCE:
+        return "多跑几次再看"
+    return ""
 
 
 def main() -> int:
@@ -135,15 +110,15 @@ def main() -> int:
 
     rows = []
     for c in cases:
-        if c["status"] not in BUGFIX_AXIS:
+        if c["status"] not in status_drift.BUGFIX_AXIS:
             continue  # wontfix/stub/stable/... 不在 BUG 修复轴上，跳过
-        cat, why = classify(c["status"], verdicts.get(c["id"], []), args.rounds)
-        rows.append({**c, "drift": cat, "why": why})
-    rows.sort(key=lambda r: (ORDER.index(r["drift"]), r["id"]))
+        drift, why = status_drift.classify(c["status"], verdicts.get(c["id"], []), args.rounds)
+        rows.append({**c, "drift": drift, "why": why})
+    rows.sort(key=lambda r: (status_drift.DRIFT_ORDER.index(r["drift"]), r["id"]))
 
-    actionable = [r for r in rows if r["drift"] in ("REGRESSION", "CANDIDATE", "THIN-EVIDENCE")]
-    n_reg = sum(1 for r in rows if r["drift"] == "REGRESSION")
-    n_cand = sum(1 for r in rows if r["drift"] == "CANDIDATE")
+    actionable = [r for r in rows if r["drift"] in status_drift.ACTIONABLE]
+    n_reg = sum(1 for r in rows if r["drift"] == status_drift.REGRESSION)
+    n_cand = sum(1 for r in rows if r["drift"] == status_drift.CANDIDATE)
 
     if args.format == "md":
         print("## status 漂移对账")
@@ -157,17 +132,14 @@ def main() -> int:
             print("| | case | 当前 status | 漂移 | 依据 | 建议 |")
             print("|---|---|---|---|---|---|")
             for r in actionable:
-                sug = {
-                    "REGRESSION": "查回归，勿盲目改 status",
-                    "CANDIDATE": f"人核后 flip fixed + 回填 fixed_version={latest_target!r}",
-                    "THIN-EVIDENCE": "多跑几次再看",
-                }[r["drift"]]
-                print(f"| {ICON[r['drift']]} | `{r['id']}` | {r['status']} | {r['drift']} | {r['why']} | {sug} |")
+                icon = status_drift.ICON[r["drift"]]
+                print(f"| {icon} | `{r['id']}` | {r['status']} | {r['drift']} | {r['why']} | {suggestion(r['drift'], latest_target)} |")
         print()
         print("> status flip 仍需人确认 + 走 PR；wontfix 永远手工。本脚本只对账不改文件。")
     else:
         for r in rows:
-            print(f"{ICON[r['drift']]} {r['drift']:13s} {r['id']:52s} status={r['status']:6s} {r['why']}")
+            icon = status_drift.ICON[r["drift"]]
+            print(f"{icon} {r['drift']:13s} {r['id']:52s} status={r['status']:6s} {r['why']}")
 
     return 2 if n_reg else 0
 

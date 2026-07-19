@@ -168,6 +168,18 @@ def list_runs(
     return list(session.scalars(stmt).all())
 
 
+def list_recent_done_runs(session: Session, limit: int = 3) -> list[Run]:
+    """Most-recent runs with ``status='done'``, newest first, capped at ``limit``.
+
+    Powers the "last N rounds" verdict window for status-drift accounting
+    (GET /cases/status-drift + scripts/status-drift.py's ORM path). The
+    ``status='done'`` filter excludes running/aborted runs so partial or
+    interrupted results don't skew drift classification.
+    """
+    stmt = select(Run).where(Run.status == "done").order_by(Run.id.desc()).limit(limit)
+    return list(session.scalars(stmt).all())
+
+
 def finish_run(
     session: Session,
     run_id: int,
