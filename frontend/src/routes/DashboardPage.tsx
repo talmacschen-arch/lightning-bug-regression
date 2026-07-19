@@ -33,7 +33,9 @@ interface DashboardData {
   categories: CategoryOut[];
   casesByCategory: Record<string, CaseSummary[]>;
   recentRuns: RunSummary[];
-  drift: StatusDrift;
+  // null = 漂移对账不可用（后端未更新到含 /cases/status-drift 的版本，或该次
+  // fetch 失败）。drift 是增强卡片，绝不能让它拖垮整个 dashboard。
+  drift: StatusDrift | null;
 }
 
 function formatRelative(dateStr: string): string {
@@ -262,7 +264,7 @@ function driftBadgeClass(drift: string): string {
 }
 
 interface StatusDriftSectionProps {
-  drift: StatusDrift;
+  drift: StatusDrift | null;
 }
 
 /**
@@ -271,6 +273,19 @@ interface StatusDriftSectionProps {
  * 这里不提供任何写操作（design.md：case 是设计层，走 PR 不走运维 UI）。
  */
 function StatusDriftSection({ drift }: StatusDriftSectionProps) {
+  if (drift === null) {
+    return (
+      <div data-testid="dashboard-status-drift" className="dashboard-section">
+        <div className="dashboard-section-title">Status 漂移对账</div>
+        <div
+          data-testid="dashboard-status-drift-unavailable"
+          className="dashboard-recent-empty"
+        >
+          漂移对账暂不可用（后端可能未更新到含 /cases/status-drift 的版本）。
+        </div>
+      </div>
+    );
+  }
   const actionable = drift.items.filter(
     (it) =>
       it.drift === 'REGRESSION' ||
@@ -407,10 +422,14 @@ export default function DashboardPage() {
         const runs = (await apiFetch('/runs', 'get')) as RunSummary[];
         if (cancelled) return;
 
-        const drift = (await apiFetch(
-          '/cases/status-drift',
-          'get',
-        )) as StatusDrift;
+        // 独立降级：endpoint 缺失（旧后端 404）或该次 fetch 失败时，drift 置
+        // null，dashboard 其余部分照常渲染——不整页报错。
+        let drift: StatusDrift | null = null;
+        try {
+          drift = (await apiFetch('/cases/status-drift', 'get')) as StatusDrift;
+        } catch {
+          drift = null;
+        }
         if (cancelled) return;
 
         setData({

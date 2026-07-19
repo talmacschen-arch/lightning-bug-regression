@@ -110,6 +110,7 @@ function setupMocks(opts?: {
   cases?: Record<string, typeof FAKE_BUG_CASES>;
   runs?: typeof FAKE_RUNS;
   drift?: StatusDriftResp;
+  driftFails?: boolean;
 }) {
   const cats = opts?.categories ?? FAKE_CATEGORIES;
   const casesByCategory = opts?.cases ?? {
@@ -122,7 +123,10 @@ function setupMocks(opts?: {
 
   apiFetchMock.mockImplementation(async (path: string, method: string, init?: { query?: { category?: string } }) => {
     if (path === '/admin/categories' && method === 'get') return cats;
-    if (path === '/cases/status-drift' && method === 'get') return drift;
+    if (path === '/cases/status-drift' && method === 'get') {
+      if (opts?.driftFails) throw new Error('404 Not Found');
+      return drift;
+    }
     if (path === '/cases' && method === 'get') {
       const cat = init?.query?.category;
       return casesByCategory[cat ?? ''] ?? [];
@@ -514,6 +518,25 @@ describe('DashboardPage (M5-2)', () => {
       expect(
         screen.queryByTestId('dashboard-status-drift-row-bug-ok'),
       ).toBeNull();
+    });
+
+    it('degrades gracefully when drift endpoint fails (dashboard still opens)', async () => {
+      // 回归 2026-07-19：旧后端无 /cases/status-drift → 404 曾让整个 dashboard
+      // 报错打不开。drift 是增强卡片，失败必须降级、不拖垮主页面。
+      setupMocks({ driftFails: true });
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('page-dashboard')).toBeInTheDocument();
+      });
+      // 绝不能进整页 error
+      expect(screen.queryByTestId('page-dashboard-error')).toBeNull();
+      // drift 卡片降级为 unavailable，其余 KPI 正常
+      expect(
+        screen.getByTestId('dashboard-status-drift-unavailable'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId('dashboard-kpi-category-bug_regression'),
+      ).toBeInTheDocument();
     });
 
     it('lists REGRESSION + CANDIDATE rows, hides OK, surfaces suggestion', async () => {
