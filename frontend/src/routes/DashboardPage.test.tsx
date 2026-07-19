@@ -9,6 +9,9 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import DashboardPage from './DashboardPage';
+import type { components } from '@/api/types';
+
+type StatusDriftResp = components['schemas']['StatusDriftResponse'];
 
 // ---- mock apiFetch ---------------------------------------------------------
 
@@ -76,10 +79,37 @@ const FAKE_RUNS = [
   { id: 40, status: 'done', started_at: new Date(Date.now() - 48 * 3_600_000).toISOString(), finished_at: null, total: 10, passed: 10, failed: 0, skipped: 0, target_version: null, triggered_by: null },
 ];
 
+const FAKE_DRIFT_EMPTY: StatusDriftResp = {
+  rounds: 3,
+  run_ids: [42, 41, 40],
+  latest_target: 'BUILD-1',
+  regression_count: 0,
+  candidate_count: 0,
+  thin_evidence_count: 0,
+  items: [
+    { id: 'bug-ok', category: 'bug_regression', title: 't', status: 'fixed', drift: 'OK', detail: '一致', verdicts: ['pass'], suggestion: null },
+  ],
+};
+
+const FAKE_DRIFT_WITH_ITEMS: StatusDriftResp = {
+  rounds: 3,
+  run_ids: [42, 41, 40],
+  latest_target: 'BUILD-1',
+  regression_count: 1,
+  candidate_count: 1,
+  thin_evidence_count: 0,
+  items: [
+    { id: 'bug-9001', category: 'bug_regression', title: 't', status: 'fixed', drift: 'REGRESSION', detail: '最近有 fail', verdicts: ['fail', 'pass', 'pass'], suggestion: '查回归，勿盲目改 status' },
+    { id: 'bug-9002', category: 'bug_regression', title: 't', status: 'open', drift: 'CANDIDATE', detail: '连续 3 次 pass', verdicts: ['pass', 'pass', 'pass'], suggestion: "人核后 flip fixed + 回填 fixed_version='BUILD-1'" },
+    { id: 'bug-9003', category: 'bug_regression', title: 't', status: 'fixed', drift: 'OK', detail: '一致', verdicts: ['pass'], suggestion: null },
+  ],
+};
+
 function setupMocks(opts?: {
   categories?: typeof FAKE_CATEGORIES;
   cases?: Record<string, typeof FAKE_BUG_CASES>;
   runs?: typeof FAKE_RUNS;
+  drift?: StatusDriftResp;
 }) {
   const cats = opts?.categories ?? FAKE_CATEGORIES;
   const casesByCategory = opts?.cases ?? {
@@ -88,9 +118,11 @@ function setupMocks(opts?: {
     external_systems: [],
   };
   const runs = opts?.runs ?? FAKE_RUNS;
+  const drift = opts?.drift ?? FAKE_DRIFT_EMPTY;
 
   apiFetchMock.mockImplementation(async (path: string, method: string, init?: { query?: { category?: string } }) => {
     if (path === '/admin/categories' && method === 'get') return cats;
+    if (path === '/cases/status-drift' && method === 'get') return drift;
     if (path === '/cases' && method === 'get') {
       const cat = init?.query?.category;
       return casesByCategory[cat ?? ''] ?? [];
@@ -465,6 +497,48 @@ describe('DashboardPage (M5-2)', () => {
       expect(quickActionsIdx).toBeGreaterThanOrEqual(0);
       expect(kpiRowIdx).toBeGreaterThanOrEqual(0);
       expect(quickActionsIdx).toBeLessThan(kpiRowIdx);
+    });
+  });
+
+  describe('Status drift card (只读对账)', () => {
+    it('shows empty state + zero summary when no drift', async () => {
+      setupMocks(); // default FAKE_DRIFT_EMPTY (all OK)
+      renderPage();
+      await waitFor(() => {
+        expect(screen.getByTestId('dashboard-status-drift')).toBeInTheDocument();
+      });
+      expect(
+        screen.getByTestId('dashboard-status-drift-empty'),
+      ).toBeInTheDocument();
+      // no actionable rows rendered
+      expect(
+        screen.queryByTestId('dashboard-status-drift-row-bug-ok'),
+      ).toBeNull();
+    });
+
+    it('lists REGRESSION + CANDIDATE rows, hides OK, surfaces suggestion', async () => {
+      setupMocks({ drift: FAKE_DRIFT_WITH_ITEMS });
+      renderPage();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId('dashboard-status-drift-row-bug-9001'),
+        ).toBeInTheDocument();
+      });
+      // CANDIDATE row present
+      expect(
+        screen.getByTestId('dashboard-status-drift-row-bug-9002'),
+      ).toBeInTheDocument();
+      // OK row must NOT be shown — only actionable categories are listed
+      expect(
+        screen.queryByTestId('dashboard-status-drift-row-bug-9003'),
+      ).toBeNull();
+      // summary shows counts (🔴 1 · 🟢 1 · ⏳ 0)
+      expect(
+        screen.getByTestId('dashboard-status-drift-summary'),
+      ).toHaveTextContent('1');
+      // candidate row surfaces the fixed_version backfill suggestion
+      const candRow = screen.getByTestId('dashboard-status-drift-row-bug-9002');
+      expect(within(candRow).getByText(/BUILD-1/)).toBeInTheDocument();
     });
   });
 

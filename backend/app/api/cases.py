@@ -51,6 +51,7 @@ from app.runner.sql_driver import SqlSessionPool
 from app.storage import sqlite_store
 from app.storage.models import CaseCategory
 from app.storage.yaml_loader import CaseValidationError, CategoryMeta, load_case
+from app.utils import status_drift
 from app.utils.time import as_utc
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,32 @@ class CaseRecentRunOut(BaseModel):
     case_status: str | None = None  # this case's result in that run
     duration_ms: int | None = None
     target_version: str | None = None  # run's target version (M6-D3 Tier2)
+
+
+class StatusDriftItem(BaseModel):
+    """One case's drift verdict (GET /cases/status-drift)."""
+
+    id: str
+    category: str | None = None
+    title: str | None = None
+    status: str  # current YAML status (open / fixed)
+    drift: str  # REGRESSION / CANDIDATE / THIN-EVIDENCE / NO-DATA / EXPECTED / OK
+    detail: str  # human-readable reason (zh)
+    verdicts: list[str]  # this case's verdict in the last N runs, newest-first
+    suggestion: str | None = None
+
+
+class StatusDriftResponse(BaseModel):
+    """Reconciliation of hand-maintained YAML `status` against recent run
+    verdicts (GET /cases/status-drift). Read-only — never mutates a case."""
+
+    rounds: int
+    run_ids: list[int]  # last N done-run ids, newest-first
+    latest_target: str | None = None
+    regression_count: int
+    candidate_count: int
+    thin_evidence_count: int
+    items: list[StatusDriftItem]  # every open/fixed case, drift-priority sorted
 
 
 class ValidateRequest(BaseModel):
@@ -381,6 +408,87 @@ def list_cases(category: str | None = None, q: str | None = None) -> list[CaseSu
 
         summaries.append(summary)
     return summaries
+
+
+def _drift_suggestion(drift: str, latest_target: str | None) -> str | None:
+    """建议行动（与 scripts/status-drift.py 保持一致）。只对需处理的类别给建议。"""
+    if drift == status_drift.REGRESSION:
+        return "查回归，勿盲目改 status"
+    if drift == status_drift.CANDIDATE:
+        tgt = latest_target or "最新验证 build"
+        return f"人核后 flip fixed + 回填 fixed_version={tgt!r}"
+    if drift == status_drift.THIN_EVIDENCE:
+        return "多跑几次再看"
+    return None
+
+
+@router.get("/cases/status-drift", response_model=StatusDriftResponse)
+def get_status_drift(rounds: int = 3) -> StatusDriftResponse:
+    """对账 YAML `status` 与最近 N 次 run 的 verdict，报漂移。**只读，不改任何文件**。
+
+    `status`（open/fixed/...）是手工元数据，与 run verdict 是两条独立的轴
+    （design.md §4.3 L388）。本 endpoint 扫盘拿每个 case 的 status，查最近 N 个
+    done run 拿 verdict，用共享的 `app.utils.status_drift.classify` 判定漂移：
+      - 🔴 REGRESSION   : fixed 却又 fail（修好的坏了）
+      - 🟢 CANDIDATE    : open 却连续 N 次全 pass（疑似已修，可 flip）
+      - ⏳ THIN-EVIDENCE: open 且 pass 但采样不足 N（先别 flip，防假阳性）
+      - ⚪ NO-DATA / ✓ EXPECTED / · OK
+
+    只覆盖落在「BUG 修复轴」的 status（open/fixed）；wontfix/stub/extension 成熟度
+    轴的值自然被过滤掉。flip 仍需人确认走 PR——本 endpoint 只对账不写。
+    """
+    if rounds < 1:
+        rounds = 1
+    if rounds > 50:
+        rounds = 50
+
+    categories = _load_categories()
+    category_meta = _build_category_meta(categories)
+
+    # 最近 N 个 done run 的 verdict：{case_id: [verdict 新→旧]}
+    verdict_map: dict[str, list[str]] = {}
+    run_ids: list[int] = []
+    latest_target: str | None = None
+    with sqlite_store.get_session() as sess:
+        runs = sqlite_store.list_recent_done_runs(sess, limit=rounds)
+        run_ids = [r.id for r in runs]
+        if runs:
+            latest_target = runs[0].target_version
+        for r in runs:  # runs 已按 id DESC（新→旧）
+            for cr in sqlite_store.list_case_results(sess, r.id):
+                verdict_map.setdefault(cr.case_id, []).append(cr.status)
+
+    items: list[StatusDriftItem] = []
+    for path, _cat_name in _iter_case_files(categories):
+        _raw_text, raw_dict, parse_err = _safe_parse_raw(path)
+        summary = _summary_from_raw(path, raw_dict, parse_err, category_meta)
+        if summary.status not in status_drift.BUGFIX_AXIS:
+            continue  # wontfix/stub/invalid/成熟度轴 不参与对账
+        verdicts = verdict_map.get(summary.id, [])
+        drift, detail = status_drift.classify(summary.status, verdicts, rounds)
+        items.append(
+            StatusDriftItem(
+                id=summary.id,
+                category=summary.category,
+                title=summary.title,
+                status=summary.status,
+                drift=drift,
+                detail=detail,
+                verdicts=verdicts,
+                suggestion=_drift_suggestion(drift, latest_target),
+            )
+        )
+    items.sort(key=lambda it: (status_drift.DRIFT_ORDER.index(it.drift), it.id))
+
+    return StatusDriftResponse(
+        rounds=rounds,
+        run_ids=run_ids,
+        latest_target=latest_target,
+        regression_count=sum(1 for it in items if it.drift == status_drift.REGRESSION),
+        candidate_count=sum(1 for it in items if it.drift == status_drift.CANDIDATE),
+        thin_evidence_count=sum(1 for it in items if it.drift == status_drift.THIN_EVIDENCE),
+        items=items,
+    )
 
 
 @router.get("/cases/{case_id}", response_model=CaseDetail)
