@@ -1,14 +1,14 @@
 id: bug-0015-pg-dump-unsupport-pax
 title: "pg_dump 不支持导出 PAX 表（warning: unsupport am pax yet，DDL 被静默丢弃）"
 category: bug_regression
-status: open
+status: fixed
 severity: high
 destructive: false
 
 source:
   feishu_anchor: ""
   reported_at: "2026-06-29"
-  fixed_version: ""
+  fixed_version: "SynxDB4 4.5.2 build 387"
   ext_doc_url: ""
 issue_url: ""
 tags: [pg_dump, pax, ddl, backup, partition, table-and-children, schema_dump]
@@ -232,3 +232,9 @@ notes: |
     而 `-t heap_part`（无 `*`）只导父表 → 坐实“分区步必须用通配/`--table-and-children`
     才能带上子分区”，且本版本 pax 路径把它们全丢了。
   → 两条核心断言在 build143161 预期 FAIL（BUG 未修复），prep/teardown 预期 PASS。
+
+  ---
+  **Verified fixed on SynxDB4 4.5.2 build 387 (2026-07-19, run #104)**：回归用例在最新 build 上全
+  step PASS（BUG 不复现），据此把 status open→fixed 并回填 source.fixed_version。
+  fixed_version = 验证不复现的 build，非引入修复的 commit。本 case notes 上文写于
+  open 阶段的“status=open / 待验证”说明已被本次验证取代，以本段为准。
