@@ -33,7 +33,8 @@ description: |
 procedure: |
   1) precondition (step 1): curl ES /_cluster/health → 期望 "status" : "green"
      （非 green 视为外部依赖未就绪，case 立即 fail，后续 step 不跑）
-  2) setup: DROP 旧表 + CREATE SCHEMA + CREATE EXTENSION zombodb（幂等）
+  2) setup: DROP 旧表 + CREATE SCHEMA + DROP+CREATE EXTENSION zombodb（强制重装扩展 SQL 对象；
+     注意 CASCADE 会连带删除全库所有 zombodb 索引，仅在换过新 .so 后需要重装时使用）
   3) step 2: 建分区表
   4) step 3: 灌 70,000 行确定性数据（先建 324 个 LOT 池，再主灌）
   5) step 4: 建 BTREE + GIN 索引
@@ -67,7 +68,8 @@ setup:
   - DROP TABLE IF EXISTS mfg_m.tb_mpmab_glob_crcr_cell_trc_s CASCADE
   - DROP TABLE IF EXISTS mfg_m.zz_lot_pool
   - CREATE SCHEMA IF NOT EXISTS mfg_m
-  - CREATE EXTENSION IF NOT EXISTS zombodb
+  - DROP EXTENSION IF EXISTS zombodb CASCADE
+  - CREATE EXTENSION zombodb
 
 steps:
   - name: "precondition: ES /_cluster/health status=green (失败则后续 step 跳)"
