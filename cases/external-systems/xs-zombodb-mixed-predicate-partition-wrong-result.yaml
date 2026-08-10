@@ -1,0 +1,408 @@
+id: xs-zombodb-mixed-predicate-partition-wrong-result
+title: ZomboDB ==> 与等价常规查询结果不一致（分区表 + 数组谓词 + 常规 IN 过滤返回 0 行）
+category: external_systems
+status: open
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "section-zombodb-vs-equivalent-mixed-predicate-202608"
+  reported_at: "2026-08-08"
+  fixed_version: ""
+  ext_doc_url: "https://github.com/zombodb/zombodb"
+issue_url: ""
+tags: [external_systems, zombodb, elasticsearch, partition, array_predicate, wrong_result, mixed_predicate]
+
+description: |
+  ZomboDB (PG ↔ Elasticsearch 桥接 extension) 在**分区表**上，用 ZQL `==>` 数组
+  谓词 **叠加一个常规 SQL 谓词**（分区键 `etl_ldup_dt IN (...)`）时，返回 **0 行**——
+  但语义完全等价的常规查询（GIN 数组重叠 `&&` + 同一 `IN` 过滤）返回 **130 行**。
+  两者应当结果一致，属结果错误（wrong result），非报错。
+
+  复现规模（完全确定性，取模造数，重跑一致）：
+    - 分区表 tb_mpmab_glob_crcr_cell_trc_s：ao_row + zstd，按 etl_ldup_dt RANGE
+      分区（p202601~p202607 + DEFAULT），7 个 2026 月分区各灌 10,000 行 = 70,000 行；
+    - 每分区按 rn%5 分 5 桶，GOLDEN 桶（rn%5=0）的 lot_id_ary_ctn 恰含 3 个 ANCHOR
+      {BC5F318090, BC5F319091, BC5F319092}，且 ANCHOR 只出现在 GOLDEN 行；
+    - 目标查询：lot_id_ary_ctn 命中任一 ANCHOR 且 etl_ldup_dt ∈ {20260319, 20260320}
+      → 确定性命中 130 行（20260319:65 + 20260320:65）。
+
+  索引：BTREE(fin_trc_id/etl_ldup_dt/row_id) + GIN(lot_id_ary_ctn 等) +
+  zombodb((表.*))（建索引时把全表同步到外部 ES）。
+
+procedure: |
+  1) precondition (step 1): curl ES /_cluster/health → 期望 "status" : "green"
+     （非 green 视为外部依赖未就绪，case 立即 fail，后续 step 不跑）
+  2) setup: DROP 旧表 + CREATE SCHEMA + CREATE EXTENSION zombodb（幂等）
+  3) step 2: 建分区表
+  4) step 3: 灌 70,000 行确定性数据（先建 324 个 LOT 池，再主灌）
+  5) step 4: 建 BTREE + GIN 索引
+  6) step 5: 建 zombodb 索引（同步 7 万行到 ES）
+  7) step 6: ANALYZE（kind: shell + psql -c，非事务安全 DDL 走 shell）
+  8) step 7: sanity 全表行数 == 70000
+  9) step 8: 对照组——常规 `&&` + `IN` 查询 == 130（真值锚点，应通过）
+  10) step 9: 绕行组——把 IN 条件也下推到 ES 的 ZQL == 130（记录 workaround，应通过）
+  11) step 10: **BUG 步**——ZQL `==>` 数组谓词 + 常规 `etl_ldup_dt IN` == 130
+      （bug 存在时返回 0 → 断言失败 → 复现 bug；修复后返回 130 → 通过）
+
+expected: |
+  - ES 健康检查 stdout 含 `"status" : "green"`
+  - 建表 / 灌数 / 建索引 / ANALYZE 全程无 ERROR / FATAL
+  - 全表行数 == 70000
+  - 对照组常规查询 == 130（真值）
+  - 绕行组 ZQL（IN 下推 ES）== 130
+  - **BUG 步**：ZQL `==>` + 常规 IN **期望 == 130**；当前构建返回 0（复现中）；
+    修复后应返回 130。
+
+applies_to: {}
+preconditions: {}
+external_deps: [elasticsearch]
+
+defaults:
+  database: gpadmin
+
+sessions: {}
+
+setup:
+  - DROP TABLE IF EXISTS mfg_m.tb_mpmab_glob_crcr_cell_trc_s CASCADE
+  - DROP TABLE IF EXISTS mfg_m.zz_lot_pool
+  - CREATE SCHEMA IF NOT EXISTS mfg_m
+  - CREATE EXTENSION IF NOT EXISTS zombodb
+
+steps:
+  - name: "precondition: ES /_cluster/health status=green (失败则后续 step 跳)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'curl -m 10 -sS "{{ external.elasticsearch.extras.scheme }}://{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}/_cluster/health?pretty"'
+    timeout_sec: 30
+    expect:
+      exit_code: 0
+      stdout_contains: ['"status" : "green"']
+      not_contains: ["FATAL", "Connection refused", "timed out"]
+
+  - name: "建分区表 tb_mpmab_glob_crcr_cell_trc_s (ao_row + RANGE 分区)"
+    kind: sql
+    sql: |
+      CREATE TABLE mfg_m.tb_mpmab_glob_crcr_cell_trc_s (
+          row_id                text,
+          frst_trc_id           text,
+          fin_trc_id            text,
+          proc_gr_id_ary_ctn    text[],
+          plnt_cd_ary_ctn       text[],
+          pldo_cd_ary_ctn       text[],
+          ste_cd_ary_ctn        text[],
+          ln_id_ary_ctn         text[],
+          eqp_id_ary_ctn        text[],
+          proc_id_ary_ctn       text[],
+          dgas_divs_ary_ctn     text[],
+          lot_id_ary_ctn        text[],
+          lot_id_loc_ary_ctn    numeric[],
+          cell_id_ary_ctn       text[],
+          cell_id_loc_ary_ctn   numeric[],
+          plt_id_ary_ctn        text[],
+          otsd_box_id_ary_ctn   text[],
+          prj_nm_ary_ctn        text[],
+          schm_ary_ctn          text[],
+          row_id_ary_ctn        text[],
+          trc_id_ary_ctn        text[],
+          etl_ldup_dt_ary_ctn   text[],
+          loc_id                numeric,
+          data_len              numeric,
+          trc_row_id            text,
+          proc_cnct_yn          text,
+          wk_dt_ary_ctn         text[],
+          data_ldup_dtm         timestamp without time zone,
+          proc_divs_cd          text,
+          etl_ldup_dt           text,
+          jero_id_ary_ctn       text[],
+          can_id_ary_ctn        text[]
+      )
+      USING ao_row
+      WITH (compresstype = zstd, compresslevel = 7)
+      DISTRIBUTED BY (row_id)
+      PARTITION BY RANGE (etl_ldup_dt)
+      (
+          PARTITION p202601 START ('20260101') INCLUSIVE END ('20260201') EXCLUSIVE,
+          PARTITION p202602 START ('20260201') INCLUSIVE END ('20260301') EXCLUSIVE,
+          PARTITION p202603 START ('20260301') INCLUSIVE END ('20260401') EXCLUSIVE,
+          PARTITION p202604 START ('20260401') INCLUSIVE END ('20260501') EXCLUSIVE,
+          PARTITION p202605 START ('20260501') INCLUSIVE END ('20260601') EXCLUSIVE,
+          PARTITION p202606 START ('20260601') INCLUSIVE END ('20260701') EXCLUSIVE,
+          PARTITION p202607 START ('20260701') INCLUSIVE END ('20260801') EXCLUSIVE,
+          DEFAULT PARTITION pothers
+      );
+  - name: "灌 70,000 行确定性数据 (324 LOT 池 + 主灌，ANCHOR 只落 GOLDEN 行)"
+    kind: sql
+    sql: |
+      DROP TABLE IF EXISTS mfg_m.zz_lot_pool;
+      CREATE TABLE mfg_m.zz_lot_pool (seq int, lot_id text) DISTRIBUTED REPLICATED;
+
+      INSERT INTO mfg_m.zz_lot_pool (seq, lot_id)
+      SELECT row_number() OVER (ORDER BY x), x
+        FROM unnest(ARRAY[
+          'BC5F319093','BC5F319094','BC5F319095','BC5F323096','BC5F323097','BC5F323098',
+          'BC5F323099','BC5F323100','BC5F323101','BC5F323102','BC5F324103','BC5F324104',
+          'BC5F324105','BC5F324106','BC5F324107','BC5F324108','BC5F324109','BC5F324110',
+          'BC5F325111','BC5F325112','BC5F325113','BC5F325114','BC5F325115','BC5F325116',
+          'BC5F325117','BC5F325118','BC5F326119','BC5F326120','BC5F326121','BC5F326122',
+          'BC5F326123','BC5F327124','BC5F327125','BC5F327126','BC5F405001','BC5F406002',
+          'BC5F406003','BC5F408004','BC5F409005','BC5F409006','BC5F409007','BC5F409008',
+          'BC5F409009','BC5F413010','BC5F413011','BC5F413012','BC5F413013','BC5F413014',
+          'BC5F413015','BC5F414016','BC5F414017','BC5F414018','BC5F414019','BC5F414020',
+          'BC5F415021','BC5F415022','BC5F415023','BC5F415024','BC5F415025','BC5F415026',
+          'BC5F415027','BC5F415028','BC5F416029','BC5F416030','BC5F416031','BC5F416032',
+          'BC5F416033','BC5F416034','BC5F416035','BC5F417036','BC5F417037','BC5F417038',
+          'BC5F417039','BC5F417040','BC5F417041','BC5F418042','BC5F418043','BC5F418044',
+          'BC5F418045','BC5F418046','BC5F420047','BC5F420048','BC5F420049','BC5F420050',
+          'BC5F420051','BC5F420052','BC5F420053','BC5F420054','BC5F421055','BC5F421056',
+          'BC5F421057','BC5F421058','BC5F421059','BC6F318115','BC6F319116','BC6F319117',
+          'BC6F319118','BC6F319119','BC6F319120','BC6F321131','BC6F321132','BC6F321133',
+          'BC6F323134','BC6F323135','BC6F323136','BC6F323137','BC6F323138','BC6F323139',
+          'BC6F323140','BC6F323141','BC6F324142','BC6F324143','BC6F324144','BC6F324145',
+          'BC6F324146','BC6F324147','BC6F325148','BC6F325149','BC6F325150','BC6F325151',
+          'BC6F325152','BC6F325153','BC6F325154','BC6F326155','BC6F326156','BC6F326157',
+          'BC6F326158','BC6F326159','BC6F326160','BC6F326161','BC6F326162','BC6F327163',
+          'BC6F327164','BC6F327165','BC6F327166','BC6F327167','BC6F327168','BC6F327169',
+          'BC6F328170','BC6F328171','BC6F328172','BC6F328173','BC6F405001','BC6F405002',
+          'BC6F406003','BC6F406004','BC6F406005','BC6F406006','BC6F406007','BC6F407008',
+          'BC6F407009','BC6F407010','BC6F407011','BC6F407012','BC6F407013','BC6F407014',
+          'BC6F409015','BC6F409016','BC6F409017','BC6F409018','BC6F409019','BC6F409020',
+          'BC6F410021','BC6F412022','BC6F412023','BC6F413024','BC6F413025','BC6F413026',
+          'BC6F413027','BC6F413028','BC6F413029','BC6F413030','BC6F414031','BC6F414032',
+          'BC6F414033','BC6F414034','BC6F414035','BC6F414036','BC6F415037','BC6F415038',
+          'BC6F415039','BC6F415040','BC6F415041','BC6F415042','BC6F415043','BC6F415044',
+          'BC6F415045','BC6F415046','BC6F416047','BC6F416048','BC6F416049','BC6F416050',
+          'BC6F416051','BC6F416052','BC6F417053','BC6F417054','BC6F417055','BC6F417056',
+          'BC6F417057','BC6F417058','BC6F417059','BC6F418060','BC6F418061','BC6F418062',
+          'BC6F418063','BC6F418064','BC6F420065','BC6F420066','BC6F420067','BC6F420068',
+          'BC6F420069','BC6F420070','BC6F420071','BC6F420072','BC6F421073','BC6F421074',
+          'BC6F421075','BC6F421076','BC6F421077','BC6F421078','BC7F319042','BC7F323044',
+          'BC7F323045','BC7F323046','BC7F323047','BC7F323048','BC7F323049','BC7F323050',
+          'BC7F324051','BC7F324052','BC7F325053','BC7F325054','BC7F325055','BC7F325056',
+          'BC7F325057','BC7F325058','BC7F325059','BC7F325060','BC7F326061','BC7F326062',
+          'BC7F326063','BC7F326064','BC7F326065','BC7F326066','BC7F327067','BC7F327068',
+          'BC7F327069','BC7F327070','BC7F327071','BC7F327072','BC7F327073','BC7F327074',
+          'BC7F328075','BC7F328076','BC7F328077','BC7F328078','BC7F330079','BC7F406001',
+          'BC7F406002','BC7F406003','BC7F406004','BC7F408005','BC7F408006','BC7F408007',
+          'BC7F408008','BC7F408009','BC7F408010','BC7F409011','BC7F409012','BC7F409013',
+          'BC7F409014','BC7F409015','BC7F409016','BC7F409017','BC7F409018','BC7F410019',
+          'BC7F410020','BC7F410021','BC7F410022','BC7F410023','BC7F410024','BC7F410025',
+          'BC7F411026','BC7F411027','BC7F411028','BC7F413029','BC7F413030','BC7F413031',
+          'BC7F413032','BC7F414033','BC7F414034','BC7F414035','BC7F415036','BC7F415037',
+          'BC7F416038','BC7F416039','BC7F420040','BC7F420041','BC7F420042','BC7F420043',
+          'BC7F420044','BC7F420045','BC7F421046','BC7F421047','BC7F421048','BC7F421049',
+          'BC8F324041','BC8F413001','BC8F414002','BC8F415003','BC8F416004','BC8F420005',
+          'BC8F420006','BC8F420007','BC8F420008','BC8F420009','BC8F420010','BC8F421011',
+          'BC8F421012','BC8F421013','BC8F421014','BC8F421015','BC8F421016','BC8F421017'
+        ]) AS x;
+
+      ANALYZE mfg_m.zz_lot_pool;
+
+      -- ---------------------------------------------------------------------
+      -- 主灌数
+      -- ---------------------------------------------------------------------
+      INSERT INTO mfg_m.tb_mpmab_glob_crcr_cell_trc_s (
+          row_id, frst_trc_id, fin_trc_id,
+          proc_gr_id_ary_ctn, plnt_cd_ary_ctn, pldo_cd_ary_ctn, ste_cd_ary_ctn,
+          ln_id_ary_ctn, eqp_id_ary_ctn, proc_id_ary_ctn, dgas_divs_ary_ctn,
+          lot_id_ary_ctn, lot_id_loc_ary_ctn, cell_id_ary_ctn, cell_id_loc_ary_ctn,
+          plt_id_ary_ctn, otsd_box_id_ary_ctn, prj_nm_ary_ctn, schm_ary_ctn,
+          row_id_ary_ctn, trc_id_ary_ctn, etl_ldup_dt_ary_ctn,
+          loc_id, data_len, trc_row_id, proc_cnct_yn,
+          wk_dt_ary_ctn, data_ldup_dtm, proc_divs_cd, etl_ldup_dt,
+          jero_id_ary_ctn, can_id_ary_ctn
+      )
+      WITH pool AS (
+          SELECT array_agg(lot_id ORDER BY seq) AS arr, count(*)::int AS n
+            FROM mfg_m.zz_lot_pool
+      ),
+      months(ym, ndays) AS (
+          VALUES ('202601',31), ('202602',28), ('202603',31), ('202604',30),
+                 ('202605',31), ('202606',30), ('202607',31)
+      ),
+      g AS (
+          SELECT m.ym, m.ndays, rn,
+                 m.ym || lpad((1 + (rn - 1) % m.ndays)::text, 2, '0') AS etl_dt,
+                 rn % 5 AS bucket
+            FROM months m
+           CROSS JOIN generate_series(1, 10000) AS rn
+      )
+      SELECT
+          'RID_'    || g.ym || '_' || lpad(g.rn::text, 5, '0'),
+          'FTRC_'   || g.ym || '_' || lpad(g.rn::text, 5, '0'),
+          'LTRC_'   || g.ym || '_' || lpad(g.rn::text, 5, '0'),
+
+          ARRAY['E','A','F','C'],                                  -- proc_gr  (含 'E')
+          ARRAY['PL01','PL02'],                                    -- plnt_cd
+          ARRAY['E3','E4'],                                        -- pldo_cd  (含 'E3')
+          ARRAY['ST01'],                                           -- ste_cd
+
+          CASE WHEN g.bucket = 3 THEN ARRAY['E3D99']               -- 反例: 不含 E3D01
+               ELSE ARRAY['E3D01','E3D02'] END,                    -- ln_id
+
+          ARRAY['M1EMIX201','M1EMIX202','M1EMIX203','M1EMIX204'],   -- eqp_id
+          ARRAY['E1000','E1001'],                                  -- proc_id  (含 'E1000')
+          ARRAY['DG1'],                                            -- dgas_divs
+
+          -- ---------------- lot_id_ary_ctn ----------------
+          CASE g.bucket
+            WHEN 0 THEN ARRAY['BC5F318090','BC5F319091','BC5F319092']   -- GOLDEN: ANCHOR
+            WHEN 4 THEN ARRAY['NOISE_' || g.ym || '_' || g.rn,
+                              'NOISE_' || g.ym || '_' || (g.rn + 100000)]
+            ELSE        ARRAY[ p.arr[1 + (g.rn * 3)  % p.n],
+                               p.arr[1 + (g.rn * 7)  % p.n],
+                               p.arr[1 + (g.rn * 13) % p.n] ]
+          END,
+
+          ARRAY[(g.rn % 50)::numeric, ((g.rn + 7) % 50)::numeric],
+          ARRAY['CELL_' || g.ym || '_' || g.rn,
+                'CELL_' || g.ym || '_' || (g.rn + 500000)],
+          ARRAY[(g.rn % 30)::numeric],
+          ARRAY['PLT_' || (g.rn % 40)],
+          ARRAY['BOX_' || (g.rn % 25)],
+          ARRAY['PRJ_TRACE'],
+          ARRAY['MFG_M'],
+          ARRAY['RK_E_' || g.rn, 'RK_A_' || g.rn,
+                'RK_F_' || g.rn, 'RK_C_' || g.rn],                 -- 4 元素, SQL 取 [1]..[4]
+          ARRAY['TRC_' || g.rn],
+          ARRAY[g.etl_dt],
+
+          (g.rn % 100)::numeric,
+          (200 + g.rn % 800)::numeric,
+          'TRCROW_' || g.ym || '_' || g.rn,
+
+          CASE WHEN g.bucket = 2 THEN 'Y' ELSE NULL END,            -- 反例: 非 NULL
+
+          ARRAY[g.etl_dt],
+          (to_date(g.etl_dt,'YYYYMMDD') + (g.rn % 24) * interval '1 hour')::timestamp,
+          'PD' || (g.rn % 5),
+          g.etl_dt,
+          ARRAY['JERO_' || (g.rn % 60)],
+          ARRAY['CAN_'  || (g.rn % 60)]
+        FROM g CROSS JOIN pool p;
+    timeout_sec: 180
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "建 BTREE + GIN 索引"
+    kind: sql
+    sql: |
+      CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx101
+          ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (fin_trc_id);
+      CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx102
+          ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (etl_ldup_dt);
+      CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx103
+          ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (row_id);
+      CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx104
+          ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING gin (lot_id_ary_ctn);
+      CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx105
+          ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING gin (cell_id_ary_ctn);
+    timeout_sec: 120
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "建 zombodb 索引 (同步全表 7 万行到外部 ES，INFO 级日志可忽略)"
+    kind: sql
+    sql: |
+      CREATE INDEX idx_zombodb ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s
+          USING zombodb ((tb_mpmab_glob_crcr_cell_trc_s.*))
+          WITH (url='{{ external.elasticsearch.extras.scheme }}://{{ external.elasticsearch.host }}:{{ external.elasticsearch.port }}/');
+    timeout_sec: 300
+    expect:
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "ANALYZE (kind: shell + psql -c；顶层 ANALYZE 非事务安全走 shell)"
+    kind: shell
+    cmd: su - gpadmin -c "psql -d gpadmin -c 'ANALYZE mfg_m.tb_mpmab_glob_crcr_cell_trc_s'"
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "sanity: 全表行数 == 70000 (确定性造数校验)"
+    kind: sql
+    sql: |
+      SELECT count(*)::int AS n FROM mfg_m.tb_mpmab_glob_crcr_cell_trc_s;
+    timeout_sec: 60
+    expect:
+      scalar: 70000
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "对照组: 常规 && + IN 查询 == 130 (真值锚点，应通过)"
+    kind: sql
+    sql: |
+      SELECT count(*)::int AS hits
+      FROM mfg_m.tb_mpmab_glob_crcr_cell_trc_s
+      WHERE lot_id_ary_ctn && ARRAY['BC5F318090','BC5F319091','BC5F319092']::text[]
+        AND etl_ldup_dt IN ('20260319','20260320');
+    timeout_sec: 60
+    expect:
+      scalar: 130
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "绕行组: ZQL 把 IN 条件也下推 ES == 130 (workaround，应通过)"
+    kind: sql
+    sql: |
+      set enable_seqscan to off;
+      SELECT count(*)::int AS hits
+      FROM mfg_m.tb_mpmab_glob_crcr_cell_trc_s S
+      WHERE S ==> 'lot_id_ary_ctn:[BC5F318090,BC5F319091,BC5F319092] AND etl_ldup_dt:[20260319,20260320]';
+    timeout_sec: 60
+    expect:
+      scalar: 130
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "BUG: ZQL ==> 数组谓词 + 常规 etl_ldup_dt IN 过滤 期望 == 130 (当前返回 0)"
+    kind: sql
+    sql: |
+      set enable_seqscan to off;
+      SELECT count(*)::int AS hits
+      FROM mfg_m.tb_mpmab_glob_crcr_cell_trc_s S
+      WHERE S ==> 'lot_id_ary_ctn:[BC5F318090,BC5F319091,BC5F319092]'
+        AND etl_ldup_dt IN ('20260319','20260320');
+    timeout_sec: 60
+    expect:
+      scalar: 130
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - DROP TABLE IF EXISTS mfg_m.tb_mpmab_glob_crcr_cell_trc_s CASCADE
+  - DROP TABLE IF EXISTS mfg_m.zz_lot_pool
+
+created_by: chenqiang
+created_at: "2026-08-10"
+notes: |
+  **现象**：ZomboDB `==>` 数组谓词与语义等价的常规查询在**分区表**上结果不一致。
+    - ZQL：`S ==> 'lot_id_ary_ctn:[A,B,C]' AND etl_ldup_dt IN ('20260319','20260320')`
+      → 返回 **0 行**（错误）
+    - 常规：`lot_id_ary_ctn && ARRAY[A,B,C] AND etl_ldup_dt IN (...)`
+      → 返回 **130 行**（正确，65+65）
+  两者应一致。属**结果错误**（wrong result），psql 退出码恒 0，故必须用 `scalar`
+  断言鉴别（见框架 crash/wrong-result 判定选型）。
+
+  **回归契约**：BUG 步断言 `scalar: 130`（正确/修复后行为）。当前构建
+  （HashData Lightning 2.5.3 build 147934 + zombodb 3000.1.8 + ES 7.10.2）
+  返回 0 → 该步失败 → case verdict = fail → 忠实复现未修复的 bug。修复后返回 130
+  → 通过。故 `status: open`。
+
+  **步骤编排**：对照组(常规=130) / 绕行组(IN 下推 ES=130) 均在 BUG 步**之前**且应通过，
+  BUG 步放**最后**——orchestrator 同 session 组内「首个非 pass 即 break 后续」，把预期
+  失败的 BUG 步置尾，避免跳过其它断言；报告里可清楚看到「常规通了、zombodb 没通」。
+
+  **确定性造数**：70,000 行 = 7 分区 × 10,000，取模分桶无 random，重跑结果一致；
+  ANCHOR {BC5F318090,BC5F319091,BC5F319092} 只落 GOLDEN 桶(rn%5=0)，
+  故 lot && ANCHOR 且 etl_ldup_dt ∈ {0319,0320} 命中恒为 130。
+
+  **绕行方法**（生产可用）：把 `etl_ldup_dt` 过滤也写进 ZQL 下推到 ES，例如
+  `... AND etl_ldup_dt:[20260319,20260320]`，或用 `dsl.and(dsl.terms(...), dsl.terms(...))`。
+
+  **外部依赖**：
+  - ES：`{{ external.elasticsearch.* }}`（external/elasticsearch.yml 注入，M6-5）；
+    建 zombodb 索引 + ZQL 查询均需 ES 可达；step 1 健康检查非 green 则跳过后续。
+  - zombodb extension 3000.1.8；DUT 走 external/dut.yml。
+
+  **kind 选择 / cross-check #11**：建表 / 灌数 / 建索引 / SELECT 全 tx-safe → kind: sql；
+  顶层 ANALYZE 非事务安全 → kind: shell + psql -c（与 bug-0011/0012 一致）。
+
+  **teardown**：仅 DROP 自建两表；不 DROP EXTENSION zombodb、不 DROP SCHEMA mfg_m
+  （共享资源，可能被其它 case / 业务依赖）。
