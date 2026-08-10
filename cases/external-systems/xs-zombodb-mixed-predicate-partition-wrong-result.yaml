@@ -27,7 +27,7 @@ description: |
     - 目标查询：lot_id_ary_ctn 命中任一 ANCHOR 且 etl_ldup_dt ∈ {20260319, 20260320}
       → 确定性命中 130 行（20260319:65 + 20260320:65）。
 
-  索引：BTREE(fin_trc_id/etl_ldup_dt/row_id) + GIN(lot_id_ary_ctn 等) +
+  索引：BTREE(fin_trc_id/row_id) + GIN(lot_id_ary_ctn 等) +
   zombodb((表.*))（建索引时把全表同步到外部 ES）。
 
 procedure: |
@@ -289,8 +289,9 @@ steps:
     sql: |
       CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx101
           ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (fin_trc_id);
-      CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx102
-          ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (etl_ldup_dt);
+      -- 分区字段不建议建索引
+      -- CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx102
+      --     ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (etl_ldup_dt);
       CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx103
           ON mfg_m.tb_mpmab_glob_crcr_cell_trc_s USING btree (row_id);
       CREATE INDEX tb_mpmab_glob_crcr_cell_trc_s_idx104
@@ -406,3 +407,10 @@ notes: |
 
   **teardown**：仅 DROP 自建两表；不 DROP EXTENSION zombodb、不 DROP SCHEMA mfg_m
   （共享资源，可能被其它 case / 业务依赖）。
+
+  **索引设计决定**：分区键 `etl_ldup_dt` 上**不建** btree（原 idx102 已注释）。
+  分区裁剪本身已覆盖对分区键的等值/范围过滤，再在分区键上单独建索引在
+  Greenplum/Cloudberry 上通常无收益、且不被推荐。去掉它**不影响 bug 复现**：
+  表为 ao_row，位图堆扫描恒 lossy → `==>` 必进 recheck；`enable_seqscan off`
+  下仍由 zombodb 索引驱动 + recheck，BUG 步返回 0 的复现契约不变。对照组
+  (`&&`+`IN`=130) 与绕行组 (ZQL 下推=130) 也都不依赖该索引。
