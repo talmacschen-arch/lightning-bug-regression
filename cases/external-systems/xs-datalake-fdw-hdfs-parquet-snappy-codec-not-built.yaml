@@ -1,0 +1,159 @@
+id: xs-datalake-fdw-hdfs-parquet-snappy-codec-not-built
+title: datalake_fdw 读取 HDFS(simple auth) 上 Snappy 压缩 Parquet 外部表应正常返回，而非 NotImplemented Support for codec 'snappy' not built
+category: external_systems
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "datalake-fdw-hdfs-parquet-snappy-codec-not-built-202608"
+  reported_at: "2026-08-06"
+  fixed_version: "HashData Lightning 2.5.3 build 147934"
+  ext_doc_url: ""
+issue_url: ""
+tags: [external_systems, datalake_fdw, hdfs, parquet, snappy, codec, hadoop_simple]
+
+description: |
+  通过 datalake_fdw 读取 HDFS(simple auth) 上 Snappy 压缩的 Parquet 外部表时，
+  查询应正常返回数据，而不是报：
+    NotImplemented: Support for codec 'snappy' not built
+  该错误是 datalake_fdw 的 Parquet reader(Arrow/parquet-cpp) 构建时未编入 snappy
+  解压 codec 导致——属构建配置缺陷，与查询逻辑/数据无关；修复后 snappy codec 已编入，
+  可正常读取 Snappy Parquet。
+
+  外部数据（HDFS hadoop_simple 上已就绪，2026-08-06 由用户灌入）：
+    /user/hive/warehouse/test_db.db/parquet_snappy_test/ 下两个 Snappy Parquet 文件，
+    合计 100 行，schema=(id int, name text, amount float8, created_date text)，
+    id 取值 1..100（sum(id)=5050），sum(amount)=40661.50。
+
+procedure: |
+  1) precondition (step 1): curl hadoop_simple NameNode /jmx → 期望在线
+     （NameNode 不在线视为外部依赖未就绪，case fail、后续 step 不跑，避免把连接错误
+      误判成 snappy codec 问题）；
+  2) create-objects (step 2): 独占库 xs_datalake_snappy 内 create extension datalake_fdw +
+     CREATE FOREIGN DATA WRAPPER + CREATE SERVER hdfs_server201(protocol hdfs / simple auth,
+     指向 hadoop_simple:9000) + USER MAPPING + CREATE FOREIGN TABLE parquet_snappy_ext
+     (format parquet, compression snappy)；
+  3) assert-read-snappy (step 3, 核心): 先跑用户原始复现 `select * ... limit 10`，再跑确定性
+     聚合 `count(*)/sum(id)/sum(amount)`；期望聚合 = 100 / 5050 / 40661.50，且不含
+     "Support for codec 'snappy' not built" / "NotImplemented"（= 修复后 snappy 可解压）。
+expected: |
+  - NameNode 健康检查 stdout 含 "NameNodeStatus"，无连接错误；
+  - 建对象步 exit 0、含 "CREATE FOREIGN TABLE"、无 ERROR；
+  - 核心读取步 exit 0，聚合输出含 "5050"(sum id) / "40661.50"(sum amount) / "(1 row)"，
+    且不含 "Support for codec 'snappy' not built" / "NotImplemented" / "ERROR"
+    （= snappy 解压成功且 100 行数据正确）；
+  - BUG 复现时：SELECT 报 "NotImplemented: Support for codec 'snappy' not built" →
+    聚合鉴别值缺失 + 报错文案出现 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: [hadoop_simple]
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  # 独占库 xs_datalake_snappy（避免污染 gpadmin + FDW/SERVER 重复创建冲突 + 幂等）。
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS xs_datalake_snappy'"
+  - su - gpadmin -c "psql -d gpadmin -c \"CREATE DATABASE xs_datalake_snappy\""
+
+steps:
+  - name: "precondition: 验证 hadoop_simple NameNode 在线"
+    kind: shell
+    cmd: |
+      curl -m 10 -sS "http://{{ external.hadoop_simple.host }}:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeStatus"
+    timeout_sec: 30
+    expect:
+      exit_code: 0
+      stdout_contains: ["NameNodeStatus"]
+      not_contains: ["Connection refused", "Connection timed out", "Failed to connect"]
+
+  - name: "create-objects: datalake_fdw + server(hdfs simple) + user mapping + snappy parquet foreign table"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d xs_datalake_snappy -v ON_ERROR_STOP=1 -f -' 2>&1 <<'PGEOF'
+      CREATE EXTENSION IF NOT EXISTS datalake_fdw;
+      CREATE FOREIGN DATA WRAPPER datalake_fdw
+        HANDLER datalake_fdw_handler
+        VALIDATOR datalake_fdw_validator
+        OPTIONS ( mpp_execute 'all segments' );
+      DROP SERVER IF EXISTS hdfs_server201 CASCADE;
+      CREATE SERVER hdfs_server201 FOREIGN DATA WRAPPER datalake_fdw
+        OPTIONS (
+          protocol 'hdfs',
+          hdfs_namenodes '{{ external.hadoop_simple.host }}',
+          hdfs_port '9000',
+          hdfs_auth_method 'simple',
+          hadoop_rpc_protection 'authentication',
+          data_transfer_protocol 'false');
+      CREATE USER MAPPING FOR gpadmin SERVER hdfs_server201 OPTIONS (user 'gpadmin');
+      DROP FOREIGN TABLE IF EXISTS parquet_snappy_ext;
+      CREATE FOREIGN TABLE parquet_snappy_ext (
+          id            int,
+          name          text,
+          amount        float8,
+          created_date  text
+      ) SERVER hdfs_server201
+        OPTIONS (
+          filePath    '/user/hive/warehouse/test_db.db/parquet_snappy_test/',
+          format      'parquet',
+          compression 'snappy',
+          enableCache 'false');
+      PGEOF
+    timeout_sec: 60
+    expect:
+      exit_code: 0
+      stdout_contains: ["CREATE FOREIGN TABLE"]
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "assert-read-snappy（核心）: 读 Snappy Parquet 外部表应返回 100 行(sum id=5050, sum amount=40661.50) 而非 codec snappy not built"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d xs_datalake_snappy -f -' 2>&1 <<'PGEOF'
+      -- 用户原始复现语句
+      SELECT * FROM parquet_snappy_ext ORDER BY id LIMIT 10;
+      -- 确定性聚合（证 snappy 解压成功且 100 行数据正确）
+      SELECT count(*) AS row_cnt, sum(id) AS id_sum, round(sum(amount)::numeric,2) AS amount_sum
+        FROM parquet_snappy_ext;
+      PGEOF
+    timeout_sec: 60
+    expect:
+      exit_code: 0
+      stdout_contains: ["5050", "40661.50", "(1 row)"]
+      not_contains:
+        - "Support for codec 'snappy' not built"
+        - "NotImplemented"
+        - "ERROR"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS xs_datalake_snappy'"
+
+created_by: chenqiang
+created_at: "2026-08-11"
+notes: |
+  外部依赖 hadoop_simple（external/hadoop_simple.yml，HDFS 10.14.3.201:9000 simple auth）。
+  外部数据 /user/hive/warehouse/test_db.db/parquet_snappy_test/（两个 Snappy Parquet 文件，
+  合计 100 行，2026-08-06 已就绪）为**前置外部数据**，不由本 case 造数（HDFS 侧已存在）。
+
+  **判定信号**：正面 expect = 修复后行为（红 = 仍有此 BUG）。核心断言用确定性聚合
+  sum(id)=5050（1..100 之和）+ sum(amount)=40661.50 + "(1 row)"，既证 snappy 解压成功、
+  又证 100 行数据完整正确（rule: 测试验证意图，非仅"不报错"）。BUG 复现时 SELECT 报
+  "NotImplemented: Support for codec 'snappy' not built" → 聚合鉴别值缺失 + 报错串出现 → 红。
+  psql 报错在 stderr，故 cmd 末尾 2>&1 并进 stdout（断言只读 stdout）。ORDER BY id 让
+  limit 10 结果稳定（原始 `limit 10` 无序，跨 segment 顺序不定）。
+
+  **precondition 门控**：NameNode 不在线时先 fail、后续 step 不跑（同一默认 session 组内
+  首个非 pass 即 break），避免把 HDFS 连接错误误判为 snappy codec 问题。
+
+  **独占库 + 幂等**：CREATE FOREIGN DATA WRAPPER 无 IF NOT EXISTS，放独占库 xs_datalake_snappy
+  内建/teardown 随库 DROP，避免污染 gpadmin 及重复创建冲突。
+
+  **验证进展（诚实标注）**：2026-08-11 HashData Lightning **2.5.3 build 147934**（datalake_fdw
+  1.0，.so 在 synxdb4-4.5.2 lib）：读 Snappy Parquet 外部表**正常返回 100 行**（sum id=5050,
+  sum amount=40661.50），**无 codec snappy not built 报错** → BUG 不复现 = **已修复**（snappy
+  codec 已编入 Parquet reader；用户确认）。Try 三步全 pass。故 status=fixed。仅此 build 验证
+  不复现，未在更早 build 实证复现，fixed_version 记为"本 case 验证不复现的最早已知 build"。
+  参见外围机制 [[lbr-case-authoring-mechanics]]。
