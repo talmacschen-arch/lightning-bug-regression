@@ -1,0 +1,1401 @@
+id: bug-0023-orca-unionall-band-join-planning-explosion-hang
+title: ORCA(optimizer=on) 对多分支 UNION ALL 派生表施加范围(band)非等值连接谓词时计划生成阶段搜索空间爆炸致查询无法返回（optimizer=off 立即返回）
+category: bug_regression
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "wiki/PylNw7UXXi6xP2kXGagcFkXKnng"
+  reported_at: "2026-08-04"
+  fixed_version: "HashData Lightning 2.5.3 build 147934"
+  ext_doc_url: "https://hashdata.feishu.cn/wiki/PylNw7UXXi6xP2kXGagcFkXKnng"
+issue_url: ""
+tags: [orca, union-all, band-join, non-equijoin, range-predicate, planning-explosion, hang, temp-table, lg]
+
+description: |
+  语句② (f_fetch_mspcb_spcp_vald_inq_img_dtl_sql_v4)：11 段 UNION ALL(每段 hdr JOIN
+  img) 构成派生表 t，再以范围(band)非等值谓词 t.evt_dtm BETWEEN AP.FROM_EVT_DTM AND
+  AP.TO_EVT_DTM 连接临时表 AP(APD_SUMMARY_IMAGE_DATA)，末尾 JOIN eqp_n、LEFT JOIN
+  eqp_mdp_n。
+
+  根因(飞书内测/Broadcom 定位)：GPORCA 计划生成阶段搜索空间组合膨胀。当多分支 UNION
+  ALL 派生表与范围(band)非等值连接谓词同时出现时，ORCA 会把该连接及不等值谓词沿 UNION
+  ALL 下推至各分支、对无法转成 hash 条件的不等值部分枚举大量 NL 连接与分发候选，规模
+  随分支数呈超线性增长，Memo/transform 搜索空间爆炸 → 计划生成无法在可接受时间内收敛
+  ("连 EXPLAIN 都出不来")。**与数据量/统计信息无关，空表即可复现**。
+    - optimizer=on(GPORCA): 卡住/无法返回(计划阶段爆炸)；
+    - optimizer=off(Postgres planner): 不做跨 UNION ALL 连接变换枚举，物化 Append 后
+      一次性 hash join，立即返回(~15ms)。
+  规避：SET optimizer=off，或先把 UNION ALL 物化成临时表再做范围连接。调
+  optimizer_join_order(query/greedy) 无效(仍 ~58s，不可用)。
+
+procedure: |
+  1) setup: 建独占库 bug0023_lgdb + schema esaz_mfg/esaz_mfg_m + 源表 smry_img_f(分区) +
+     维表 eqp_n/eqp_mdp_n + 11 套 hdr/img_mcc_nXX_f(分区, \gexec 生成)；**全部空表**
+     (planning 爆炸与数据无关，空表即可复现)；hdr 的 _ary_ctn 列 SET STATISTICS 0(对齐真实)；
+  2) 每个断言步(独立 session)在**单个 psql 会话**内：先 optimizer=off 建空临时表
+     APD_SUMMARY_IMAGE_DATA(语句①)并 ANALYZE，再 SET 待测 optimizer + statement_timeout=30s，
+     对语句② 跑 **EXPLAIN**(仅计划生成——正是"连 explain 都出不来"的探测点)；
+  3) assert-orca(核心): optimizer=on 应在 30s 内出计划(Optimizer: GPORCA)；
+     assert-pg(对比/回归): optimizer=off 应立即出计划(Optimizer: Postgres query optimizer)。
+expected: |
+  - 两步 psql 退出 0，EXPLAIN 输出含对应 "Optimizer: GPORCA"(orca 步)/
+    "Optimizer: Postgres query optimizer"(pg 步)——该行只在 EXPLAIN 计划生成完成后打印，
+    即"没卡住"的确定性信号；不含 "canceling statement due to statement timeout"/"ERROR"
+    (= 修复后行为)；
+  - BUG 复现时 assert-orca 步：ORCA 计划生成爆炸、30s 内出不来 → statement_timeout 触发 →
+    出现 "canceling statement due to statement timeout"、无 "Optimizer: GPORCA" → 红
+    (optimizer=off 的 assert-pg 步始终绿)。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions:                # 两步独立 session → 独立分组、并发跑、各自报告。两步各开独立
+  pg: {driver: shell}    # psql 会话(TEMP 表必须与查询同会话)，互不影响。
+  orca: {driver: shell}
+
+setup:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0023_lgdb'"
+  - su - gpadmin -c "psql -d gpadmin -c \"CREATE DATABASE bug0023_lgdb TEMPLATE template0\""
+  - |
+    su - gpadmin -c 'psql -d bug0023_lgdb -v ON_ERROR_STOP=1 -f -' <<'DDLEOF'
+    CREATE SCHEMA IF NOT EXISTS esaz_mfg;
+    CREATE SCHEMA IF NOT EXISTS esaz_mfg_m;
+
+
+    -- =====================================================================
+    -- 1) esaz_mfg.tb_mspcb_spcp_vald_smry_img_f   (SQL① 的来源表)
+    --    Partition key: RANGE (perd_st_dtm); 注意 perd_st_dtm 是 TEXT
+    --    Distributed by (isp_eqp_id, perd_st_dtm); ao_row + zstd/7
+    -- =====================================================================
+    DROP TABLE IF EXISTS esaz_mfg.tb_mspcb_spcp_vald_smry_img_f CASCADE;
+
+    CREATE TABLE esaz_mfg.tb_mspcb_spcp_vald_smry_img_f (
+        eqp_gr_id       text,       -- 설비그룹 ID
+        perd_st_dtm     text,       -- 기간시작일시  (분区键, TEXT!)
+        perd_end_dtm    text,       -- 기간종료일시
+        fert_tp_cd      text,       -- 제품유형코드
+        pldo_cd         text,       -- 플랜트동코드
+        proc_gr_id      text,       -- 공정그룹 ID
+        eqp_id          text,       -- 설비 ID
+        isp_eqp_id      text,       -- 검사설비 ID
+        ctgr_cd         text,       -- 카테고리코드
+        isp_atc_id      text,       -- 검사항목 ID
+        all_cnt         numeric,    -- 전체건수
+        chk_cnt         numeric,    -- 확인건수
+        file_nm_er_cnt  numeric,    -- 파일명오류건수
+        file_path_er_cnt numeric,   -- 파일경로오류건수
+        crt_dtm         text,       -- 생성일시
+        crt_user_id     text,       -- 생성사용자 ID
+        evt_st_dtm      text,       -- 이벤트시작일시 (TEXT!)
+        evt_end_dtm     text,       -- 이벤트종료일시 (TEXT!)
+        db_ldup_dly_cnt text,       -- DB 재지연건수
+        etl_ldup_dtm    text,       -- ETL적재일시
+        etl_ldup_dt     text,       -- ETL적재일자
+        patn_area_id    text,       -- 파티션영역 ID
+        data_ldup_dtm   text        -- 데이터적재일시
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7)
+    DISTRIBUTED BY (isp_eqp_id, perd_st_dtm)
+    PARTITION BY RANGE (perd_st_dtm)
+    (
+        PARTITION p202605 START ('2026-05-01 00:00:00') END ('2026-06-01 00:00:00'),
+        PARTITION p202606 START ('2026-06-01 00:00:00') END ('2026-07-01 00:00:00'),
+        PARTITION p202607 START ('2026-07-01 00:00:00') END ('2026-08-01 00:00:00'),
+        PARTITION p202608 START ('2026-08-01 00:00:00') END ('2026-09-01 00:00:00'),
+        DEFAULT PARTITION pothers
+    );
+
+
+    -- =====================================================================
+    -- 4) esaz_mfg.tb_mspcb_spcp_eqp_n   (②末尾 e 侧维表, 真实结构)
+    --    来自 \d+ esaz_mfg.tb_mspcb_spcp_eqp_n
+    --    ②引用列: lang_id, pldo_cd, eqp_id (join) + pldo_nm, eqp_gr_nm,
+    --             uppr_eqp_nm, eqp_nm, vsn_isp_tp_nm, eqp_mdp_id (select)
+    --    Distributed randomly; ao_row + zstd/7 + blocksize=32768 + checksum
+    --    lang_id / pldo_cd / eqp_id 为 NOT NULL
+    -- =====================================================================
+    DROP TABLE IF EXISTS esaz_mfg.tb_mspcb_spcp_eqp_n CASCADE;
+
+    CREATE TABLE esaz_mfg.tb_mspcb_spcp_eqp_n (
+        lang_id           text NOT NULL,
+        ste_id            text,
+        ste_nm            text,
+        cop_cd            text,
+        cop_nm            text,
+        plnt_cd           text,
+        plnt_nm           text,
+        pldo_cd           text NOT NULL,
+        pldo_nm           text,
+        eqp_id            text NOT NULL,
+        eqp_nm            text,
+        eqp_desc          text,
+        eqp_dtl_tp_cd     text,
+        uppr_eqp_id       text,
+        eqp_tp_cd         text,
+        eqp_gr_id         text,
+        eqp_gr_nm         text,
+        use_yn            text,
+        fin_upd_dtm       timestamp without time zone,
+        fin_upd_user_id   text,
+        eqp_shrn_nm       text,
+        ln_id             text,
+        proc_id           text,
+        wip_tp_cd         text,
+        spc_yn            text,
+        half_sltn_yn      text,
+        wide_roll_psbl_yn text,
+        min_isp_noh       numeric(18,0),
+        oul_occr_notf_gr_id text,
+        min_isp_lot_qty   numeric(18,0),
+        data_clct_term_ctn text,
+        rep_eqp_id        text,
+        drft_rep_eqp_id   text,
+        fomt_eqp_id       text,
+        eol_eqp_id        text,
+        fomt_ng_inpt_pct  numeric(5,2),
+        fomt_ln_id        text,
+        rlmp_yn           text,
+        rlmp_uppr_sid_ctn text,
+        vsn_isp_tp_cd     text,
+        isp_loc_ctn       text,
+        eqp_mdp_nm        text,
+        asy_lane_no       text,
+        eqp_gen_ctn       text,
+        data_clct_use_yn  text,
+        ctac_map_use_yn   text,
+        eltr_tp_cd        text,
+        eqp_mgt_egnr_ctn  text,
+        gmes_eqp_gr_id    text,
+        file_svr_ctn      text,
+        eqp_sw_ver_ctn    text,
+        mmd_eqp_shrn_nm   text,
+        mmd_fomt_eqp_id   text,
+        eqp_abbr_cd       text,
+        isp_clct_tgt_yn   text,
+        patn_area_id      text,
+        etl_ldup_dt       text,
+        data_ldup_dtm     timestamp without time zone,
+        fert_tp_cd        text,
+        ln_nm             text,
+        fert_tp_nm        text,
+        fert_gr_cd        text,
+        proc_gr_id        text,
+        proc_gr_nm        text,
+        proc_nm           text,
+        vsn_isp_tp_nm     text,
+        sub_proc_id       text,
+        cont_url          text,
+        lot_loc_tp_cd     text,
+        vct_use_yn        text,
+        eqp_setg_tp_ctn   text,
+        vsn_ctrl_cd       text,
+        ocap_apl_yn       text,
+        anod_noch_cort_yn text,
+        ovly_crt_yn       text,
+        irs_use_yn        text,
+        etl_ldup_dtm      text,
+        eqp_mdp_id        text,
+        ctac_map_mgt_yn   text,
+        ctac_map_clct_yn  text,
+        isp_tp_cd         text,
+        uppr_eqp_nm       text
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7,
+          blocksize=32768, checksum=true)
+    DISTRIBUTED RANDOMLY;
+
+
+    -- =====================================================================
+    -- 5) esaz_mfg.tb_mspcb_spcp_eqp_mdp_n   (②末尾 m 侧维表, 真实结构)
+    --    Distributed randomly; ao_row + zstd/7 + blocksize=32768 + checksum
+    -- =====================================================================
+    DROP TABLE IF EXISTS esaz_mfg.tb_mspcb_spcp_eqp_mdp_n CASCADE;
+
+    CREATE TABLE esaz_mfg.tb_mspcb_spcp_eqp_mdp_n (
+        lang_id         text,       -- 언어 ID
+        eqp_mdp_id      text,       -- 설비제조사 ID
+        eqp_mdp_nm      text,       -- 설비제조사명
+        use_yn          text,       -- 사용여부
+        crt_user_id     text,       -- 생성사용자 ID
+        crt_dtm         text,       -- 생성일시
+        fin_upd_user_id text,       -- 최종수정사용자 ID
+        fin_upd_dtm     text,       -- 최종수정일시
+        etl_ldup_dtm    text,       -- ETL적재일시
+        etl_ldup_dt     text,       -- ETL적재일자
+        patn_area_id    text,       -- 파티션영역 ID
+        data_ldup_dtm   text        -- 데이터적재일시
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7,
+          blocksize=32768, checksum=true)
+    DISTRIBUTED RANDOMLY;
+
+
+    -- =====================================================================
+    -- 2) + 3) img_MCC_nXX / hdr_MCC_nXX  (n01..n11 共 11 套)
+    --    用 \gexec 循环生成, 避免手写 22 张表
+    --    img: 真实结构(图3~6); Partition key RANGE(evt_dtm);
+    --         Distributed by (eqp_gr_id, vsn_isp_tp_cd, evt_dtm, evt_seq)
+    --    hdr: 真实结构(图, \d+ assy_hdr_mcc_n01_f); evt_dtm 为 timestamp,
+    --         与 img 侧等值 join 类型一致(无隐式转换)
+    -- =====================================================================
+
+    -- ---- img_MCC_nXX (真实结构) ----
+    SELECT format($SQL$
+    DROP TABLE IF EXISTS esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_%1$s_f CASCADE;
+    CREATE TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_%1$s_f (
+        eqp_gr_id        text,
+        vsn_isp_tp_cd    text,
+        evt_dtm          timestamp without time zone,
+        evt_seq          numeric,
+        data_clct_tp_cd  text,
+        isp_atc_seq      numeric,
+        isp_atc_id       text,
+        img_file_path_nm text,
+        img_file_nm      text,
+        exst_yn          text,
+        exst_yn_upd_dtm  timestamp without time zone,
+        exst_yn_upd_user_id text,
+        etl_ldup_dt      text,
+        patn_area_id     text,
+        data_ldup_dtm    timestamp without time zone,
+        raw_tbl_nm       text
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7)
+    DISTRIBUTED BY (eqp_gr_id, vsn_isp_tp_cd, evt_dtm, evt_seq)
+    PARTITION BY RANGE (evt_dtm)
+    (
+        PARTITION p202605 START ('2026-05-01 00:00:00'::timestamp) END ('2026-06-01 00:00:00'::timestamp),
+        PARTITION p202606 START ('2026-06-01 00:00:00'::timestamp) END ('2026-07-01 00:00:00'::timestamp),
+        PARTITION p202607 START ('2026-07-01 00:00:00'::timestamp) END ('2026-08-01 00:00:00'::timestamp),
+        DEFAULT PARTITION pothers
+    );
+    $SQL$, 'n'||lpad(g::text,2,'0'))
+    FROM generate_series(1,11) g \gexec
+
+    -- ---- hdr_MCC_nXX (真实结构, 来自 \d+ ...assy_hdr_mcc_n01_f; n01~n11 结构一致) ----
+    --   evt_dtm/crt_dtm 均为 timestamp -> 与 img 侧等值 join 类型一致(无隐式转换)
+    --   多个 _ary_ctn 列 stats target=0 (建后用 ALTER SET STATISTICS 0 复原)
+    SELECT format($SQL$
+    DROP TABLE IF EXISTS esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f CASCADE;
+    CREATE TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f (
+        eqp_gr_id           text,
+        eqp_gr_nm_ary_ctn   text[],
+        vsn_isp_tp_cd       text,
+        vsn_isp_tp_nm_ary_ctn text[],
+        evt_dtm             timestamp without time zone,
+        evt_seq             numeric,
+        ste_id              text,
+        ste_nm_ary_ctn      text[],
+        cop_cd              text,
+        cop_nm_ary_ctn      text[],
+        plnt_cd             text,
+        plnt_nm_ary_ctn     text[],
+        pldo_cd             text,
+        pldo_nm_ary_ctn     text[],
+        ln_id               text,
+        ln_nm_ary_ctn       text[],
+        eqp_id              text,
+        eqp_nm_ary_ctn      text[],
+        isp_eqp_id          text,
+        isp_eqp_nm_ary_ctn  text[],
+        proc_gr_id          text,
+        proc_gr_nm_ary_ctn  text[],
+        proc_id             text,
+        proc_nm_ary_ctn     text[],
+        isp_loc_ctn         text,
+        eqp_gen_ctn         text,
+        ctgr_cd             text,
+        prj_nm              text,
+        mdl_id              text,
+        mdl_nm              text,
+        fert_cd             text,
+        fert_nm             text,
+        lot_id              text,
+        cell_id             text,
+        cell_cunt_no        text,
+        tray_id             text,
+        rcp_id              text,
+        cond_mode_ctn       text,
+        lane_crtn_ctn       text,
+        agt_sw_ver_ctn      text,
+        sw_ver_ctn          text,
+        ptn_no              text,
+        m_seq_val_ctn       text,
+        mdl_ctgr_cd         text,
+        ptn_ctgr_cd         text,
+        del_yn              text,
+        crt_user_id         text,
+        crt_dtm             timestamp without time zone,
+        fin_upd_user_id     text,
+        fin_upd_dtm         timestamp without time zone,
+        etl_ldup_dt         text,
+        patn_area_id        text,
+        data_ldup_dtm       timestamp without time zone,
+        raw_tbl_nm          text,
+        fert_tp_cd          text
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7)
+    DISTRIBUTED BY (eqp_gr_id, vsn_isp_tp_cd, evt_dtm, evt_seq)
+    PARTITION BY RANGE (evt_dtm)
+    (
+        PARTITION p202605 START ('2026-05-01 00:00:00'::timestamp) END ('2026-06-01 00:00:00'::timestamp),
+        PARTITION p202606 START ('2026-06-01 00:00:00'::timestamp) END ('2026-07-01 00:00:00'::timestamp),
+        PARTITION p202607 START ('2026-07-01 00:00:00'::timestamp) END ('2026-08-01 00:00:00'::timestamp),
+        DEFAULT PARTITION pothers
+    );
+    $SQL$, 'n'||lpad(g::text,2,'0'))
+    FROM generate_series(1,11) g \gexec
+
+    -- hdr 的 _ary_ctn 列复原 stats target=0 (11 套)
+    SELECT format($SQL$
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN eqp_gr_nm_ary_ctn     SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN vsn_isp_tp_nm_ary_ctn SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN ste_nm_ary_ctn        SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN cop_nm_ary_ctn        SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN plnt_nm_ary_ctn       SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN pldo_nm_ary_ctn       SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN ln_nm_ary_ctn         SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN eqp_nm_ary_ctn        SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN isp_eqp_nm_ary_ctn    SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN proc_gr_nm_ary_ctn    SET STATISTICS 0;
+    ALTER TABLE esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_%1$s_f ALTER COLUMN proc_nm_ary_ctn       SET STATISTICS 0;
+    $SQL$, 'n'||lpad(g::text,2,'0'))
+    FROM generate_series(1,11) g \gexec
+    DDLEOF
+
+steps:
+  - name: "assert-orca（核心）: optimizer=on ORCA 对 11 段 UNION ALL + band join 应 30s 内出计划不卡（修复后行为）"
+    kind: shell
+    "on": orca
+    cmd: |
+      su - gpadmin -c 'psql -d bug0023_lgdb -f -' 2>&1 <<'PGEOF'
+      SET optimizer=off;
+      DROP TABLE IF EXISTS APD_SUMMARY_IMAGE_DATA;
+      CREATE TEMP TABLE APD_SUMMARY_IMAGE_DATA WITH (APPENDONLY=TRUE, COMPRESSTYPE=ZSTD, COMPRESSLEVEL=7)
+      AS
+      SELECT
+             B.VALID_DATE
+           , B.PROC_GR_ID
+           , B.PLDO_CD
+           , B.EQP_GR_ID
+           , B.EQP_ID
+           , B.ISP_EQP_ID
+           , B.CTGR_CD
+           , B.ISP_ATC_ID
+           , B.CNT_ALL
+           , B.CNT_Y
+           , B.FROM_EVT_DTM::TIMESTAMP
+           , B.TO_EVT_DTM::TIMESTAMP
+        FROM (
+          SELECT DATE_TRUNC('DAY', A.PERD_ST_DTM::TIMESTAMP) AS VALID_DATE
+               , A.PROC_GR_ID
+               , A.PLDO_CD
+               , A.EQP_GR_ID
+               , A.EQP_ID
+               , A.ISP_EQP_ID
+               , A.CTGR_CD
+               , A.ISP_ATC_ID
+               , SUM(A.ALL_CNT)     AS CNT_ALL
+               , SUM(A.CHK_CNT)     AS CNT_Y
+               , MIN(A.EVT_ST_DTM)  AS FROM_EVT_DTM
+               , MAX(A.EVT_END_DTM) AS TO_EVT_DTM
+            FROM ESAZ_MFG.TB_MSPCB_SPCP_VALD_SMRY_IMG_F A
+           WHERE A.PERD_ST_DTM  >= '2026-08-01 00:00:00'   -- 기간 설정
+             AND A.PERD_END_DTM <  '2026-08-02 00:00:00'   -- 기간 설정
+           GROUP BY DATE_TRUNC('DAY', A.PERD_ST_DTM::TIMESTAMP)
+                  , A.PROC_GR_ID
+                  , A.PLDO_CD
+                  , A.EQP_GR_ID
+                  , A.EQP_ID
+                  , A.ISP_EQP_ID
+                  , A.CTGR_CD
+                  , A.ISP_ATC_ID
+        ) B
+       WHERE 1=1
+         AND PROC_GR_ID IN ('A')   -- 조건 설정
+      DISTRIBUTED RANDOMLY;
+
+      -- ★强烈建议: 让② 的范围 join 有统计可依 (对齐修复方案)
+      ANALYZE APD_SUMMARY_IMAGE_DATA;
+      ANALYZE APD_SUMMARY_IMAGE_DATA;
+      SET optimizer=on;
+      SET statement_timeout=30000;
+      EXPLAIN
+      select PLDO_CD        AS "Facility Code"
+           , PLDO_NM        AS "Facility"
+           , EQP_GR_ID      AS "EQP Group ID"
+           , EQP_GR_NM      AS "EQP Group"
+           , EQP_ID         AS "EQP ID"
+           , EQP_NM         AS "Equipment"
+           , VSN_ISP_TP_CD  AS "Vision Type"
+           , VSN_ISP_TP_NM  AS "Inspection Machine Type"
+           , ISP_EQP_ID     AS "Vision ID"
+           , ISP_EQP_NM     AS "Vision"
+           , EQP_MDP_ID     AS "Vision Maker ID"
+           , EQP_MDP_NM     AS "Vision Maker"
+           , CTGR_CD        AS "Category"
+           , EVT_DTM        AS "INSP Time"
+           , ISP_ATC_SEQ    AS "Seq No"
+           , ISP_ATC_ID     AS "Item"
+           , CNT_ALL        AS "Total Count"
+           , CNT_Y          AS "Confirm Count"
+           , IMG_FILE_PATH_NM AS "File Path"
+           , IMG_FILE_NM    AS "File Name"
+           , EXST_YN        AS "File Exist"
+        from (
+          select t.pldo_cd
+               , e.pldo_nm
+               , t.eqp_gr_id
+               , e.eqp_gr_nm
+               , t.eqp_id
+               , e.uppr_eqp_nm  as eqp_nm
+               , t.vsn_isp_tp_cd
+               , e.vsn_isp_tp_nm
+               , t.isp_eqp_id
+               , e.eqp_nm       as isp_eqp_nm
+               , e.eqp_mdp_id
+               , m.eqp_mdp_nm
+               , t.ctgr_cd
+               , t.evt_dtm
+               , t.evt_seq
+               , t.crt_dtm
+               , t.data_clct_tp_cd
+               , t.isp_atc_seq
+               , t.isp_atc_id
+               , ap.cnt_all
+               , ap.cnt_y
+               , t.img_file_path_nm
+               , t.img_file_nm
+               , t.exst_yn
+            from (
+      /* 01,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n01_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n01_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 02,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n02_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n02_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 03,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n03_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n03_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 04,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n04_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n04_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 05,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n05_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n05_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 06,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n06_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n06_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 07,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n07_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n07_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 08,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n08_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n08_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 09,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n09_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n09_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 10,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n10_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n10_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 11,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n11_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n11_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+            ) t
+            join APD_SUMMARY_IMAGE_DATA AP
+              on  AP.ISP_EQP_ID = t.isp_eqp_id
+              and AP.EQP_GR_ID  = t.eqp_gr_id
+              and AP.EQP_ID     = t.eqp_id
+              and AP.CTGR_CD    = t.ctgr_cd
+              and AP.ISP_ATC_ID = t.isp_atc_id
+              and t.evt_dtm     >= AP.FROM_EVT_DTM
+              and t.evt_dtm     <= AP.TO_EVT_DTM
+            join esaz_mfg.tb_mspcb_spcp_eqp_n e
+              on  e.lang_id = 'ko-KR'
+              and e.pldo_cd = t.pldo_cd
+              and e.eqp_id  = t.isp_eqp_id
+            left outer join esaz_mfg.tb_mspcb_spcp_eqp_mdp_n m
+              on  m.lang_id    = e.lang_id
+              and m.eqp_mdp_id = e.eqp_mdp_id
+           ) t
+       where 1=1
+      /*ADD_DETAIL_QUERY_CONDITION*/
+      ;
+      PGEOF
+    timeout_sec: 90
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Optimizer: GPORCA"
+      not_contains:
+        - "canceling statement due to statement timeout"
+        - "ERROR"
+
+  - name: "assert-pg（对比/回归）: optimizer=off 经典 planner 对同一查询应立即出计划"
+    kind: shell
+    "on": pg
+    cmd: |
+      su - gpadmin -c 'psql -d bug0023_lgdb -f -' 2>&1 <<'PGEOF'
+      SET optimizer=off;
+      DROP TABLE IF EXISTS APD_SUMMARY_IMAGE_DATA;
+      CREATE TEMP TABLE APD_SUMMARY_IMAGE_DATA WITH (APPENDONLY=TRUE, COMPRESSTYPE=ZSTD, COMPRESSLEVEL=7)
+      AS
+      SELECT
+             B.VALID_DATE
+           , B.PROC_GR_ID
+           , B.PLDO_CD
+           , B.EQP_GR_ID
+           , B.EQP_ID
+           , B.ISP_EQP_ID
+           , B.CTGR_CD
+           , B.ISP_ATC_ID
+           , B.CNT_ALL
+           , B.CNT_Y
+           , B.FROM_EVT_DTM::TIMESTAMP
+           , B.TO_EVT_DTM::TIMESTAMP
+        FROM (
+          SELECT DATE_TRUNC('DAY', A.PERD_ST_DTM::TIMESTAMP) AS VALID_DATE
+               , A.PROC_GR_ID
+               , A.PLDO_CD
+               , A.EQP_GR_ID
+               , A.EQP_ID
+               , A.ISP_EQP_ID
+               , A.CTGR_CD
+               , A.ISP_ATC_ID
+               , SUM(A.ALL_CNT)     AS CNT_ALL
+               , SUM(A.CHK_CNT)     AS CNT_Y
+               , MIN(A.EVT_ST_DTM)  AS FROM_EVT_DTM
+               , MAX(A.EVT_END_DTM) AS TO_EVT_DTM
+            FROM ESAZ_MFG.TB_MSPCB_SPCP_VALD_SMRY_IMG_F A
+           WHERE A.PERD_ST_DTM  >= '2026-08-01 00:00:00'   -- 기간 설정
+             AND A.PERD_END_DTM <  '2026-08-02 00:00:00'   -- 기간 설정
+           GROUP BY DATE_TRUNC('DAY', A.PERD_ST_DTM::TIMESTAMP)
+                  , A.PROC_GR_ID
+                  , A.PLDO_CD
+                  , A.EQP_GR_ID
+                  , A.EQP_ID
+                  , A.ISP_EQP_ID
+                  , A.CTGR_CD
+                  , A.ISP_ATC_ID
+        ) B
+       WHERE 1=1
+         AND PROC_GR_ID IN ('A')   -- 조건 설정
+      DISTRIBUTED RANDOMLY;
+
+      -- ★强烈建议: 让② 的范围 join 有统计可依 (对齐修复方案)
+      ANALYZE APD_SUMMARY_IMAGE_DATA;
+      ANALYZE APD_SUMMARY_IMAGE_DATA;
+      SET optimizer=off;
+      SET statement_timeout=30000;
+      EXPLAIN
+      select PLDO_CD        AS "Facility Code"
+           , PLDO_NM        AS "Facility"
+           , EQP_GR_ID      AS "EQP Group ID"
+           , EQP_GR_NM      AS "EQP Group"
+           , EQP_ID         AS "EQP ID"
+           , EQP_NM         AS "Equipment"
+           , VSN_ISP_TP_CD  AS "Vision Type"
+           , VSN_ISP_TP_NM  AS "Inspection Machine Type"
+           , ISP_EQP_ID     AS "Vision ID"
+           , ISP_EQP_NM     AS "Vision"
+           , EQP_MDP_ID     AS "Vision Maker ID"
+           , EQP_MDP_NM     AS "Vision Maker"
+           , CTGR_CD        AS "Category"
+           , EVT_DTM        AS "INSP Time"
+           , ISP_ATC_SEQ    AS "Seq No"
+           , ISP_ATC_ID     AS "Item"
+           , CNT_ALL        AS "Total Count"
+           , CNT_Y          AS "Confirm Count"
+           , IMG_FILE_PATH_NM AS "File Path"
+           , IMG_FILE_NM    AS "File Name"
+           , EXST_YN        AS "File Exist"
+        from (
+          select t.pldo_cd
+               , e.pldo_nm
+               , t.eqp_gr_id
+               , e.eqp_gr_nm
+               , t.eqp_id
+               , e.uppr_eqp_nm  as eqp_nm
+               , t.vsn_isp_tp_cd
+               , e.vsn_isp_tp_nm
+               , t.isp_eqp_id
+               , e.eqp_nm       as isp_eqp_nm
+               , e.eqp_mdp_id
+               , m.eqp_mdp_nm
+               , t.ctgr_cd
+               , t.evt_dtm
+               , t.evt_seq
+               , t.crt_dtm
+               , t.data_clct_tp_cd
+               , t.isp_atc_seq
+               , t.isp_atc_id
+               , ap.cnt_all
+               , ap.cnt_y
+               , t.img_file_path_nm
+               , t.img_file_nm
+               , t.exst_yn
+            from (
+      /* 01,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n01_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n01_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 02,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n02_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n02_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 03,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n03_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n03_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 04,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n04_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n04_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 05,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n05_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n05_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 06,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n06_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n06_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 07,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n07_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n07_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 08,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n08_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n08_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 09,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n09_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n09_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 10,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n10_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n10_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+       union all
+      /* 11,ASSY,MCC */
+      select a.pldo_cd
+           , a.eqp_gr_id
+           , a.eqp_id
+           , a.vsn_isp_tp_cd
+           , a.isp_eqp_id
+           , a.ctgr_cd
+           , a.evt_dtm
+           , a.evt_seq
+           , a.crt_dtm
+           , b.data_clct_tp_cd
+           , b.isp_atc_seq
+           , b.isp_atc_id
+           , b.img_file_path_nm
+           , b.img_file_nm
+           , b.exst_yn
+        from esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_hdr_mcc_n11_f a
+        join esaz_mfg_m.tb_mspcb_spcp_isp_rlt_assy_img_mcc_n11_f b
+          on  b.eqp_gr_id     = a.eqp_gr_id
+          and b.vsn_isp_tp_cd = a.vsn_isp_tp_cd
+          and b.evt_dtm       = a.evt_dtm
+          and b.evt_seq       = a.evt_seq
+          and b.etl_ldup_dt   = a.etl_ldup_dt
+       where 1=1
+         and a.crt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP
+         and a.crt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP
+         and a.evt_dtm >= '2026-08-01 00:00:00'::TIMESTAMP - INTERVAL '2' DAY
+         and a.evt_dtm <  '2026-08-02 00:00:00'::TIMESTAMP + INTERVAL '3' DAY
+         and a.evt_dtm >= DATE_TRUNC('day', a.crt_dtm::TIMESTAMP) - INTERVAL '2' DAY
+         and a.del_yn  = 'N'
+         and NULLIF(b.img_file_nm, '') != 'NA'
+         and ( b.exst_yn in ('Y','I') OR NULLIF(b.exst_yn, '') IS NULL )
+            ) t
+            join APD_SUMMARY_IMAGE_DATA AP
+              on  AP.ISP_EQP_ID = t.isp_eqp_id
+              and AP.EQP_GR_ID  = t.eqp_gr_id
+              and AP.EQP_ID     = t.eqp_id
+              and AP.CTGR_CD    = t.ctgr_cd
+              and AP.ISP_ATC_ID = t.isp_atc_id
+              and t.evt_dtm     >= AP.FROM_EVT_DTM
+              and t.evt_dtm     <= AP.TO_EVT_DTM
+            join esaz_mfg.tb_mspcb_spcp_eqp_n e
+              on  e.lang_id = 'ko-KR'
+              and e.pldo_cd = t.pldo_cd
+              and e.eqp_id  = t.isp_eqp_id
+            left outer join esaz_mfg.tb_mspcb_spcp_eqp_mdp_n m
+              on  m.lang_id    = e.lang_id
+              and m.eqp_mdp_id = e.eqp_mdp_id
+           ) t
+       where 1=1
+      /*ADD_DETAIL_QUERY_CONDITION*/
+      ;
+      PGEOF
+    timeout_sec: 90
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Optimizer: Postgres query optimizer"
+      not_contains:
+        - "canceling statement due to statement timeout"
+        - "ERROR"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0023_lgdb'"
+
+created_by: chenqiang
+created_at: "2026-08-11"
+notes: |
+  来源：飞书 wiki/PylNw7UXXi6xP2kXGagcFkXKnng（LG，2026-08-04）。表结构/语句①/语句② 按
+  飞书文档第 3~6 节原样；11 段 UNION ALL 分支经核对**仅 nNN 后缀 + 分支注释序号不同**，
+  由模板展开为字面内联（等价硬编、透明）。
+
+  **空表复现**：根因是 GPORCA 计划生成(planning)阶段搜索空间爆炸，与数据量/统计无关，
+  故 setup 只建表结构不造数；用 **EXPLAIN**(仅 planning)即可探测——正对应飞书"连 EXPLAIN
+  都出不来"。EXPLAIN 完成才会打印末尾 "Optimizer: ..." 行，故以该行作为"没卡住"的确定性
+  正向信号。
+
+  **hang-bug 确定性检测**（见 [[lbr-hang-bug-test-pattern]]）：statement_timeout=30000(内,
+  30s；含 planning 阶段) / timeout_sec=90(外 > 内 → 卡时得干净 FAIL 而非外层 ERROR)。修复态
+  实测 ORCA planning ~1s、PG ~13ms，30s 给足余量；BUG 态 ORCA "无法返回"(join_order 变体
+  仍 ~58s) 远超 30s → 超时 → 红。正面 expect = 修复后行为(design.md §4.1.1：红 = 仍有此 BUG)。
+
+  **TEMP 表与查询必须同会话**：APD_SUMMARY_IMAGE_DATA 是 CREATE TEMP TABLE(会话级)，故每步
+  在单个 psql -f - 会话里先建临时表(用 optimizer=off 快速建)再跑语句②。基表结构在 setup
+  持久化到 bug0023_lgdb。
+
+  **判定信号**：assert-orca 断 "Optimizer: GPORCA"(= EXPLAIN 计划生成完成且确实走 ORCA、
+  非 fallback) + not_contains "canceling statement due to statement timeout"(卡住/超时信号)/
+  "ERROR"。不锁 buggy 计划形态做门槛(见 [[lbr-hang-bug-test-pattern]] 反模式)。psql 报错在
+  stderr，故 cmd 末尾 2>&1 并进 stdout(断言只读 stdout)。步骤 heredoc 用引号 <<'PGEOF'
+  (零 shell 展开，SQL 里的 $ / 单引号 / 注释全字面安全)。
+
+  **验证进展（诚实标注）**：2026-08-11 HashData Lightning **2.5.3 build 147934**：optimizer=on
+  下语句② EXPLAIN **~1s 出计划**(Optimizer: GPORCA，Gather→Hash Join→11 分支 Append，band
+  谓词折成 filter)，连跑 3 次稳定(976~1015ms)；optimizer=off ~13ms(Postgres planner)。均不
+  卡、无 canceling → **BUG 不复现 = 已修复**(用户确认此版本已修，"片刻就能出来")。Try 两步
+  全 pass。故 status=fixed。仅此 build 验证不复现，未在更早 build 实证复现，fixed_version
+  记为"本 case 验证不复现的最早已知 build"。同源家族 [[lbr-bug0022-orca-1500-array-projection-hang]]
+  / [[lbr-bug0021-plpgsql-exception-segworker]]（均 LG、esaz、optimizer on/off 差异类）。
