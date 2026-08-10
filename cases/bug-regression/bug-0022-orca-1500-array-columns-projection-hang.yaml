@@ -1,0 +1,309 @@
+id: bug-0022-orca-1500-array-columns-projection-hang
+title: ORCA(optimizer=on) 对含 1500 元素数组列的临时表做 1500 列下标投影时选坏计划卡住（optimizer=off 正常 ~5s）
+category: bug_regression
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "wiki/MHmaw3fcriCq37kHMkEcbvIGnGb"
+  reported_at: "2026-08-04"
+  fixed_version: "HashData Lightning 2.5.3 build 147934"
+  ext_doc_url: "https://hashdata.feishu.cn/wiki/MHmaw3fcriCq37kHMkEcbvIGnGb"
+issue_url: ""
+tags: [orca, array, projection, 1500-columns, hang, performance, temp-table, unnest, planner]
+
+description: |
+  临时表 tmp_99_isp 有一个 text[] 列 eqp_msr_nval（定长 1500）。对它做把数组
+  横向摊成 1500 列的下标投影查询（SELECT eqp_msr_nval[1] AS "1", ... [1500] AS
+  "1500" FROM tmp_99_isp，约 9321 行）时：
+    - optimizer=off（经典 Postgres planner）: Gather Motion → Seq Scan，width≈48K，
+      Planning ~1ms，~5s 返回；
+    - optimizer=on（ORCA，客户环境缺省）: 内测选了坏计划——多一个单节点 Result
+      节点、把 1500 列投影推到 coordinator，Gather 层 width 骤降到几十、Result 层才
+      恢复宽度、rows 估成 1，Planning/Execution 数十秒，"有时连 EXPLAIN 都出不来"
+      （planning 就卡）；加 random_page_cost=1 时有时能跑出、有时仍卡（不确定性）。
+
+  根因（飞书内测结论）：ORCA 对 1500 列宽投影的计划选择缺陷（数组列 stats target=0
+  无统计 → 基数估算失真，叠加宽投影下推到单节点 Result）。修复后 ORCA 与 PG 优化器
+  计划一致（Gather+SeqScan，~5s）。
+
+procedure: |
+  1) setup: 建独占库 bug0022_lgdb + schema common/esaz_mfg + RANGE 分区事实表
+     tb_eeqab_eqp_iot_cot_lot_isp_s（tag_val_ary_ctn 定长 1500 text[]）+ 5 张维表 +
+     造数 nbase=3107 基行（含 1500 元素数组）+ ANALYZE（数组列保持 stats target=0，
+     即复现"数组列无统计"关键点，不私自打开）；
+  2) 每个断言步（独立 session）在**单个 psql 会话**内：先 optimizer=off 快速建两张
+     TEMP 表 tmp_01_isp（5 维表 LEFT JOIN 富化）/ tmp_99_isp（双 UNNEST zip，9321 行），
+     再 SET 待测 optimizer + statement_timeout=30s，对 tmp_99_isp 跑 1500 列下标投影的
+     EXPLAIN (ANALYZE)（真执行、输出紧凑，与飞书内测方法一致；1500 列用 seq 生成）；
+  3) assert-orca（核心）: optimizer=on 应在 30s 内跑完、Optimizer: GPORCA、rows=9321；
+     assert-pg（对比/回归）: optimizer=off 应跑完、Optimizer: Postgres query optimizer。
+expected: |
+  - 两步 psql 退出 0，EXPLAIN ANALYZE 输出含 "rows=9321" + "Execution Time" +
+    对应 "Optimizer: GPORCA"（orca 步）/ "Optimizer: Postgres query optimizer"（pg 步），
+    不含 "canceling statement due to statement timeout" / "ERROR"（= 修复后行为，
+    两优化器计划一致、均 ~5s）；
+  - BUG 复现时 assert-orca 步：ORCA planning/execution 数十秒或 planning 卡死 →
+    30s statement_timeout 触发 → 出现 "canceling statement due to statement timeout"、
+    无 "Execution Time"/"rows=9321" → 红（optimizer=off 的 assert-pg 步始终绿）。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions:                # 两步独立 session → 独立分组、并发跑、各自报告；否则同组
+  pg: {driver: shell}    # 「首个非 pass 即 break」会在一步失败时跳过另一步。两步各开
+  orca: {driver: shell}  # 独立 psql 会话（TEMP 表必须与查询同会话），互不影响。
+
+setup:
+  # CREATE/DROP DATABASE non-tx-safe → psql -c（与 bug-0020/0021 同款）。独占库
+  # bug0022_lgdb 避免撞集群里已存在的 lgdb + 满足 setup 幂等。
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0022_lgdb'"
+  - su - gpadmin -c "psql -d gpadmin -c \"CREATE DATABASE bug0022_lgdb TEMPLATE template0\""
+  # 基表 + 维表 + 造数 + ANALYZE 一次性灌进新库（psql -f - heredoc，ON_ERROR_STOP=1）。
+  # 表结构/造数按飞书文档第 3 节；事实表 tag_val_ary_ctn 定长 1500（触发核心）；
+  # 数组列不单独 SET STATISTICS（保持 target=0 无统计，是复现关键，勿私自打开）。
+  - |
+    su - gpadmin -c 'psql -d bug0022_lgdb -v ON_ERROR_STOP=1 -f -' <<'SQL'
+    CREATE SCHEMA IF NOT EXISTS common;
+    CREATE SCHEMA IF NOT EXISTS esaz_mfg;
+
+    DROP TABLE IF EXISTS esaz_mfg.tb_eeqab_eqp_iot_cot_lot_isp_s CASCADE;
+    CREATE TABLE esaz_mfg.tb_eeqab_eqp_iot_cot_lot_isp_s (
+        ste_id text, plnt_id text, pldo_id text, ln_id text, proc_id text, eqp_id text,
+        isp_dtm timestamp without time zone,
+        oper_tp_cd text, raw_oper_tp_cd text,
+        tag_val_ary_ctn text[], n1_st_val text, n1_end_val text, n2_st_val text, n2_end_val text,
+        prj_nm_ary_ctn text[], lot_id_ary_ctn text[],
+        part_area_id text, etl_ldup_dt text, n3_cnct_cond_id text, isp_dtm_seq numeric
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7)
+    DISTRIBUTED BY (n3_cnct_cond_id, isp_dtm_seq)
+    PARTITION BY RANGE (isp_dtm)
+    (
+        PARTITION p202608 START ('2026-08-01 00:00:00'::timestamp) END ('2026-09-01 00:00:00'::timestamp),
+        DEFAULT PARTITION pothers
+    );
+
+    DROP TABLE IF EXISTS common.tb_mmdmb_mmd_ste_n CASCADE;
+    CREATE TABLE common.tb_mmdmb_mmd_ste_n (ste_cd text, lang_id text, ste_nm text, use_yn text, upd_dtm text, crt_dtm text, data_ldup_dtm text)
+    WITH (appendonly=true, orientation=row) DISTRIBUTED REPLICATED;
+    DROP TABLE IF EXISTS common.tb_mmdmb_mmd_pldo_n CASCADE;
+    CREATE TABLE common.tb_mmdmb_mmd_pldo_n (pldo_cd text, lang_id text, pldo_nm text, use_yn text, upd_dtm text, crt_dtm text, data_ldup_dtm text)
+    WITH (appendonly=true, orientation=row) DISTRIBUTED REPLICATED;
+    DROP TABLE IF EXISTS common.tb_mmdmb_mmd_ln_n CASCADE;
+    CREATE TABLE common.tb_mmdmb_mmd_ln_n (ln_id text, lang_id text, ln_nm text, use_yn text, upd_dtm text, crt_dtm text, data_ldup_dtm text)
+    WITH (appendonly=true, orientation=row) DISTRIBUTED REPLICATED;
+    DROP TABLE IF EXISTS common.tb_mmdmb_proc_hirc_n CASCADE;
+    CREATE TABLE common.tb_mmdmb_proc_hirc_n (proc_id text, lang_id text, proc_nm text, proc_gr_id text, proc_gr_nm text, upd_dtm text, crt_dtm text, data_ldup_dtm text)
+    WITH (appendonly=true, orientation=row) DISTRIBUTED REPLICATED;
+    DROP VIEW IF EXISTS common.tb_mmdmb_mmd_proc_hirc_n;
+    CREATE VIEW common.tb_mmdmb_mmd_proc_hirc_n AS SELECT * FROM common.tb_mmdmb_proc_hirc_n;
+    DROP TABLE IF EXISTS common.tb_mmdmb_mmd_eqp_n CASCADE;
+    CREATE TABLE common.tb_mmdmb_mmd_eqp_n (eqp_id text, lang_id text, eqp_nm text, ln_id text, use_yn text, upd_dtm text, crt_dtm text, data_ldup_dtm text)
+    WITH (appendonly=true, orientation=row) DISTRIBUTED RANDOMLY;
+
+    INSERT INTO common.tb_mmdmb_mmd_ste_n (ste_cd, lang_id, ste_nm, use_yn) VALUES ('KR01','ko-KR','ESS Site USA','Y');
+    INSERT INTO common.tb_mmdmb_mmd_pldo_n (pldo_cd, lang_id, pldo_nm, use_yn) VALUES ('L2','ko-KR','AZ1_E','Y'),('L2','en-US','Bldg AZ1_E','Y');
+    INSERT INTO common.tb_mmdmb_mmd_ln_n (ln_id, lang_id, ln_nm, use_yn) VALUES ('L2D01','ko-KR','Elec #01','Y');
+    INSERT INTO common.tb_mmdmb_proc_hirc_n (proc_id, lang_id, proc_nm, proc_gr_id, proc_gr_nm) VALUES ('E2000','ko-KR','Coating','EG','전극');
+    INSERT INTO common.tb_mmdmb_mmd_eqp_n (eqp_id, lang_id, eqp_nm, ln_id, use_yn) VALUES
+      ('P1ECOT001','ko-KR','ESAZ ANODE COATER','L2D01','Y'),
+      ('P1ECOT002','ko-KR','ESAZ ANODE COATER','L2D01','Y'),
+      ('P1ECOT001','en-US','Coater 1',NULL,NULL);
+
+    INSERT INTO esaz_mfg.tb_eeqab_eqp_iot_cot_lot_isp_s
+        (ste_id, plnt_id, pldo_id, ln_id, proc_id, eqp_id, isp_dtm, oper_tp_cd, raw_oper_tp_cd,
+         tag_val_ary_ctn, n1_st_val, n1_end_val, n2_st_val, n2_end_val,
+         prj_nm_ary_ctn, lot_id_ary_ctn, part_area_id, etl_ldup_dt, n3_cnct_cond_id, isp_dtm_seq)
+    SELECT
+        'KR01','P1','L2','L2D01','E2000',
+        CASE WHEN g <= (3107/2) THEN 'P1ECOT001' ELSE 'P1ECOT002' END,
+        TIMESTAMP '2026-08-01 06:00:00' + (random()*EXTRACT(EPOCH FROM (TIMESTAMP '2026-08-03 06:00:00' - TIMESTAMP '2026-08-01 06:00:00')))*INTERVAL '1 second',
+        (ARRAY['All','BACKDRY','BACKDRYTOTAL','BACKWET','LOADING','REWINDER','REWINDER1','REWINDER2','TOPDRY','TOPDRYRATE','TOPWET','UNWINDER'])[(g%12)+1],
+        'RAW_'||((g%12)+1)::text,
+        (SELECT array_agg(((k+g)%100)::text ORDER BY k) FROM generate_series(1,1500) AS k),
+        (100+(g%50))::text,(200+(g%50))::text,(300+(g%50))::text,(400+(g%50))::text,
+        ARRAY['N32S2'],
+        ARRAY['MAF'||lpad((g%100000)::text,5,'0')||'C1','MAF'||lpad(((g+1)%100000)::text,5,'0')||'C1','MAF'||lpad(((g+2)%100000)::text,5,'0')||'C1'],
+        'WRPS01','202608',
+        md5(CASE WHEN g <= (3107/2) THEN 'P1ECOT001' ELSE 'P1ECOT002' END),
+        g
+    FROM generate_series(1, 3107) AS g;
+
+    ANALYZE common.tb_mmdmb_mmd_ste_n;
+    ANALYZE common.tb_mmdmb_mmd_pldo_n;
+    ANALYZE common.tb_mmdmb_mmd_ln_n;
+    ANALYZE common.tb_mmdmb_proc_hirc_n;
+    ANALYZE common.tb_mmdmb_mmd_eqp_n;
+    ANALYZE esaz_mfg.tb_eeqab_eqp_iot_cot_lot_isp_s;
+    SQL
+
+steps:
+  - name: "assert-orca（核心）: optimizer=on ORCA 对 tmp_99_isp 做 1500 列数组下标投影应 30s 内跑完不卡（修复后行为）"
+    kind: shell
+    "on": orca             # 必须给 key 加引号：YAML 1.1 裸 on 会被解析成布尔 true
+    cmd: |
+      COLS=$(for i in $(seq 1 1500); do printf 'eqp_msr_nval[%d] AS "%d",\n' "$i" "$i"; done)
+      su - gpadmin -c 'psql -d bug0022_lgdb -f -' 2>&1 <<EOF
+      SET optimizer=off;
+      DROP TABLE IF EXISTS tmp_01_isp;
+      CREATE TEMP TABLE tmp_01_isp WITH (APPENDONLY=TRUE, COMPRESSTYPE=ZSTD, COMPRESSLEVEL=7) AS
+      SELECT T1.*, D1.ste_nm, D2.pldo_nm, D4.proc_gr_nm, D4.proc_nm, D3.ln_nm, D5.eqp_nm
+        FROM esaz_mfg.tb_eeqab_eqp_iot_cot_lot_isp_s T1
+        LEFT JOIN common.tb_mmdmb_mmd_ste_n  D1 ON T1.ste_id=D1.ste_cd  AND D1.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_pldo_n D2 ON T1.pldo_id=D2.pldo_cd AND D2.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_ln_n   D3 ON T1.ln_id=D3.ln_id     AND D3.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_proc_hirc_n D4 ON T1.proc_id=D4.proc_id AND D4.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_eqp_n  D5 ON T1.eqp_id=D5.eqp_id   AND D5.lang_id='ko-KR'
+       WHERE T1.pldo_id IN ('L2') AND T1.proc_id IN ('E2000') AND T1.ln_id IN ('L2D01')
+         AND T1.eqp_id IN ('P1ECOT001','P1ECOT002')
+         AND T1.oper_tp_cd IN ('All','BACKDRY','BACKDRYTOTAL','BACKWET','LOADING','REWINDER','REWINDER1','REWINDER2','TOPDRY','TOPDRYRATE','TOPWET','UNWINDER')
+         AND T1.isp_dtm >= '2026-08-01 06:00:00'::timestamp AND T1.isp_dtm < '2026-08-03 06:00:00'::timestamp
+      DISTRIBUTED RANDOMLY;
+      ANALYZE tmp_01_isp;
+      DROP TABLE IF EXISTS tmp_99_isp;
+      CREATE TEMP TABLE tmp_99_isp WITH (APPENDONLY=TRUE, COMPRESSTYPE=ZSTD, COMPRESSLEVEL=7) AS
+      WITH tmp_01_data AS (
+        SELECT *, UNNEST(prj_nm_ary_ctn) AS prj_nm, UNNEST(lot_id_ary_ctn) AS lot_id FROM tmp_01_isp
+      ), tmp_02_data AS (
+        SELECT A.ste_nm AS site_nm, A.pldo_nm, A.proc_gr_nm, A.proc_nm, A.ln_nm, A.eqp_nm,
+               A.prj_nm, A.lot_id, A.isp_dtm AS msr_dtm, A.oper_tp_cd AS oper_tp_nm,
+               A.tag_val_ary_ctn AS eqp_msr_nval
+          FROM tmp_01_data A
+      )
+      SELECT A.*, A.lot_id AS base_id FROM tmp_02_data A
+      DISTRIBUTED RANDOMLY;
+      ANALYZE tmp_99_isp;
+      SET optimizer=on;
+      SET statement_timeout=30000;
+      EXPLAIN (ANALYZE, TIMING OFF) SELECT
+        site_nm AS "site", pldo_nm AS "building", proc_gr_nm AS "process group",
+        proc_nm AS "process", ln_nm AS "line", eqp_nm AS "equipment",
+        prj_nm AS "project", lot_id AS "lot_id", msr_dtm AS "mesure date",
+        oper_tp_nm AS "thickness_item",
+        ${COLS%,}
+        FROM tmp_99_isp;
+      EOF
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Optimizer: GPORCA"
+        - "rows=9321"
+        - "Execution Time"
+      not_contains:
+        - "canceling statement due to statement timeout"
+        - "ERROR"
+
+  - name: "assert-pg（对比/回归）: optimizer=off 经典 planner 对同一 1500 列投影应正常跑完 ~5s"
+    kind: shell
+    "on": pg               # 同上，key 加引号避免被当布尔
+    cmd: |
+      COLS=$(for i in $(seq 1 1500); do printf 'eqp_msr_nval[%d] AS "%d",\n' "$i" "$i"; done)
+      su - gpadmin -c 'psql -d bug0022_lgdb -f -' 2>&1 <<EOF
+      SET optimizer=off;
+      DROP TABLE IF EXISTS tmp_01_isp;
+      CREATE TEMP TABLE tmp_01_isp WITH (APPENDONLY=TRUE, COMPRESSTYPE=ZSTD, COMPRESSLEVEL=7) AS
+      SELECT T1.*, D1.ste_nm, D2.pldo_nm, D4.proc_gr_nm, D4.proc_nm, D3.ln_nm, D5.eqp_nm
+        FROM esaz_mfg.tb_eeqab_eqp_iot_cot_lot_isp_s T1
+        LEFT JOIN common.tb_mmdmb_mmd_ste_n  D1 ON T1.ste_id=D1.ste_cd  AND D1.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_pldo_n D2 ON T1.pldo_id=D2.pldo_cd AND D2.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_ln_n   D3 ON T1.ln_id=D3.ln_id     AND D3.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_proc_hirc_n D4 ON T1.proc_id=D4.proc_id AND D4.lang_id='ko-KR'
+        LEFT JOIN common.tb_mmdmb_mmd_eqp_n  D5 ON T1.eqp_id=D5.eqp_id   AND D5.lang_id='ko-KR'
+       WHERE T1.pldo_id IN ('L2') AND T1.proc_id IN ('E2000') AND T1.ln_id IN ('L2D01')
+         AND T1.eqp_id IN ('P1ECOT001','P1ECOT002')
+         AND T1.oper_tp_cd IN ('All','BACKDRY','BACKDRYTOTAL','BACKWET','LOADING','REWINDER','REWINDER1','REWINDER2','TOPDRY','TOPDRYRATE','TOPWET','UNWINDER')
+         AND T1.isp_dtm >= '2026-08-01 06:00:00'::timestamp AND T1.isp_dtm < '2026-08-03 06:00:00'::timestamp
+      DISTRIBUTED RANDOMLY;
+      ANALYZE tmp_01_isp;
+      DROP TABLE IF EXISTS tmp_99_isp;
+      CREATE TEMP TABLE tmp_99_isp WITH (APPENDONLY=TRUE, COMPRESSTYPE=ZSTD, COMPRESSLEVEL=7) AS
+      WITH tmp_01_data AS (
+        SELECT *, UNNEST(prj_nm_ary_ctn) AS prj_nm, UNNEST(lot_id_ary_ctn) AS lot_id FROM tmp_01_isp
+      ), tmp_02_data AS (
+        SELECT A.ste_nm AS site_nm, A.pldo_nm, A.proc_gr_nm, A.proc_nm, A.ln_nm, A.eqp_nm,
+               A.prj_nm, A.lot_id, A.isp_dtm AS msr_dtm, A.oper_tp_cd AS oper_tp_nm,
+               A.tag_val_ary_ctn AS eqp_msr_nval
+          FROM tmp_01_data A
+      )
+      SELECT A.*, A.lot_id AS base_id FROM tmp_02_data A
+      DISTRIBUTED RANDOMLY;
+      ANALYZE tmp_99_isp;
+      SET optimizer=off;
+      SET statement_timeout=30000;
+      EXPLAIN (ANALYZE, TIMING OFF) SELECT
+        site_nm AS "site", pldo_nm AS "building", proc_gr_nm AS "process group",
+        proc_nm AS "process", ln_nm AS "line", eqp_nm AS "equipment",
+        prj_nm AS "project", lot_id AS "lot_id", msr_dtm AS "mesure date",
+        oper_tp_nm AS "thickness_item",
+        ${COLS%,}
+        FROM tmp_99_isp;
+      EOF
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Optimizer: Postgres query optimizer"
+        - "rows=9321"
+        - "Execution Time"
+      not_contains:
+        - "canceling statement due to statement timeout"
+        - "ERROR"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0022_lgdb'"
+
+created_by: chenqiang
+created_at: "2026-08-10"
+notes: |
+  来源：飞书 wiki/MHmaw3fcriCq37kHMkEcbvIGnGb（LG 客户，2026-08-04）。表结构/造数/两段
+  CTAS/最终查询按飞书文档第 3~4 节；nbase=3107 → tmp_99_isp 9321 行（zip：prj 数组长 1 /
+  lot 数组长 3）；eqp_msr_nval 定长 1500。
+
+  **为何 EXPLAIN (ANALYZE)**：最终查询是 9321 行 × 1510 列（~14M 单元格），直接 SELECT
+  会把海量结果传回客户端、给 statement_timeout 引入客户端渲染/传输噪声。EXPLAIN ANALYZE
+  在 server 端**真执行**整个计划（一样会卡/超时），但只返回紧凑计划文本 —— 既忠实测"会
+  不会卡"、又让判定干净（飞书内测也是用 EXPLAIN ANALYZE 对比 on/off）。planning 卡死
+  （"连 EXPLAIN 都出不来"）也被 statement_timeout 覆盖（含 planning 阶段）。
+
+  **1500 列用 seq 生成**：`for i in $(seq 1 1500)` 生成 `eqp_msr_nval[i] AS "i"` 逗号列表，
+  `${COLS%,}` 去尾逗号。避免把 ~52KB×2 列清单硬编进 YAML；与硬编等价、透明、明确是 1500 列。
+
+  **TEMP 表与查询必须同会话**：tmp_01_isp / tmp_99_isp 是 CREATE TEMP TABLE（会话级），
+  故每步在单个 psql -f - 会话里先建两临时表（用 optimizer=off 快速建）再跑待测查询。基表+
+  维表+数据在 setup 持久化到 bug0022_lgdb。
+
+  **判定信号（hang-bug 确定性检测，见 [[lbr-hang-bug-test-pattern]]）**：
+    - statement_timeout=30000（内层，30s）；step timeout_sec=120（外层 > 内层 → 卡时得到
+      干净 FAIL 而非外层超时 ERROR）。修复态实测 ~5s（Planning ~330ms + Execution ~5s），
+      30s 给约 6x 余量。
+    - 正面 expect = 修复后行为（design.md §4.1.1：红 = 仍有此 BUG）。核心 assert-orca 断
+      "Optimizer: GPORCA"（**证真走 ORCA、非 SRF fallback**——最终查询无 SRF，实测确走 ORCA）
+      + "rows=9321"（跑完、基数对）+ "Execution Time"（完成）；not_contains "canceling
+      statement due to statement timeout"（卡住/超时信号）。BUG 复现时 ORCA 数十秒或 planning
+      卡死 → 30s 超时 → 出现 canceling 文案、无 rows=9321/Execution Time → 红。
+    - 不锁 buggy 计划形态（Result 节点/width 骤降）作为门槛：形态断言脆弱且易随版本漂移
+      （见 [[lbr-hang-bug-test-pattern]] 反模式：勿把 buggy 形态硬编成 gating 断言）。用行为
+      超时守卫即可 red-on-buggy / green-on-fixed 同向。
+    - not_contains "ERROR"（大写）：EXPLAIN ANALYZE 成功输出与建表无此串；超时 cancel 打的
+      "ERROR: canceling statement..." 会被两条 not_contains 同时命中。psql 报错在 stderr，
+      故 cmd 末尾 2>&1 并进 stdout（断言只读 stdout）。
+
+  **数组列无统计是复现关键**：各 *_ary_ctn 列在原库 stats target=0（不采样），本 setup 不
+  私自 SET STATISTICS 打开 —— 正是"数组列无统计 → 基数估算失真"的复现前提。
+
+  **验证进展（诚实标注）**：
+    - 2026-08-10 HashData Lightning **2.5.3 build 147934**：optimizer on/off **均** Gather
+      Motion → Seq Scan（width≈48K/12080），Planning ~1ms(PG)/~330ms(ORCA)，Execution ~5s，
+      rows=9321，**无 Result 节点、无卡住**，与飞书"修复后 ORCA 及 PG 执行计划一致"段完全吻合
+      （cost 926.22 / width 12080 / Planning ~336ms / ~5s）。连跑 3 次 ORCA 稳定 → **BUG 不
+      复现 = 已修复**（用户确认此版本已修）。Try 两步全 pass。故 status=fixed。
+    - 仅在 2.5.3 build 147934 验证不复现；未在更早 build 实证复现，fixed_version 记为"本 case
+      验证不复现的最早已知 build"而非"首个修复 build"。同源家族参见 [[lbr-bug0021-plpgsql-exception-segworker]]
+      / [[lbr-bug0020-unnest-placeholdervar]]（均 LG、esaz/common、optimizer on/off 差异类）。
