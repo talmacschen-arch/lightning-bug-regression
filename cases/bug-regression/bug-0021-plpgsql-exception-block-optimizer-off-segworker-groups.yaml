@@ -1,0 +1,569 @@
+id: bug-0021-plpgsql-exception-block-optimizer-off-segworker-groups
+title: 嵌套 plpgsql 函数含 EXCEPTION 块，经典 planner（optimizer=off）分发到 segment 查 REPLICATED 表报 multiple segworker groups
+category: bug_regression
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "wiki/Ov7PwTD3Bi164gkRYdnc9VMDnVc"
+  reported_at: "2026-07-29"
+  fixed_version: "HashData Lightning 2.5.3 build 147934"
+  ext_doc_url: "https://hashdata.feishu.cn/wiki/Ov7PwTD3Bi164gkRYdnc9VMDnVc"
+issue_url: ""
+tags: [plpgsql, exception, subtransaction, optimizer-off, planner, orca, segworker-groups, replicated, return-query-execute]
+
+description: |
+  嵌套 PL/pgSQL 函数：外层分发函数 esaz_mfg_m.f_fetch_acv_chgd_profile_data_djpark
+  用 RETURN QUERY EXECUTE 跑动态 SQL，动态 SQL 里调带 EXCEPTION 异常块的
+  glbfnc.f_get_name_djpark（内部又调同样带 EXCEPTION 块的 common.f_empty_chk），
+  查询对象是 DISTRIBUTED REPLICATED 表 common.tb_mmdmb_mmd_acv_cell_grd_n。
+
+  根因（飞书文档）：带 EXCEPTION handler 的 BEGIN 块进入时必须建立子事务
+  (subtransaction)，该操作在 segment 分发执行上下文中受限；optimizer=off 的经典
+  Postgres Planner 生成的计划直接被拒——
+    ERROR: query plan with multiple segworker groups is not supported
+    CONTEXT: ... f_get_name_djpark(text,text) line 12 during statement block entry
+  optimizer=on（ORCA）能规避该路径，一直正常。规避手段（飞书给的临时方案）：
+  SET optimizer=on，或去掉 f_get_name_djpark 的 EXCEPTION 块。
+
+  与 bug-0020 同源家族（同 LG 客户、C locale 习惯、common/glbfnc schema、
+  f_empty_chk/f_get_name 系列带 EXCEPTION 的 plpgsql 函数）；差异是本 bug 纯粹是
+  optimizer=off 经典 planner 的子事务分发限制，optimizer=on 从不复现。
+
+  触发三要素（缺一不复现，实测直接把 f_get_name_djpark 放进普通 SELECT 里不报错，
+  必须经外层函数的 RETURN QUERY EXECUTE 分发）：
+    (1) 被调函数带 EXCEPTION 块（→ 进 BEGIN 块须开子事务）；
+    (2) 该调用位于另一 plpgsql 函数的 RETURN QUERY EXECUTE 动态查询里（分发上下文）；
+    (3) 查询对象是分布/复制表（计划跨 segment）。
+procedure: |
+  1) setup: 建独占库 bug0021_lgdb + schema common/glbfnc/esaz_mfg_m + REPLICATED
+     表 tb_mmdmb_mmd_acv_cell_grd_n（13 行 1/A~L 等级，四语言 name）+ 三个客户原样
+     函数（f_empty_chk / f_get_name_djpark 都带 EXCEPTION 块；主分发函数 21KB 原样
+     内联，仅 GRD_CD 分支会被本 case 触达，其它分支引用的表不建、不执行）；
+  2) assert-pg-planner（核心，对应飞书报错场景）: optimizer=off 调主函数
+     ('GRD_CD','ko-KR','MD',...)，修复后应正常返回 13 行、不含 segworker groups 报错；
+     BUG 复现时此步报 "multiple segworker groups" → 红；
+  3) assert-orca（回归）: optimizer=on 调同一主函数，历来正常，应返回同样 13 行。
+expected: |
+  - 两个断言步 psql 退出 0，输出含 "1등급" / "L등급" / "(13 rows)"（= 每行按
+    grd_nm 正确切出 ko-KR 等级名），且不含 "ERROR" / "multiple segworker groups"
+    （= 修复后行为）；
+  - BUG 复现时 assert-pg-planner 步：optimizer=off 报
+    ERROR: query plan with multiple segworker groups is not supported
+    → 三个鉴别值缺失 + 报错文案出现 → 红（optimizer=on 的 assert-orca 步始终绿）。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions:                # 两步放独立 session → 独立分组 → 各自都跑、各自都报告；
+  pg: {driver: shell}    # 否则同组「首个非 pass 即 break」会在一步失败时跳过另一步。
+  orca: {driver: shell}  # 两步都是只读函数调用、各开独立 psql 连接、各 set 自己的
+                         # optimizer，并发无冲突（driver: shell = 不建 SQL 连接）。
+
+setup:
+  # CREATE/DROP DATABASE 是 non-tx-safe DDL，走 psql -c（与 bug-0005/0019/0020 同款）。
+  # 独占库 bug0021_lgdb（客户复现用 lgdb；库名与 BUG 无关，触发条件是 EXCEPTION 块 +
+  # RETURN QUERY EXECUTE + 复制表；独占命名避免撞集群里已存在的 lgdb + 满足 setup 幂等）。
+  # 本 bug 与 locale 无关（根因是子事务分发），故用 template0 默认 locale（实测 UTF8，
+  # 足以承载 name 列的韩/中/波兰文）。
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0021_lgdb'"
+  - su - gpadmin -c "psql -d gpadmin -c \"CREATE DATABASE bug0021_lgdb TEMPLATE template0\""
+  # schema / 表 / 数据 / 三个函数一次性灌进新库（psql -f - heredoc，ON_ERROR_STOP=1
+  # 任一条失败即中止并给清晰 psql 报错行）。函数体与飞书文档第 3 节原样一致（含 EXCEPTION
+  # 块——正是触发条件，不可精简）；主分发函数 21KB 全量内联（本 case 仅触达 GRD_CD 分支）。
+  - |
+    su - gpadmin -c 'psql -d bug0021_lgdb -v ON_ERROR_STOP=1 -f -' <<'SQL'
+    create schema if not exists common;
+    create schema if not exists glbfnc;
+    create schema if not exists esaz_mfg_m;
+
+    -- REPLICATED 表（复现原样：ao_row + zstd + DISTRIBUTED REPLICATED）
+    drop table if exists common.tb_mmdmb_mmd_acv_cell_grd_n;
+    CREATE TABLE common.tb_mmdmb_mmd_acv_cell_grd_n (
+        pldo_cd        text,
+        grd_cd         text,
+        grd_nm         text,
+        rmk_ctn        text,
+        qtpd_yn        text,
+        use_yn         text,
+        crr_nm         text,
+        crt_dtm        text,
+        chgr_nm        text,
+        chg_dtm        text,
+        etl_ldup_dt    text,
+        data_ldup_dtm  text,
+        ste_cd         text
+    )
+    WITH (appendonly=true, orientation=row, compresstype=zstd, compresslevel=7,
+          blocksize=32768, checksum=true)
+    DISTRIBUTED REPLICATED;
+
+    INSERT INTO common.tb_mmdmb_mmd_acv_cell_grd_n
+        (pldo_cd, grd_cd, grd_nm, use_yn, ste_cd)
+    VALUES
+        ('MD','1','en-US1 Grade|ko-KR1등급|zh-CN1级|pl-PL1 klasa','Y','GR17KR0196'),
+        ('MD','A','en-USA Grade|ko-KRA등급|zh-CNA级|pl-PLA klasa','Y','GR17KR0196'),
+        ('MD','B','en-USB Grade|ko-KRB등급|zh-CNB级|pl-PLB klasa','Y','GR17KR0196'),
+        ('MD','C','en-USC Grade|ko-KRC등급|zh-CNC级|pl-PLC klasa','Y','GR17KR0196'),
+        ('MD','D','en-USD Grade|ko-KRD등급|zh-CND级|pl-PLD klasa','Y','GR17KR0196'),
+        ('MD','E','en-USE Grade|ko-KRE등급|zh-CNE级|pl-PLE klasa','Y','GR17KR0196'),
+        ('MD','F','en-USF Grade|ko-KRF등급|zh-CNF级|pl-PLF klasa','Y','GR17KR0196'),
+        ('MD','G','en-USG Grade|ko-KRG등급|zh-CNG级|pl-PLG klasa','Y','GR17KR0196'),
+        ('MD','H','en-USH Grade|ko-KRH등급|zh-CNH级|pl-PLH klasa','Y','GR17KR0196'),
+        ('MD','I','en-USI Grade|ko-KRI등급|zh-CNI级|pl-PLI klasa','Y','GR17KR0196'),
+        ('MD','J','en-USJ Grade|ko-KRJ등급|zh-CNJ级|pl-PLJ klasa','Y','GR17KR0196'),
+        ('MD','K','en-USK Grade|ko-KRK등급|zh-CNK级|pl-PLK klasa','Y','GR17KR0196'),
+        ('MD','L','en-USL Grade|ko-KRL등급|zh-CNL级|pl-PLL klasa','Y','GR17KR0196');
+
+    -- 内层函数 1：带 EXCEPTION 块（触发条件之一）
+    CREATE OR REPLACE FUNCTION common.f_empty_chk(column_text text)
+     RETURNS text
+     LANGUAGE plpgsql
+     SECURITY DEFINER
+    AS $function$
+    DECLARE
+        empth_chk_text TEXT;
+    BEGIN
+        SELECT case when column_text = '' then null else column_text end
+          into empth_chk_text;
+        RETURN empth_chk_text;
+            EXCEPTION
+                when others then
+                    raise exception 'f_empty_chk ::: Exception => %', sqlstate;
+    END;
+    $function$;
+
+    -- 内层函数 2：带 EXCEPTION 块（飞书根因指向此函数 line 12 during statement block entry）
+    CREATE OR REPLACE FUNCTION glbfnc.f_get_name_djpark(lang_input text, column_text text)
+     RETURNS text
+     LANGUAGE plpgsql
+    AS $function$
+    DECLARE
+        BASE_LANGUAGE TEXT := 'en-US';
+        LANGUAGE_SELECTION TEXT;
+        SPLIT_TEXT TEXT;
+        ko_nm text;
+        zh_nm text;
+        en_nm text;
+        pl_nm text;
+    BEGIN
+        SELECT CASE WHEN LANG_INPUT IN ('en-US','ko-KR','pl-PL','zh-CN') THEN LANG_INPUT ELSE BASE_LANGUAGE END
+          INTO LANGUAGE_SELECTION;
+        SPLIT_TEXT := COALESCE(common.f_empty_chk( REPLACE(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION(LANGUAGE_SELECTION IN COLUMN_TEXT),LENGTH(COLUMN_TEXT)),'|',1),LANGUAGE_SELECTION,2), '₩', '') )
+                        ,common.f_empty_chk( REPLACE(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION(BASE_LANGUAGE IN COLUMN_TEXT),LENGTH(COLUMN_TEXT)),'|',1),BASE_LANGUAGE,2)          , '₩', '') )
+                        ,common.f_empty_chk( REPLACE(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION('en-US' IN COLUMN_TEXT),LENGTH(COLUMN_TEXT)),'|',1),'en-US',2)              , '₩', '') )
+                        ,common.f_empty_chk( REPLACE(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION('ko-KR' IN COLUMN_TEXT),LENGTH(COLUMN_TEXT)),'|',1),'ko-KR',2)              , '₩', '') )
+                        ,common.f_empty_chk( REPLACE(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION('pl-PL' IN COLUMN_TEXT),LENGTH(COLUMN_TEXT)),'|',1),'pl-PL',2)              , '₩', '') )
+                        ,common.f_empty_chk( REPLACE(SPLIT_PART(SPLIT_PART(SUBSTR(COLUMN_TEXT,POSITION('zh-CN' IN COLUMN_TEXT),LENGTH(COLUMN_TEXT)),'|',1),'zh-CN',2)              , '₩', '') )
+                        );
+        RETURN SPLIT_TEXT;
+        EXCEPTION
+            when others then
+                raise exception 'F_GET_NAME_djpark ::: Exception => %', sqlstate;
+    END;
+    $function$;
+
+    -- 外层分发函数：RETURN QUERY EXECUTE 动态 SQL 里调 f_get_name_djpark 查复制表
+    -- （21KB 客户原样内联；仅 GRD_CD 分支被本 case 触达，其它分支引用的表不建/不执行）。
+    CREATE OR REPLACE FUNCTION esaz_mfg_m.f_fetch_acv_chgd_profile_data_djpark(
+        p_srch_tp_cd      text,
+        p_lang_cd         text,
+        p_pldo_cd         text,
+        p_ln_id_ary       text[],
+        p_rutg_tp_cd_ary  text[],
+        p_mdl_lot_id_ary  text[],
+        p_rutg_id_ary     text[],
+        p_grd_cd_ary      text[],
+        p_test_tp_cd_ary  text[],
+        p_proc_id_ary     text[],
+        p_lot_id_ary      text[],
+        p_cell_id_ary     text[],
+        p_tray_id_ary     text[],
+        p_start_dtm       text,
+        p_end_dtm         text,
+        p_tmp_data_ary1   text[],
+        p_tmp_data_ary2   text[],
+        p_tmp_data_ary3   text[],
+        p_tmp_data_ary4   text[],
+        p_tmp_data_ary5   text[]
+    )
+     RETURNS TABLE(code text, name text, sort_ord integer, pr_code text)
+     LANGUAGE plpgsql
+     SECURITY DEFINER
+    AS $function$
+    DECLARE
+        V_SQL          TEXT;
+        V_LANG_CD      TEXT;
+        V_LANG_NUMBER  TEXT;
+        V_PLDO_CD      TEXT;
+        V_LN_ID        TEXT;
+        V_RUTG_TP_CD   TEXT;
+        V_MDL_LOT_ID   TEXT;
+        V_RUTG_ID      TEXT;
+        V_GRD_CD       TEXT;
+        V_TEST_TP_CD   TEXT;
+        V_PROC_ID      TEXT;
+        V_LOT_ID       TEXT;
+        V_CELL_ID      TEXT;
+        V_TRAY_ID      TEXT;
+    BEGIN
+        V_LANG_CD = P_LANG_CD;
+        V_PLDO_CD = P_PLDO_CD;
+
+        IF V_LANG_CD = 'en-US' THEN
+            V_LANG_NUMBER := '[1]';
+        ELSEIF V_LANG_CD = 'ko-KR' THEN
+            V_LANG_NUMBER := '[2]';
+        ELSEIF V_LANG_CD = 'pl-PL' THEN
+            V_LANG_NUMBER := '[3]';
+        ELSEIF V_LANG_CD = 'zh-CN' THEN
+            V_LANG_NUMBER := '[4]';
+        ELSE
+            V_LANG_NUMBER := '[1]';
+        END IF;
+
+        RAISE NOTICE 'V_LANG_CD= %', V_LANG_CD;
+        RAISE NOTICE 'V_PLDO_CD= %', V_PLDO_CD;
+
+        IF P_LN_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_LN_ID_ARY,''',''')||'''' INTO V_LN_ID;
+        END IF;
+        IF P_RUTG_TP_CD_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_RUTG_TP_CD_ARY,''',''')||'''' INTO V_RUTG_TP_CD;
+        END IF;
+        IF P_MDL_LOT_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_MDL_LOT_ID_ARY,''',''')||'''' INTO V_MDL_LOT_ID;
+        END IF;
+        IF P_RUTG_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_RUTG_ID_ARY,''',''')||'''' INTO V_RUTG_ID;
+        END IF;
+        IF P_GRD_CD_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_GRD_CD_ARY,''',''')||'''' INTO V_GRD_CD;
+        END IF;
+        IF P_TEST_TP_CD_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_TEST_TP_CD_ARY,''',''')||'''' INTO V_TEST_TP_CD;
+        END IF;
+        IF P_PROC_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_PROC_ID_ARY,''',''')||'''' INTO V_PROC_ID;
+        END IF;
+        IF P_LOT_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_LOT_ID_ARY,''',''')||'''' INTO V_LOT_ID;
+        END IF;
+        IF P_CELL_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_CELL_ID_ARY,''',''')||'''' INTO V_CELL_ID;
+        END IF;
+        IF P_TRAY_ID_ARY IS NOT NULL THEN
+            SELECT ''''||ARRAY_TO_STRING(P_TRAY_ID_ARY,''',''')||'''' INTO V_TRAY_ID;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'LN_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.LN_ID                                  AS CODE      '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.LN_NM                                  AS NAME      '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.LN_ID)::INT4 AS SORT_ORD  '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                  AS PR_CODE   '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_LN_N T101                                     '||CHR(13);
+            V_SQL := V_SQL ||' WHERE T101.MES_SYS_TP_CD = ''F''                                        '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.LANG_ID       = '''||V_LANG_CD||'''                          '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_CD       = '''||V_PLDO_CD||'''                          '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.USE_YN        = ''Y''                                        '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                       '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'RUTG_TP_CD' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.CMN_CD_ID          AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.CMN_CD_NM          AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.SORT_ORD::INT4     AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT              AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_CMN_CD_N T101            '||CHR(13);
+            V_SQL := V_SQL ||' WHERE T101.CMN_CD_TP_CD = ''ROUT_TYPE_CODE''       '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.LANG_ID      = '''||V_LANG_CD||'''      '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.USE_YN       = ''Y''                    '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                  '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        -- ★★★ 触发报错的分支：动态 SQL 调带 EXCEPTION 块的 f_get_name_djpark 查复制表 ★★★
+        IF P_SRCH_TP_CD = 'GRD_CD' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.GRD_CD                                   AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,GLBFNC.F_GET_NAME_djpark('''||V_LANG_CD||''',T101.GRD_NM) AS NAME '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.GRD_CD)::INT4  AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                     AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_ACV_CELL_GRD_N T101                             '||CHR(13);
+            V_SQL := V_SQL ||' WHERE 1=1                                                                 '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_CD = '''||V_PLDO_CD||'''                                  '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY GRD_CD                                                           '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'MDL_LOT_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.MDL_LOT_ID                                    AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T102.PRJ_NM                                        AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.MDL_LOT_ID)::INT4   AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                         AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_MDL_LOT_N T101                                      '||CHR(13);
+            V_SQL := V_SQL ||' INNER JOIN COMMON.TB_MMDMB_MMD_FERT_N T102                                    '||CHR(13);
+            V_SQL := V_SQL ||'    ON T101.FERT_CD = T102.FERT_CD                                             '||CHR(13);
+            V_SQL := V_SQL ||' WHERE 1=1                                                                     '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_CD = '''||V_PLDO_CD||'''                                      '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                             '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'TEST_TP_CD' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.CMN_CD_ID       AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.CMN_CD_NM       AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.SORT_ORD::INT4  AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT           AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_CMN_CD_N T101         '||CHR(13);
+            V_SQL := V_SQL ||' WHERE T101.CMN_CD_TP_CD = ''ROUT_GR_CODE''      '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.LANG_ID      = '''||V_LANG_CD||'''   '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.USE_YN       = ''Y''                 '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                               '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'RUTG_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.RUTG_ID                                    AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.RUTG_NM                                    AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.RUTG_ID)::INT4   AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                      AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_ACV_RUTG_N T101                                  '||CHR(13);
+            V_SQL := V_SQL ||' WHERE T101.LANG_ID    = '''||V_LANG_CD||'''                                '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_CD    = '''||V_PLDO_CD||'''                                '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.MDL_LOT_ID IN ('''||V_MDL_LOT_ID||''')                          '||CHR(13);
+            IF P_LN_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.LN_CD      IN ('''||V_LN_ID||''')                           '||CHR(13);
+            END IF;
+            IF P_RUTG_TP_CD_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.RUTG_TP_CD IN ('''||V_RUTG_TP_CD||''')                      '||CHR(13);
+            END IF;
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                          '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'PROC_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.PROC_ID                                    AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T103.PROC_NM                                    AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.PROC_ID)::INT4   AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                      AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM COMMON.TB_MMDMB_MMD_ACV_RUTG_PROC_N T101                             '||CHR(13);
+            V_SQL := V_SQL ||' INNER JOIN COMMON.TB_MMDMB_MMD_ACV_RUTG_N T102                             '||CHR(13);
+            V_SQL := V_SQL ||'    ON T101.RUTG_ID = T102.RUTG_ID                                          '||CHR(13);
+            V_SQL := V_SQL ||' INNER JOIN COMMON.TB_MMDMB_MMD_PROC_N T103                                 '||CHR(13);
+            V_SQL := V_SQL ||'    ON T101.PROC_ID = T103.PROC_ID                                          '||CHR(13);
+            V_SQL := V_SQL ||' WHERE 1=1                                                                  '||CHR(13);
+            V_SQL := V_SQL ||'   AND T103.LANG_ID = '''||V_LANG_CD||'''                                   '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_CD = '''||V_PLDO_CD||'''                                   '||CHR(13);
+            IF P_LN_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T102.LN_CD      IN ('''||V_LN_ID||''')                           '||CHR(13);
+            END IF;
+            IF P_MDL_LOT_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T102.MDL_LOT_ID IN ('''||V_MDL_LOT_ID||''')                      '||CHR(13);
+            END IF;
+            IF P_RUTG_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.RUTG_ID    IN ('''||V_RUTG_ID||''')                         '||CHR(13);
+            END IF;
+            V_SQL := V_SQL ||'   AND SUBSTRING(T101.PROC_ID,3,2) IN (''11'',''12'',''13'',''17'',''19'',''J1'',''J3'') '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                          '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'LOT_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.LOT_ID::TEXT                               AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.LOT_ID::TEXT                               AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.LOT_ID)::INT4    AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                      AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM MFG_M.TB_QPQAB_ACV_CHGD_PRFL_LUP_D T101                              '||CHR(13);
+            V_SQL := V_SQL ||' WHERE 1=1                                                                  '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_ID = '''||V_PLDO_CD||'''                                   '||CHR(13);
+            V_SQL := V_SQL ||'   AND LOT_ST_DT BETWEEN TO_CHAR('''||P_START_DTM||'''::TIMESTAMP, ''YYYYMMDD'') AND TO_CHAR('''||P_END_DTM||'''::TIMESTAMP, ''YYYYMMDD'')'||CHR(13);
+            V_SQL := V_SQL ||'   AND LOT_ST_DTM::TIMESTAMP BETWEEN '''||P_START_DTM||'''::TIMESTAMP AND '''||P_END_DTM||'''::TIMESTAMP'||CHR(13);
+            IF P_LN_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.LN_ID      IN ('''||V_LN_ID||''')                           '||CHR(13);
+            END IF;
+            IF P_RUTG_TP_CD_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.RUTG_TP_CD IN ('''||V_RUTG_TP_CD||''')                      '||CHR(13);
+            END IF;
+            V_SQL := V_SQL ||'   AND T101.MDL_ID  IN ('''||V_MDL_LOT_ID||''')                             '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.RUTG_ID IN ('''||V_RUTG_ID||''')                                '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                          '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'CELL_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.CELL_ID::TEXT                              AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.CELL_ID::TEXT                              AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.CELL_ID)::INT4   AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                      AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM MFG_M.TB_QPQAB_ACV_CHGD_PRFL_LUP_D T101                              '||CHR(13);
+            V_SQL := V_SQL ||' WHERE 1=1                                                                  '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_ID = '''||V_PLDO_CD||'''                                   '||CHR(13);
+            V_SQL := V_SQL ||'   AND LOT_ST_DT BETWEEN TO_CHAR('''||P_START_DTM||'''::TIMESTAMP, ''YYYYMMDD'') AND TO_CHAR('''||P_END_DTM||'''::TIMESTAMP, ''YYYYMMDD'')'||CHR(13);
+            V_SQL := V_SQL ||'   AND LOT_ST_DTM::TIMESTAMP BETWEEN '''||P_START_DTM||'''::TIMESTAMP AND '''||P_END_DTM||'''::TIMESTAMP'||CHR(13);
+            IF P_LN_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.LN_ID      IN ('''||V_LN_ID||''')                           '||CHR(13);
+            END IF;
+            IF P_RUTG_TP_CD_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.RUTG_TP_CD IN ('''||V_RUTG_TP_CD||''')                      '||CHR(13);
+            END IF;
+            V_SQL := V_SQL ||'   AND T101.MDL_ID  IN ('''||V_MDL_LOT_ID||''')                             '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.RUTG_ID IN ('''||V_RUTG_ID||''')                                '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.LOT_ID  IN ('''||V_LOT_ID||''')                                 '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                          '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        IF P_SRCH_TP_CD = 'TRAY_ID' THEN
+            V_SQL := ''||CHR(13);
+            V_SQL := V_SQL ||'SELECT DISTINCT T101.TRAY_ID::TEXT                              AS CODE     '||CHR(13);
+            V_SQL := V_SQL ||'               ,T101.TRAY_NO::TEXT                              AS NAME     '||CHR(13);
+            V_SQL := V_SQL ||'               ,DENSE_RANK() OVER(ORDER BY T101.TRAY_NO)::INT4   AS SORT_ORD '||CHR(13);
+            V_SQL := V_SQL ||'               ,NULL::TEXT                                      AS PR_CODE  '||CHR(13);
+            V_SQL := V_SQL ||'  FROM MFG_M.TB_QPQAB_ACV_CHGD_PRFL_LUP_D T101                              '||CHR(13);
+            V_SQL := V_SQL ||' WHERE 1=1                                                                  '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.PLDO_ID = '''||V_PLDO_CD||'''                                   '||CHR(13);
+            V_SQL := V_SQL ||'   AND LOT_ST_DT BETWEEN TO_CHAR('''||P_START_DTM||'''::TIMESTAMP, ''YYYYMMDD'') AND TO_CHAR('''||P_END_DTM||'''::TIMESTAMP, ''YYYYMMDD'')'||CHR(13);
+            V_SQL := V_SQL ||'   AND LOT_ST_DTM::TIMESTAMP BETWEEN '''||P_START_DTM||'''::TIMESTAMP AND '''||P_END_DTM||'''::TIMESTAMP'||CHR(13);
+            IF P_LN_ID_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.LN_ID      IN ('''||V_LN_ID||''')                           '||CHR(13);
+            END IF;
+            IF P_RUTG_TP_CD_ARY IS NOT NULL THEN
+                V_SQL := V_SQL ||'   AND T101.RUTG_TP_CD IN ('''||V_RUTG_TP_CD||''')                      '||CHR(13);
+            END IF;
+            V_SQL := V_SQL ||'   AND T101.MDL_ID  IN ('''||V_MDL_LOT_ID||''')                             '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.RUTG_ID IN ('''||V_RUTG_ID||''')                                '||CHR(13);
+            V_SQL := V_SQL ||'   AND T101.LOT_ID  IN ('''||V_LOT_ID||''')                                 '||CHR(13);
+            V_SQL := V_SQL ||' ORDER BY SORT_ORD                                                          '||CHR(13);
+            RAISE NOTICE '%', V_SQL;
+            RETURN QUERY EXECUTE V_SQL;
+        END IF;
+
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE EXCEPTION 'EXCEPTION => %', SQLSTATE;
+    END;
+    $function$;
+    SQL
+
+steps:
+  - name: "assert-pg-planner（核心）: optimizer=off 经典 planner 调嵌套 EXCEPTION 函数查复制表应正常返回 13 行（修复后行为）"
+    kind: shell
+    "on": pg               # 必须给 key 加引号：YAML 1.1 裸 on 会被解析成布尔 true
+    cmd: |
+      su - gpadmin -c 'psql -d bug0021_lgdb -f -' 2>&1 <<'SQL'
+      SET optimizer = off;
+      SELECT CODE, name
+          FROM esaz_mfg_m.f_fetch_acv_chgd_profile_data_djpark
+              ('GRD_CD','ko-KR','MD',NULL,NULL,NULL,NULL,NULL,NULL,NULL,
+               NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)
+          ORDER BY SORT_ORD;
+      SQL
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "1등급"
+        - "L등급"
+        - "(13 rows)"
+      not_contains:
+        - "ERROR"
+        - "multiple segworker groups"
+
+  - name: "assert-orca（回归）: optimizer=on ORCA 调同一函数应返回同样 13 行（历来正常，确认没被搞坏）"
+    kind: shell
+    "on": orca             # 同上，key 加引号避免被当布尔
+    cmd: |
+      su - gpadmin -c 'psql -d bug0021_lgdb -f -' 2>&1 <<'SQL'
+      SET optimizer = on;
+      SELECT CODE, name
+          FROM esaz_mfg_m.f_fetch_acv_chgd_profile_data_djpark
+              ('GRD_CD','ko-KR','MD',NULL,NULL,NULL,NULL,NULL,NULL,NULL,
+               NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)
+          ORDER BY SORT_ORD;
+      SQL
+    timeout_sec: 120
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "1등급"
+        - "L등급"
+        - "(13 rows)"
+      not_contains:
+        - "ERROR"
+        - "multiple segworker groups"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP DATABASE IF EXISTS bug0021_lgdb'"
+
+created_by: chenqiang
+created_at: "2026-08-10"
+notes: |
+  来源：飞书 wiki/Ov7PwTD3Bi164gkRYdnc9VMDnVc（LG 客户，2026-07-29）。表结构 / 三个
+  函数 / 造数按飞书文档第 3 节「完整建表建函数造数脚本」原样内联，主查询/参数按第 4 节。
+
+  **触发路径（三要素缺一不复现，实测已排除）**：
+    - 把 f_get_name_djpark 直接放进普通 SELECT（不经外层函数）→ 不报错；
+    - 必须经外层 f_fetch_acv_chgd_profile_data_djpark 的 RETURN QUERY EXECUTE 动态
+      分发（GRD_CD 分支），且被查表是 DISTRIBUTED REPLICATED，且被调函数带 EXCEPTION
+      块 → 经典 planner (optimizer=off) 才生成会被拒的「multiple segworker groups」计划。
+    - 根因：EXCEPTION handler 的 BEGIN 块进入须建子事务，在 segment 分发上下文受限；
+      ORCA (optimizer=on) 走另一路径可规避，从不复现。
+
+  **判定信号**：
+    - 正面 expect = 修复后行为（design.md §4.1.1：红 = 仍有此 BUG）。三个鉴别值
+      "1등급"/"L등급"/"(13 rows)" 只在查询成功、13 行每行按 grd_nm 正确切出 ko-KR
+      等级名时出现；BUG 复现时 optimizer=off 直接报 "multiple segworker groups"、
+      无结果行 → 三值缺失 + 报错文案出现 → 红。
+    - not_contains "multiple segworker groups" 是本 bug 的核心鉴别串；not_contains
+      "ERROR"（大写）不会误命中 grd_nm 里的 "Grade"（首字母大写但非全大写 ERROR）。
+    - psql 报错打在 stderr，故 cmd 末尾 2>&1 并进 stdout 才能被 not_contains 匹配到
+      （断言只读 stdout，orchestrator.py:203-205），与 exit_code 形成多重信号。
+
+  **两步独立 session（编排取舍）**：optimizer=off/on 各一步、各开独立 psql 连接、各 SET
+  自己的 optimizer。放独立 session（sessions: {pg,orca} + "on":）→ 各自独立分组、并发
+  跑、各自报告；否则同组「首个非 pass 即 break」会在一步失败时跳过另一步。YAML 1.1 坑：
+  step 里的 on key 必须写成带引号 "on"，否则裸 on 被 PyYAML 解析成布尔 true、丢失分组。
+
+  **为何走 kind: shell + psql -f - heredoc**：SET optimizer 与函数调用必须同会话；每步
+  一次 psql 连接跑完 set+select。CREATE/DROP DATABASE 是 non-tx-safe 走 psql -c；对象+
+  函数+数据用一条 psql -f - heredoc 灌进新库（ON_ERROR_STOP=1）。断言步不加 ON_ERROR_STOP，
+  让 psql 即使 SET 后报错也把错误文案打出来供 not_contains 判定（退出码另判）。
+
+  **主分发函数全量内联**：客户原函数 21KB、10 个 p_srch_tp_cd 分支，本 case 仅触达
+  GRD_CD 分支；其它分支引用的表（COMMON.TB_MMDMB_MMD_LN_N / MFG_M.TB_QPQAB_... 等）
+  不建、不执行（plpgsql 动态 EXECUTE 字符串在 CREATE 时不校验对象存在）。选择全量内联
+  而非精简 wrapper：最大保真、绝不因精简漏掉触发路径（bug 已修复，无法在本 DUT 实证
+  精简版仍能触发）。'₩'（韩文字体下显示的反斜杠）在本造数里不出现于 name 列，REPLACE
+  为无操作，保留原样不影响 13 行结果。
+
+  **判定语义 + 验证进展**：
+    - 2026-08-10 HashData Lightning 2.5.3 build 147934：optimizer=off/on 均正常返回
+      13 行（含 1등급/L등급），**BUG 不复现 = 已修复**（用户确认此版本已修）。故
+      status=fixed、fixed_version=2.5.3 build 147934。
+    - 注：仅在 2.5.3 build 147934 验证不复现；未在更早 build 上验证复现，fixed_version
+      记为「本 case 验证不复现的最早已知 build」而非「首个修复 build」。与 bug-0020 同源
+      家族（optimizer=off 经典 planner 路径的分发限制），可参照互查。
