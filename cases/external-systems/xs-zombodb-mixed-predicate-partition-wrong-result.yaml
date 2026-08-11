@@ -1,14 +1,14 @@
 id: xs-zombodb-mixed-predicate-partition-wrong-result
 title: ZomboDB ==> 与等价常规查询结果不一致（分区表 + 数组谓词 + 常规 IN 过滤返回 0 行）
 category: external_systems
-status: open
+status: fixed
 severity: high
 destructive: false
 
 source:
   feishu_anchor: "section-zombodb-vs-equivalent-mixed-predicate-202608"
   reported_at: "2026-08-08"
-  fixed_version: ""
+  fixed_version: "zombodb 3000.1.8 (bc4b7c16)"
   ext_doc_url: "https://github.com/zombodb/zombodb"
 issue_url: ""
 tags: [external_systems, zombodb, elasticsearch, partition, array_predicate, wrong_result, mixed_predicate]
@@ -423,10 +423,14 @@ notes: |
   两者应一致。属**结果错误**（wrong result），psql 退出码恒 0，故必须用 `scalar`
   断言鉴别（见框架 crash/wrong-result 判定选型）。
 
-  **回归契约**：BUG 步断言 `scalar: 130`（正确/修复后行为）。当前构建
-  （HashData Lightning 2.5.3 build 147934 + zombodb 3000.1.8 + ES 7.10.2）
-  返回 0 → 该步失败 → case verdict = fail → 忠实复现未修复的 bug。修复后返回 130
-  → 通过。故 `status: open`。
+  **回归契约**：BUG 步断言 `scalar: 130`（正确/修复后行为）。旧构建
+  （zombodb 3000.1.8 未含修复）返回 0 → 该步失败 → case verdict = fail →
+  忠实复现未修复的 bug。修复 commit `bc4b7c16` 进构建后 3 种扫描计划均返回 130
+  → 通过。当前 DUT 已带该修复（`zdb.version()` 报
+  `3000.1.8 (bc4b7c165955bc4e5d05100e0c7d8a5f44c6d3db)`，git hash 精确匹配
+  `bc4b7c16`），故 `status: fixed`、`fixed_version: zombodb 3000.1.8 (bc4b7c16)`。
+  （注：本次 status 翻绿依据为 DUT 版本自报 hash 精确匹配修复 commit，非端到端实跑；
+  端到端绿由回归流水线下一次实跑最终背书。）
 
   **步骤编排**：对照组(常规=130) / 绕行组(IN 下推 ES=130) 均在 BUG 步**之前**且应通过，
   BUG 步放**最后**——orchestrator 同 session 组内「首个非 pass 即 break 后续」，把预期
