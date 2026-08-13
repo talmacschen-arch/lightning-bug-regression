@@ -1,0 +1,295 @@
+id: bug-0024-pax-btree-index-scan-slower-than-aocolumn
+title: PAX 表 BTREE 索引(Bitmap Heap Scan)扫描比 ao_column 慢一倍——模拟 ESS 客户环境造表造数 + 性能比值门
+category: bug_regression
+status: fixed
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "wiki/EcC1wTUB3i2yZLkWLjPc2JEYnfc#第7节-模拟客户环境造表造数"
+  reported_at: "2026-07-27"
+  fixed_version: "HashData Lightning SynxDB4 4.5.3-2 build 31"
+  ext_doc_url: "https://hashdata.feishu.cn/wiki/EcC1wTUB3i2yZLkWLjPc2JEYnfc"
+issue_url: ""
+tags: [pax, ao_column, btree, index, bitmap-heap-scan, performance, regression, partition]
+
+description: |
+  飞书 wiki《BTREE索引性能：PAX比ao_column慢一倍》第 7 节「模拟客户环境造表+造数」：
+  ESS 每分钟日志表，同一份 schema/数据分别建成 ao_column 版
+  (tb_eoprb_ess_bpak_log_per_min_h) 与 pax 版 (…_pax)，均按 log_dt 日分区、
+  ess_istl_ste_id 建 btree 索引。带 ess_istl_ste_id='GR17KR0196' 选择性过滤走索引
+  (对 AO/PAX 表即 Bitmap Index Scan → Bitmap Heap Scan)时，**PAX 版执行耗时约为
+  ao_column 版的一倍**；强制 seqscan 时两者接近(PAX 略慢一点点)。飞书原文：执行计划
+  一样，但 PAX 表慢一倍。
+
+  客户环境 = 两张 46 亿行大表(ao_column + pax) + 两张小表(map_h 位置映射 / ste_n 站点
+  维表)，主查询是三表 LEFT JOIN(大表 l ⋈ map_h m ⋈ ste_n s)，唯一差异是主表 l 用
+  ao_column 还是 pax。
+
+  **本 case 判定语义**(design.md §4.1.1：正面期望=修复后行为，红=仍有此 BUG)：核心断言
+  perf-gate 以确定性代码测两版主查询的最小执行耗时(min-of-N，warmup 丢弃冷缓存首跑)、
+  在 shell 里算比值 ratio=pax_min/ao_min，ratio≤1.60 输出 PERF_OK(绿)。BUG 复现时
+  PAX 慢一倍(ratio≈2) → 输出 PERF_REGRESSION、stdout 无 PERF_OK → 断言失败 → 红。
+
+  **本机复现结论(重要)**：在 SynxDB4 4.5.3-2 build 31、8 段集群上，热缓存下 ao_column
+  与 pax 两版索引路径均约 4000ms、稳定 ±2%，**2 倍差距不复现**(ratio≈0.96)，判定该性能
+  问题在本 build 已修复(status=fixed，用户确认当前版本已修)。本 case 作为防回归护栏：
+  若将来某 build PAX 索引路径重新退化到 ~2x，perf-gate 立即翻红。
+
+  **数据前置(务必知晓)**：两张大表(ao_column + pax)造数极慢(每表约 25 分钟)，**已预先造好、
+  本 case 绝不重建/重造**，setup/teardown 只 DROP 两张小表(与大表同处 esko_opr/common
+  schema，故严禁 DROP SCHEMA)。两张小表快(万级行)，每次跑 case 重建+重造+ANALYZE。
+
+procedure: |
+  1) setup(幂等清理): 只 DROP 两张**小表**(esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h /
+     common.tb_eemtb_ess_istl_ste_n)；**不碰**两张大表。
+  2) precheck-bigtables(前置守卫): 断言两张大表存在且 GR17KR0196 在 p20260601 分区有数据
+     (>0)。缺表/空表则此步失败 → 红，避免在无数据环境上"静默假过"。
+  3) build-small-tables: 建 map_h(ao_column, btree idx on istl_ste_id) + ste_n(ao_row)，
+     按飞书造数(GR17KR0196 + SITE000001..500 共 501 站点)灌数并 ANALYZE。
+  4) verify-small: 断言小表行数确定值(map_h=30060=501×60, ste_n=501)——证明造数真的走到。
+  5) diag-plan-ao / diag-plan-pax(证据步): optimizer=off 下 EXPLAIN 主查询，断言两版主表
+     均走 "Bitmap Heap Scan"(= AO/PAX 表的"走索引"路径)，坐实比较发生在索引路径上。
+  6) perf-gate(核心断言): warmup 各丢弃 1 次冷跑，各 min-of-4 取最小执行耗时，shell 算
+     ratio=pax_min/ao_min，ratio≤1.60 输出 PERF_OK；断言 stdout 含 AO_MIN_MS= 与 PERF_OK。
+  7) teardown: 只 DROP 两张小表。
+
+expected: |
+  - precheck-bigtables: 输出 't'(两大表 GR17KR0196@p20260601 均有数据)。
+  - verify-small: 输出含 "map_h=30060" 与 "ste_n=501"(造数走到、行数正确)。
+  - diag-plan-ao / diag-plan-pax: EXPLAIN 计划均含 "Bitmap Heap Scan"(走索引路径)。
+  - **核心 perf-gate**: stdout 含 "AO_MIN_MS="(测到了耗时)且含 "PERF_OK"(ratio≤1.60=修复后
+    行为)。BUG 复现时 PAX 慢一倍 ratio≈2 → 输出 "PERF_REGRESSION"、无 "PERF_OK" → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP TABLE IF EXISTS esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h; DROP TABLE IF EXISTS common.tb_eemtb_ess_istl_ste_n;'"
+
+steps:
+  - name: "precheck-bigtables: 两张大表存在且 GR17KR0196@p20260601 有数据(不碰大表/不重造)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -tAc \"
+        SELECT (SELECT count(*) FROM esko_opr.tb_eoprb_ess_bpak_log_per_min_h
+                WHERE ess_istl_ste_id='GR17KR0196' AND log_dt='20260601') > 0
+           AND (SELECT count(*) FROM esko_opr.tb_eoprb_ess_bpak_log_per_min_h_pax
+                WHERE ess_istl_ste_id='GR17KR0196' AND log_dt='20260601') > 0;\""
+    timeout_ms: 120000
+    expect:
+      stdout_contains: "t"
+
+  - name: "build-small-tables: 重建两张小表(map_h ao_column + ste_n ao_row)并按飞书造数+ANALYZE"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -v ON_ERROR_STOP=1 -f -" <<'EOSQL'
+      CREATE SCHEMA IF NOT EXISTS esko_opr;
+      CREATE SCHEMA IF NOT EXISTS common;
+
+      -- ===== 小表 m: 位置映射 (ao_column, btree idx on istl_ste_id) =====
+      DROP TABLE IF EXISTS esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h;
+      CREATE TABLE esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h (
+          istl_ste_id text, cntr_istl_loc_no text, bsc_istl_loc_no text, bank_istl_loc_no text,
+          rack_istl_loc_no text, bpck_istl_loc_no text, frm_bpck_istl_dt text, to_bpck_istl_dt text,
+          bpck_id text, bpck_istl_ver_no text, bpck_istl_fin_ver_yn text, bpck_istl_dtm text,
+          eqp_istl_hric_strc_no text, adj_cntr_istl_loc_no text, adj_bsc_istl_loc_no text,
+          adj_bank_istl_loc_no text, adj_rack_istl_loc_no text, adj_istl_loc_id text,
+          data_ldup_dtm timestamp without time zone)
+      USING ao_column WITH (compresstype=zstd, compresslevel=7, checksum=true)
+      DISTRIBUTED BY (bpck_istl_loc_no);
+      CREATE INDEX tb_eoprb_istl_ste_bpck_loc_map_h_idx1
+          ON esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h USING btree (istl_ste_id);
+
+      -- ===== 小表 s: 站点维表 (ao_row) =====
+      DROP TABLE IF EXISTS common.tb_eemtb_ess_istl_ste_n;
+      CREATE TABLE common.tb_eemtb_ess_istl_ste_n (
+          ess_istl_ste_id text, ess_istl_ste_nm text, ver_no text, ver_crt_dt text, misn_yy text,
+          sls_prj_id text, sls_prj_nm text, ctry_nm text, ess_istl_cust_id text, ess_istl_cust_nm text,
+          fat_prog_yn text, fat_cplt_dt text, sat_cplt_dt text, flaw_asrc_perd_st_dt text,
+          flaw_asrc_perd_end_dt text, pef_asrc_perd_st_dt text, pef_asrc_perd_end_dt text,
+          ess_istl_prog_stat_cd text, ess_istl_prog_stat_nm text, istl_capa text, istl_elpw text,
+          pwgr_useg_cd text, pwgr_useg_nm text, pwgr_sup_rang_cd text, pwgr_sup_rang_nm text,
+          bsc_tot_qty numeric, bbnk_tot_qty numeric, brak_mdl_cd text, brak_tot_qty numeric,
+          bpck_mdl_cd text, bpck_tot_qty numeric, bcel_tp_cd text, bpu_mdl_cd text, bblk_mdl_cd text,
+          bblk_mdl_qty numeric, belk_mdl_cd text, belk_mdl_qty numeric, wiu_mdl_cd text, wiu_mdl_qty numeric,
+          bsc_hw_ver_nm text, bsc_sw_ver_prfx_nm text, bsc_sw_ver_nm text, btr_bms_hw_ver_nm text,
+          btr_bms_sw_ver_prfx_nm text, btr_bms_sw_ver_nm text, rack_bms_hw_ver_nm text,
+          rack_bms_sw_ver_prfx_nm text, rack_bms_sw_ver_nm text, mdu_bms_hw_ver_nm text,
+          mdu_bms_sw_ver_prfx_nm text, mdu_bms_sw_ver_nm text, istl_dadr text, istl_badr text,
+          istl_cty_nm text, zpcd text, fin_ver_yn text, crt_dtm timestamp without time zone, etl_ldup_dt text)
+      USING ao_row WITH (compresstype=zstd, compresslevel=7, checksum=true)
+      DISTRIBUTED BY (ess_istl_ste_id, ver_no);
+
+      -- ===== 造数: 站点集 = GR17KR0196 + SITE000001..500 (501 站点) =====
+      INSERT INTO common.tb_eemtb_ess_istl_ste_n
+      (ess_istl_ste_id, ess_istl_ste_nm, ver_no, ver_crt_dt, misn_yy, sls_prj_id, sls_prj_nm, ctry_nm,
+       ess_istl_cust_id, ess_istl_cust_nm, ess_istl_prog_stat_cd, ess_istl_prog_stat_nm, istl_capa,
+       istl_elpw, bpck_mdl_cd, bcel_tp_cd, fin_ver_yn, crt_dtm, etl_ldup_dt)
+      SELECT s.site, 'ESS Site '||s.site, '1', '20260101', '2026', 'PRJ_'||s.site, 'ESS Project '||s.site,
+       'KR', 'CUST_'||s.site, 'ESS Operator', '30', 'in-operation', '100.000', '50.000',
+       'BPCK_MODEL_A', 'NCM', 'Y', clock_timestamp()::timestamp, '20260601'
+      FROM (SELECT 'GR17KR0196' site UNION ALL
+            SELECT 'SITE'||lpad(g::text,6,'0') FROM generate_series(1,500) g) s;
+
+      -- 每站点 60 行 (4 bank × 3 rack × 5 pack) = 501 × 60 = 30060 行
+      INSERT INTO esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h
+      (istl_ste_id, cntr_istl_loc_no, bsc_istl_loc_no, bank_istl_loc_no, rack_istl_loc_no, bpck_istl_loc_no,
+       frm_bpck_istl_dt, to_bpck_istl_dt, bpck_id, bpck_istl_ver_no, bpck_istl_fin_ver_yn, bpck_istl_dtm,
+       eqp_istl_hric_strc_no, adj_cntr_istl_loc_no, adj_bsc_istl_loc_no, adj_bank_istl_loc_no,
+       adj_rack_istl_loc_no, adj_istl_loc_id, data_ldup_dtm)
+      SELECT s.site, '1', '1', b.bank, r.rack, p.pack, '20260101', '20271231',
+       'BPCK_'||b.bank||r.rack||p.pack, '1', 'Y', '20260101000000', 'HRC_'||b.bank||r.rack||p.pack,
+       '1', '1', b.bank, r.rack, 'LOC_'||b.bank||r.rack||p.pack, clock_timestamp()::timestamp
+      FROM (SELECT 'GR17KR0196' site UNION ALL
+            SELECT 'SITE'||lpad(g::text,6,'0') FROM generate_series(1,500) g) s
+      CROSS JOIN (VALUES ('01'),('02'),('03'),('04')) AS b(bank)
+      CROSS JOIN (VALUES ('01'),('02'),('03'))        AS r(rack)
+      CROSS JOIN (VALUES ('01'),('02'),('03'),('04'),('05')) AS p(pack);
+
+      ANALYZE esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h;
+      ANALYZE common.tb_eemtb_ess_istl_ste_n;
+      EOSQL
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+
+  - name: "verify-small: 小表行数确定值(map_h=30060 / ste_n=501)——证明造数走到"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -tAc \"
+        SELECT 'map_h='||count(*) FROM esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h
+        UNION ALL
+        SELECT 'ste_n='||count(*) FROM common.tb_eemtb_ess_istl_ste_n;\""
+    timeout_ms: 60000
+    expect:
+      stdout_contains:
+        - "map_h=30060"
+        - "ste_n=501"
+
+  - name: "diag-plan-ao: ao_column 主查询走 Bitmap Heap Scan(走索引路径证据)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -c \"
+        SET optimizer=off;
+        EXPLAIN SELECT count(*) FROM esko_opr.tb_eoprb_ess_bpak_log_per_min_h l
+        WHERE l.ess_istl_ste_id='GR17KR0196' AND l.log_dt='20260601';\""
+    timeout_ms: 60000
+    expect:
+      stdout_contains: "Bitmap Heap Scan"
+
+  - name: "diag-plan-pax: pax 主查询走 Bitmap Heap Scan(与 ao_column 同路径对照)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -d gpadmin -c \"
+        SET optimizer=off;
+        EXPLAIN SELECT count(*) FROM esko_opr.tb_eoprb_ess_bpak_log_per_min_h_pax l
+        WHERE l.ess_istl_ste_id='GR17KR0196' AND l.log_dt='20260601';\""
+    timeout_ms: 60000
+    expect:
+      stdout_contains: "Bitmap Heap Scan"
+
+  - name: "perf-gate(核心断言): 两版主查询 min-of-4 耗时比值 ratio=pax/ao≤1.60 → PERF_OK"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'bash -s' <<'PERFEOF'
+      set -uo pipefail
+      DB=gpadmin
+      build_sql() {
+        local t="$1"
+        cat <<SQL
+      set optimizer=off;
+      EXPLAIN (ANALYZE, TIMING OFF, COSTS OFF)
+      SELECT s.ctry_nm, l.ess_istl_ste_id, s.ess_istl_ste_nm, s.bpck_mdl_cd,
+       l.log_dt, l.log_dt_hh_mm, l.bsc_id, l.bbnk_id, l.brak_id,
+       l.bpck_istl_loc_no, l.bcel_istl_loc_no, l.msr_tp_cd, l.agg_tp_cd_ary, l.msr_nvl_ary,
+       m.bpck_id, m.bpck_istl_ver_no, m.bpck_istl_fin_ver_yn, m.bpck_istl_dtm
+      FROM esko_opr.$t l
+      LEFT OUTER JOIN esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h m
+       ON m.istl_ste_id=l.ess_istl_ste_id AND m.adj_bsc_istl_loc_no='1'
+       AND m.adj_bank_istl_loc_no=l.bbnk_id AND m.adj_rack_istl_loc_no=l.brak_id
+       AND m.bpck_istl_loc_no=l.bpck_istl_loc_no
+       AND l.log_dt >= m.frm_bpck_istl_dt AND l.log_dt <= m.to_bpck_istl_dt
+      LEFT OUTER JOIN common.tb_eemtb_ess_istl_ste_n s
+       ON s.ess_istl_ste_id=l.ess_istl_ste_id
+       AND s.ver_no = case when l.msr_tp_cd not in ('RACK_SOC','RACK_SOH') then m.bpck_istl_ver_no else s.ver_no END
+      WHERE 1=1 AND l.ess_istl_ste_id in ('GR17KR0196') AND l.bsc_id in ('1')
+       AND l.log_dt BETWEEN '20260601' AND '20260610'
+       AND l.log_dt_hh_mm BETWEEN '2026-06-01 06:00' AND '2026-06-10 06:00'
+       AND l.msr_tp_cd IN ('VOLT');
+      SQL
+      }
+      measure() { psql -d "$DB" -At -c "$(build_sql "$1")" 2>/dev/null | sed -n 's/.*Execution Time: \([0-9.]*\) ms.*/\1/p'; }
+      best() {
+        local t="$1" n="$2" b="" v i
+        measure "$t" >/dev/null    # warmup: 丢弃冷缓存首跑
+        for i in $(seq 1 "$n"); do
+          v=$(measure "$t")
+          [ -z "$v" ] && continue
+          if [ -z "$b" ] || awk "BEGIN{exit !($v<$b)}"; then b=$v; fi
+        done
+        echo "$b"
+      }
+      AO=$(best tb_eoprb_ess_bpak_log_per_min_h 4)
+      PAX=$(best tb_eoprb_ess_bpak_log_per_min_h_pax 4)
+      echo "AO_MIN_MS=$AO PAX_MIN_MS=$PAX"
+      awk -v ao="$AO" -v pax="$PAX" 'BEGIN{
+        if (ao=="" || pax=="" || ao+0<=0){print "PERF_ERROR ao="ao" pax="pax; exit 0}
+        r=(pax+0)/(ao+0);
+        printf "RATIO=%.3f THRESHOLD=1.60\n", r;
+        if (r<=1.60) print "PERF_OK"; else print "PERF_REGRESSION";
+      }'
+      PERFEOF
+    timeout_ms: 180000
+    expect:
+      stdout_contains:
+        - "AO_MIN_MS="
+        - "PERF_OK"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP TABLE IF EXISTS esko_opr.tb_eoprb_istl_ste_bpck_loc_map_h; DROP TABLE IF EXISTS common.tb_eemtb_ess_istl_ste_n;'"
+
+created_by: chenqiang
+created_at: "2026-08-13"
+notes: |
+  来源：飞书 wiki《BTREE索引性能：PAX比ao_column慢一倍》第 7 节「模拟客户环境造表+造数」
+  https://hashdata.feishu.cn/wiki/EcC1wTUB3i2yZLkWLjPc2JEYnfc
+
+  **现象**：同一份 ESS 日志数据分别建 ao_column 版与 pax 版(日分区 + ess_istl_ste_id
+  btree 索引)。带 ess_istl_ste_id='GR17KR0196' 选择性过滤走索引(AO/PAX 表 = Bitmap Index
+  Scan → Bitmap Heap Scan)时，PAX 版耗时约为 ao_column 版的一倍；强制 seqscan 时两者接近。
+  执行计划形状一致，差异纯在执行耗时。
+
+  **为何用"性能比值门"而非计划/行数断言**：飞书原文明确"执行计划一样，只是 PAX 慢一倍"，
+  故没有可用的结构性(计划形状/行数/块数)确定性信号来区分——唯一信号是执行耗时。为把
+  "耗时对比"做成确定性判定(而非交给模型/外层超时)：perf-gate 步用 shell 确定性代码测两版
+  主查询各自最小执行耗时(min-of-4，warmup 丢弃冷缓存首跑以压噪声)，在 awk 里算
+  ratio=pax_min/ao_min，ratio≤1.60 打印 PERF_OK。判定完全在代码里，符合"确定性的事用确定性
+  代码"。阈值 1.60 取在噪声地板(热缓存 ratio≈1.0、±2%)与回归幅度(~2x)之间，留足余量。
+
+  **本机验证(2026-08-13, SynxDB4 4.5.3-2 build 31, 8 段)**：
+  - precheck-bigtables：两大表 GR17KR0196@p20260601 各 432,000 行(>0) → 't'，PASS。
+  - build-small-tables + verify-small：map_h=30060(501×60)、ste_n=501，PASS。
+  - diag-plan-ao/pax：两版主查询 EXPLAIN 均为 Bitmap Heap Scan(AO/PAX 表不支持普通 Index
+    Scan，"走索引"即 Bitmap 路径)，PASS。
+  - perf-gate：热缓存下 AO_MIN≈4025ms、PAX_MIN≈3864ms、ratio≈0.96 ≤1.60 → PERF_OK，PASS。
+    **2 倍差距在本 build 不复现** → 判定已修复(status=fixed；用户确认当前版本已修)。
+    若将来 PAX 索引路径回归到 ~2x，ratio 将 >1.60 → 输出 PERF_REGRESSION、无 PERF_OK → 红。
+
+  **大表数据(务必知晓)**：两张 46 亿行大表(ao_column tb_eoprb_ess_bpak_log_per_min_h /
+  pax …_pax)造数极慢(每表约 25 分钟)，**已预先造好，本 case 绝不重建/重造**。setup/teardown
+  只 DROP 两张小表(map_h / ste_n)——它们与大表**同处 esko_opr / common schema**，故严禁
+  DROP SCHEMA(会连带删掉大表)。两张小表(万级行)每次跑 case 重建+重造+ANALYZE。
+
+  **站点集**：小表按飞书造数用 GR17KR0196 + SITE000001..500(共 501 站点)；主查询只过滤
+  GR17KR0196，其余站点仅作陪衬(LEFT JOIN 不匹配即空)。大表侧站点数(实测 201)与小表不必
+  一致——查询只需 GR17KR0196 在两侧都在，join 形状即成立。
+
+  **判定语义**(design.md §4.1.1)：正面期望=修复后行为(ratio≤1.60=PERF_OK=绿)；BUG 复现时
+  PAX 慢一倍 ratio≈2 → PERF_REGRESSION、stdout 无 PERF_OK → 核心断言失败 → case 红。
