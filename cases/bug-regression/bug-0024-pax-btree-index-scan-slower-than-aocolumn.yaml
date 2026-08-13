@@ -1,20 +1,20 @@
 id: bug-0024-pax-btree-index-scan-slower-than-aocolumn
-title: PAX 表 BTREE 索引(Bitmap Heap Scan)扫描比 ao_column 慢一倍——模拟 ESS 客户环境造表造数 + 性能比值门
+title: PAX 表 BTREE 索引(Bitmap Heap Scan)扫描比 ao_column 慢一倍——模拟生产环境造表造数 + 性能比值门
 category: bug_regression
 status: fixed
 severity: medium
 destructive: false
 
 source:
-  feishu_anchor: "wiki/EcC1wTUB3i2yZLkWLjPc2JEYnfc#第7节-模拟客户环境造表造数"
+  feishu_anchor: "第7节-模拟生产环境造表造数"
   reported_at: "2026-07-27"
   fixed_version: "HashData Lightning SynxDB4 4.5.3-2 build 31"
-  ext_doc_url: "https://hashdata.feishu.cn/wiki/EcC1wTUB3i2yZLkWLjPc2JEYnfc"
+  ext_doc_url: ""
 issue_url: ""
 tags: [pax, ao_column, btree, index, bitmap-heap-scan, performance, regression, partition]
 
 description: |
-  飞书 wiki《BTREE索引性能：PAX比ao_column慢一倍》第 7 节「模拟客户环境造表+造数」：
+  来源文档《BTREE 索引性能：PAX 比 ao_column 慢一倍》第 7 节「模拟生产环境造表+造数」：
   ESS 每分钟日志表，同一份 schema/数据分别建成 ao_column 版
   (tb_eoprb_ess_bpak_log_per_min_h) 与 pax 版 (…_pax)，均按 log_dt 日分区、
   ess_istl_ste_id 建 btree 索引。带 ess_istl_ste_id='GR17KR0196' 选择性过滤走索引
@@ -22,7 +22,7 @@ description: |
   ao_column 版的一倍**；强制 seqscan 时两者接近(PAX 略慢一点点)。飞书原文：执行计划
   一样，但 PAX 表慢一倍。
 
-  客户环境 = 两张 46 亿行大表(ao_column + pax) + 两张小表(map_h 位置映射 / ste_n 站点
+  生产环境 = 两张 46 亿行大表(ao_column + pax) + 两张小表(map_h 位置映射 / ste_n 站点
   维表)，主查询是三表 LEFT JOIN(大表 l ⋈ map_h m ⋈ ste_n s)，唯一差异是主表 l 用
   ao_column 还是 pax。
 
@@ -258,8 +258,7 @@ teardown:
 created_by: chenqiang
 created_at: "2026-08-13"
 notes: |
-  来源：飞书 wiki《BTREE索引性能：PAX比ao_column慢一倍》第 7 节「模拟客户环境造表+造数」
-  https://hashdata.feishu.cn/wiki/EcC1wTUB3i2yZLkWLjPc2JEYnfc
+  来源：内部文档《BTREE 索引性能：PAX 比 ao_column 慢一倍》第 7 节「模拟生产环境造表+造数」
 
   **现象**：同一份 ESS 日志数据分别建 ao_column 版与 pax 版(日分区 + ess_istl_ste_id
   btree 索引)。带 ess_istl_ste_id='GR17KR0196' 选择性过滤走索引(AO/PAX 表 = Bitmap Index
