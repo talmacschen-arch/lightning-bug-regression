@@ -1,0 +1,160 @@
+id: bug-0025-ao-analyze-fast-sampling-domain-pg-stats-empty
+title: "[ANALYZE] AO 表(ao_row/ao_column)大量 DELETE/全量重载后 ANALYZE 应采集到统计信息，而非 pg_stats 为空(fast-analyze 采样域不匹配)"
+category: bug_regression
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "ao-analyze-fast-sampling-domain-pg-stats-empty-issue945-202509"
+  reported_at: "2026-09"
+  fixed_version: "HashData Lightning SynxDB4 4.5.4-3 build 204"
+  ext_doc_url: ""
+issue_url: ""
+tags: [analyze, ao_row, ao_column, aocs, fast-analyze, pg_stats, pg_statistic, sampling, statistics, full-reload, regression]
+
+description: |
+  issue #945：对经历"大量 DELETE / 全量重载（先 DELETE 后 INSERT）"的 AO 表执行 ANALYZE，
+  命令正常返回、pg_class.reltuples 也正确更新，但 pg_statistic / pg_stats 一条统计都没有
+  （静默失败——命令看起来成功、reltuples 还对，最易被误判为已完成）。
+
+  根因：fast-analyze 的 AO 采样存在**采样域（sampling domain）不匹配**——采样器用**存活行数**
+  初始化取样范围（RowSampler_Init(&rs, *totalrows=存活行数, ...)），但产出的行号被当作**含死行
+  的物理行号**去随机访问 tuple（appendonly_get_target_tuple / locate_target_segment 用含死行的
+  物理总量定位）。先删后插后，存活行落在高位物理行号，而采样器只在 [0, 存活行数) 的低位物理
+  区间探测——该区间全是死行、可见性检查恒 false → 采到 0 行 → ANALYZE 无数据可算 → pg_stats 空。
+  AO_ROW（appendonlyam_handler.c）与 AOCS 列存（aocsam_handler.c）两处同样问题。
+  引入于 fast-analyze commit（把 AO 采样从"顺序扫描跳过非目标行"改为"按行号随机访问"）。
+
+  **本 case 验证修复**（§4.1.1：正面 expect=修复后行为，红=仍有此 BUG）：对两张 AO 表
+  （ao_row + ao_column）做"大插入→全删→小插入"的全量重载，ANALYZE 后 pg_stats **非空**
+  （各列均有统计）；并保留 reltuples=存活行数 以记录"看似成功"的迷惑信号。
+  临时规避（现场）：先 VACUUM 回收 AO 死空间使采样域对齐，再 ANALYZE（VACUUM ANALYZE）。
+
+procedure: |
+  步骤全程 psql（ANALYZE 是 non-tx-safe DDL，必须 psql 而非 kind:sql psycopg；design.md §4.1.2）。
+  1) build-full-reload (step 1): 建 schema repro_an + 两张 7 列 AO 表（t_aorow ao_row /
+     t_aocs ao_column），各做大插入 500000 → 全删 → 重插 1762（模拟维表每日全量重刷，存活行落
+     高位物理区间）；断言两表存活行数均=1762。
+  2) analyze-and-verify-stats (step 2, 核心): 对两表 ANALYZE，然后查 pg_stats 是否非空 +
+     pg_class.reltuples；期望 AOROW_HAS_STATS=t / AOCS_HAS_STATS=t（采到统计=修复）+
+     AOROW_RELTUP=1762（reltuples 正确、证全量重载真的到位、非空表假过）。
+expected: |
+  - build-full-reload：含 "AOROW_CNT=1762" + "AOCS_CNT=1762"（全量重载后存活行正确），无 ERROR/FATAL；
+  - analyze-and-verify-stats（核心）：ANALYZE 成功；pg_stats 非空 →
+      "AOROW_HAS_STATS=t"（ao_row 采到统计）+ "AOCS_HAS_STATS=t"（ao_column 采到统计）+
+      "AOROW_RELTUP=1762"（reltuples 正确），无 ERROR/FATAL；
+  - BUG 复现时：ANALYZE 命令照样成功、reltuples 照样=1762，但 pg_stats 为空 →
+      AOROW_HAS_STATS=f / AOCS_HAS_STATS=f → 正面 marker 缺失 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: []
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup:
+  - su - gpadmin -c "psql -h 127.0.0.1 -p 5432 -d gpadmin -c 'DROP SCHEMA IF EXISTS repro_an CASCADE'"
+
+steps:
+  - name: "build-full-reload: 建 ao_row + ao_column 两表，各大插入 500000→全删→重插 1762(存活落高位物理区间)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -v ON_ERROR_STOP=1 -f -' 2>&1 <<'PGEOF'
+      CREATE SCHEMA IF NOT EXISTS repro_an;
+      -- ===== AO_ROW =====
+      DROP TABLE IF EXISTS repro_an.t_aorow;
+      CREATE TABLE repro_an.t_aorow (
+        plnt_cd text, save_loc_cd text, save_loc_nm text,
+        etl_crtn_dt text, patn_area_id text, etl_ldup_dt text,
+        data_ldup_dtms timestamp without time zone
+      ) using ao_row with (compresstype=zstd, compresslevel=7, blocksize=32768)
+        distributed by (plnt_cd);
+      INSERT INTO repro_an.t_aorow SELECT 'PLNT'||(i%5),'LOC'||i,'nm'||i,'d',null,'d',now() FROM generate_series(1,500000) i;
+      DELETE FROM repro_an.t_aorow;
+      INSERT INTO repro_an.t_aorow SELECT 'PLNT'||(i%5),'LOC'||i,'nm'||i,'d',null,'d',now() FROM generate_series(1,1762) i;
+      -- ===== AOCS (ao_column 列存，同 bug) =====
+      DROP TABLE IF EXISTS repro_an.t_aocs;
+      CREATE TABLE repro_an.t_aocs (
+        plnt_cd text, save_loc_cd text, save_loc_nm text,
+        etl_crtn_dt text, patn_area_id text, etl_ldup_dt text,
+        data_ldup_dtms timestamp without time zone
+      ) using ao_column with (compresstype=zstd, compresslevel=7, blocksize=32768)
+        distributed by (plnt_cd);
+      INSERT INTO repro_an.t_aocs SELECT 'PLNT'||(i%5),'LOC'||i,'nm'||i,'d',null,'d',now() FROM generate_series(1,500000) i;
+      DELETE FROM repro_an.t_aocs;
+      INSERT INTO repro_an.t_aocs SELECT 'PLNT'||(i%5),'LOC'||i,'nm'||i,'d',null,'d',now() FROM generate_series(1,1762) i;
+      SELECT 'AOROW_CNT='||count(*) FROM repro_an.t_aorow;
+      SELECT 'AOCS_CNT='||count(*) FROM repro_an.t_aocs;
+      PGEOF
+    timeout_ms: 300000
+    expect:
+      exit_code: 0
+      stdout_contains: ["AOROW_CNT=1762", "AOCS_CNT=1762"]
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "analyze-and-verify-stats（核心）: ANALYZE 两表后 pg_stats 应非空(采到统计=修复) + reltuples 正确"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -f -' 2>&1 <<'PGEOF'
+      ANALYZE repro_an.t_aorow;
+      ANALYZE repro_an.t_aocs;
+      SELECT 'AOROW_HAS_STATS='||(count(*) > 0) FROM pg_stats WHERE schemaname='repro_an' AND tablename='t_aorow';
+      SELECT 'AOCS_HAS_STATS='||(count(*) > 0)  FROM pg_stats WHERE schemaname='repro_an' AND tablename='t_aocs';
+      SELECT 'AOROW_STATS_COLS='||count(*) FROM pg_stats WHERE schemaname='repro_an' AND tablename='t_aorow';
+      SELECT 'AOCS_STATS_COLS='||count(*)  FROM pg_stats WHERE schemaname='repro_an' AND tablename='t_aocs';
+      SELECT 'AOROW_RELTUP='||reltuples::int FROM pg_class WHERE oid='repro_an.t_aorow'::regclass;
+      PGEOF
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "AOROW_HAS_STATS=t"
+        - "AOCS_HAS_STATS=t"
+        - "AOROW_RELTUP=1762"
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - su - gpadmin -c "psql -h 127.0.0.1 -p 5432 -d gpadmin -c 'DROP SCHEMA IF EXISTS repro_an CASCADE'"
+
+created_by: chenqiang
+created_at: "2026-10-21"
+notes: |
+  来源：内部 issue #945（全量重刷型 ETL 的 AO 维表，ANALYZE 采集不到统计）。本 case 用 issue
+  自带的最小通用复现（generic schema repro_an，无客户/内部标识）。
+
+  **现象**：对有存活数据的 AO 表 ANALYZE，命令成功、reltuples 正确，但 pg_stats 为空。
+  客户尝试"allow_system_table_mods + 删 pg_statistic + full-scan ANALYZE"无效——问题在采样阶段，
+  非旧统计残留。
+
+  **根因**（fast-analyze 采样域不匹配）：采样器用存活行数初始化采样域
+  (RowSampler_Init(&rs, *totalrows=totaltupcount-totaldeadtupcount, ...))，但产出的行号被当含死行
+  的物理行号随机访问 (appendonly/aocs locate_target_segment 用含死行的 total_tupcount 定位)。
+  先删后插→存活行在高位物理行号，采样器只探 [0,存活行数) 低位区间(全死行)→采 0 行→pg_stats 空。
+  AO_ROW (appendonlyam_handler.c ~1555) + AOCS (aocsam_handler.c ~1673) 两处同样。
+
+  **判定信号**（正面 expect=修复后行为）：核心断言 pg_stats 非空布尔
+  AOROW_HAS_STATS=t / AOCS_HAS_STATS=t（BUG 复现时=f）。辅以 AOROW_RELTUP=1762 证 reltuples
+  正确、全量重载真的到位（排除"空表假过"：空表 ANALYZE 也 pg_stats 空但不是这个 bug）。
+  另打印 *_STATS_COLS（修复后=7，7 列全有统计）供报告观察。ANALYZE 报错在 stderr，cmd 用 2>&1。
+
+  **为何 kind:shell + psql 而非 kind:sql**：ANALYZE 是 non-tx-safe DDL（design.md §4.1.2 /
+  skill cross-check #11），走 psycopg 会撞错；psql -f 默认 autocommit，ANALYZE 下发后 pg_statistic
+  已提交，同会话后续 SELECT pg_stats 可见。
+
+  **临时规避**（现场可用，非本 case 断言）：VACUUM <table>（回收 AO 死空间、使采样域与物理行号
+  对齐，ANALYZE 本身不回收）后再 ANALYZE，或 VACUUM ANALYZE；全量重载型 AO 表建议把
+  VACUUM ANALYZE 纳入 ETL 收尾。
+
+  **本机验证（2026-10-21，SynxDB4 4.5.4-3 build 204，8 段）**：
+  - build-full-reload：t_aorow / t_aocs 全量重载后各存活 1762 行 → PASS。
+  - analyze-and-verify-stats：ANALYZE 成功；pg_stats 非空（AOROW/AOCS 各 7 列均有统计，
+    HAS_STATS=t）、reltuples=1762 → BUG 不复现 = 已修复（status=fixed）。
+  - 另跑 issue 的 A/B 判别实验（live/dead 相同、仅存活行物理位置不同）：高位组与低位组
+    pg_stats 均非空（BUG 时高位组=0），坐实采样域根因已修、非偶然采到。
+  - 诚实边界：仅在 build 204 验证不复现；issue 原文 2026-09 在 4.5.3-4 build 48 (rc/2.5.3)
+    复现，本 case 未在该旧 build 实证复现（版本已过）。死行极多时修复后仍可能欠采样
+    （统计非空但代表性有限），彻底恢复质量仍依赖 VACUUM——本 case 只断言"采到统计(非空)"。
