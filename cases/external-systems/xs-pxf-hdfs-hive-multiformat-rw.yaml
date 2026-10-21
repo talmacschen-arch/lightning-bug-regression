@@ -1,0 +1,324 @@
+id: xs-pxf-hdfs-hive-multiformat-rw
+title: "[PXF+HDFS+Hive] 多格式(text/csv/json/parquet/orc/avro)读 + parquet/orc/text 写 round-trip + 分区裁剪 + 复杂类型负向，PXF 6.10.1 完整能力回归护栏"
+category: external_systems
+status: fixed
+severity: medium
+destructive: false
+
+source:
+  feishu_anchor: "pxf-hdfs-hive-multiformat-rw-202610"
+  reported_at: "2026-10-20"
+  fixed_version: "HashData Lightning SynxDB4 4.5.4-3 build 204 / PXF 6.10.1 (2.2.0, org.apache.cloudberry.pxf)"
+  ext_doc_url: ""
+issue_url: ""
+tags: [external_systems, pxf, hdfs, hive, parquet, orc, avro, csv, json, snappy, partition_pruning, writable_external_table, hadoop_simple]
+
+description: |
+  本地集群 PXF 升级到 6.10.1（内部 version 2.2.0，Apache Cloudberry PXF 线）后，对 PXF +
+  HDFS/Hive 读写做一轮完整能力回归，作为护栏：
+    - A 组 HDFS 直读（hdfs:* profile，按路径）：text / csv(跳表头) / json / parquet(snappy) /
+      orc / avro 六格式，含标量 + 一维数组 + UTF-8 中文；
+    - B 组 Hive metastore 读（按 库.表）：hive（parquet 表，数组→Hive JSON 文本，列声明 text）/
+      hive:orc / hive:text（标量）；
+    - C 组 分区裁剪（hive profile 读 Hive 分区表）；
+    - D 组 负向/边界：STRUCT / MAP 经 hdfs:parquet 应报 "not supported"；经 hive 降级为 JSON
+      文本；路径不存在应报 "Input path does not exist"；
+    - 写 round-trip（hdfs:* writable，pxfwritable_export）：text / parquet primitive(snappy) /
+      parquet LIST 复杂(snappy) / orc，写出后由同 LOCATION 可读外表读回校验（含 UTF-8 + 数组）。
+
+  其中 parquet LIST 复杂写（names text[] / vals float8[]）是 GPDB6 → SynxDB4.5 迁移闭环的
+  关键：6.10.1 写出标准 3-level LIST + snappy，正是旧 V6.4 读不了、GPDB6 导出端产生的结构。
+  eswa 真表的复杂 LIST **读** 回归由姊妹 case xs-pxf-hdfs-parquet-complex-list-read 专门覆盖
+  （issue #986），本 case 不重复其 72 列读。
+
+  外部数据（HDFS/Hive hadoop_simple 10.14.3.201 上已就绪，预先造好，本 case 不造数）：
+    - HDFS 裸文件：/tmp/pxftest/{text/emp.txt, csv/emp.csv, json/emp.json}
+    - Hive pxftest 库：emp_parq(parquet snappy) / emp_orc(orc snappy) / emp_avro / emp_text /
+      emp_part(parquet 分区表 dept=Eng/HR) / cplx_struct / cplx_map
+    - 写目标父目录 /tmp/pxftest/wout（gpadmin 所属，PXF 以 gpadmin 落盘在其下自建子目录）。
+
+procedure: |
+  1) precondition (step 1): curl hadoop_simple NameNode /jmx → 期望在线（不在线=外部依赖未就绪 → 红、后续步不跑）。
+  2) read-hdfs-direct (step 2): A 组六格式 hdfs:* 直读，断言各格式关键标量 + UTF-8 + 数组值。
+  3) read-hive-metastore (step 3): B 组 hive / hive:orc / hive:text 读，断言 parquet 表数组→JSON 文本 + 标量。
+  4) partition-pruning (step 4): C 组 hive 读分区表，断言全量 3 行 + dept='Eng' 裁剪 2 行。
+  5) negative-boundary (step 5): D 组，断言 STRUCT/MAP via hdfs:parquet 报 not supported、
+     STRUCT via hive 降级 JSON、坏路径报 Input path does not exist（这些报错=本步的正面期望）。
+  6) write-roundtrip (step 6): 写 text/parquet-primitive/parquet-LIST/orc 外表 + 读回，断言写入值
+     （含 UTF-8 中文 + LIST 数组）被正确读回。
+expected: |
+  - precondition：stdout 含 "NameNodeStatus"，无连接错误；
+  - read-hdfs-direct：exit 0，stdout 含 "Alice"/"张三"/"研发"/"12345.67"（标量+UTF-8）、
+    "Carol"/"李四"/"市场"（csv）、"Frank"/"王五"（json）、"{x86,gpu}"/"{ml}"/"{q1,q2}"/"{a,b,c}"
+    （parquet/orc/avro 一维数组），无 ERROR/FATAL；
+  - read-hive-metastore：exit 0，含 '["x86","gpu"]'（hive parquet 数组→JSON 文本）+ "Alice"
+    （hive:orc / hive:text 标量），无 ERROR/FATAL；
+  - partition-pruning：exit 0，含 "FULL=3" + "PRUNED=2" + "Cara"，无 ERROR/FATAL；
+  - negative-boundary：exit 0，含 "struct is not supported"（STRUCT via hdfs:parquet）+
+    "MAP is not supported"（MAP via hdfs:parquet）+ '{"a":"x","b":5}'（STRUCT via hive 降级 JSON）
+    + "Input path does not exist"（坏路径）；
+  - write-roundtrip：exit 0，含 "Wally"/"中文写"（text）+ "中文Parq"/"20.2"（parquet primitive）+
+    "{中,文}"/"{3.3}"/"{a,b}"（parquet LIST 复杂写+读回）+ "中文"（orc），无 ERROR/FATAL；
+  - 任一能力在某 build 退化（如 PXF 回退 V6.4：数组读写抛 complex type not supported；或某格式
+    reader 缺失）→ 对应断言缺失/报错 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: [hadoop_simple]
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "precondition: 验证 hadoop_simple NameNode 在线"
+    kind: shell
+    cmd: |
+      curl -m 10 -sS "http://{{ external.hadoop_simple.host }}:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeStatus"
+    timeout_ms: 30000
+    expect:
+      exit_code: 0
+      stdout_contains: ["NameNodeStatus"]
+      not_contains: ["Connection refused", "Connection timed out", "Failed to connect"]
+
+  - name: "read-hdfs-direct(A 组): hdfs:text/csv/json/parquet/orc/avro 六格式直读(标量+UTF-8+一维数组)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      CREATE EXTENSION IF NOT EXISTS pxf;
+      CREATE SCHEMA IF NOT EXISTS pxftest;
+      SET search_path = pxftest, public;
+      DROP EXTERNAL TABLE IF EXISTS r_text;
+      CREATE EXTERNAL TABLE r_text (id int, name text, dept text, salary float8)
+       LOCATION ('pxf://tmp/pxftest/text/emp.txt?PROFILE=hdfs:text&SERVER=default') FORMAT 'TEXT' (DELIMITER '|');
+      SELECT 'TEXT' tag, * FROM r_text ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS r_csv;
+      CREATE EXTERNAL TABLE r_csv (id int, name text, dept text, salary float8)
+       LOCATION ('pxf://tmp/pxftest/csv/emp.csv?PROFILE=hdfs:csv&SERVER=default&SKIP_HEADER_COUNT=1') FORMAT 'CSV';
+      SELECT 'CSV' tag, * FROM r_csv ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS r_json;
+      CREATE EXTERNAL TABLE r_json (id int, name text, dept text, salary float8, tags text[])
+       LOCATION ('pxf://tmp/pxftest/json/emp.json?PROFILE=hdfs:json&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'JSON' tag, * FROM r_json ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS r_parq;
+      CREATE EXTERNAL TABLE r_parq (id int, name text, dept text, salary float8, tags text[])
+       LOCATION ('pxf://user/hive/warehouse/pxftest.db/emp_parq?PROFILE=hdfs:parquet&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'PARQ' tag, * FROM r_parq ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS r_orc;
+      CREATE EXTERNAL TABLE r_orc (id int, name text, dept text, salary float8, tags text[])
+       LOCATION ('pxf://user/hive/warehouse/pxftest.db/emp_orc?PROFILE=hdfs:orc&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'ORC' tag, * FROM r_orc ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS r_avro;
+      CREATE EXTERNAL TABLE r_avro (id int, name text, dept text, salary float8, tags text[])
+       LOCATION ('pxf://user/hive/warehouse/pxftest.db/emp_avro?PROFILE=hdfs:avro&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'AVRO' tag, * FROM r_avro ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS r_text; DROP EXTERNAL TABLE IF EXISTS r_csv; DROP EXTERNAL TABLE IF EXISTS r_json;
+      DROP EXTERNAL TABLE IF EXISTS r_parq; DROP EXTERNAL TABLE IF EXISTS r_orc; DROP EXTERNAL TABLE IF EXISTS r_avro;
+      PGEOF
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Alice"
+        - "张三"
+        - "研发"
+        - "12345.67"
+        - "Carol"
+        - "李四"
+        - "市场"
+        - "Frank"
+        - "王五"
+        - "{x86,gpu}"
+        - "{ml}"
+        - "{q1,q2}"
+        - "{a,b,c}"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "read-hive-metastore(B 组): hive 读 parquet 表(数组→JSON 文本) + hive:orc / hive:text 标量"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      SET search_path = pxftest, public;
+      DROP EXTERNAL TABLE IF EXISTS h_parq_txt;
+      CREATE EXTERNAL TABLE h_parq_txt (id int, name text, dept text, salary float8, tags text)
+       LOCATION ('pxf://pxftest.emp_parq?PROFILE=hive&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'HIVE_PARQ' tag, id, name, tags FROM h_parq_txt ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS h_orc_s;
+      CREATE EXTERNAL TABLE h_orc_s (id int, name text, dept text, salary float8)
+       LOCATION ('pxf://pxftest.emp_orc?PROFILE=hive:orc&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'HIVE_ORC' tag, * FROM h_orc_s ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS h_text_s;
+      CREATE EXTERNAL TABLE h_text_s (id int, name text, dept text, salary float8)
+       LOCATION ('pxf://pxftest.emp_text?PROFILE=hive:text&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'HIVE_TEXT' tag, * FROM h_text_s ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS h_parq_txt; DROP EXTERNAL TABLE IF EXISTS h_orc_s; DROP EXTERNAL TABLE IF EXISTS h_text_s;
+      PGEOF
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - '["x86","gpu"]'
+        - "Alice"
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "partition-pruning(C 组): hive 读 Hive 分区表，全量 3 行 + dept='Eng' 裁剪 2 行"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      SET search_path = pxftest, public;
+      DROP EXTERNAL TABLE IF EXISTS h_part;
+      CREATE EXTERNAL TABLE h_part (id int, name text, dept text)
+       LOCATION ('pxf://pxftest.emp_part?PROFILE=hive&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'ROWS' tag, * FROM h_part ORDER BY id;
+      SELECT 'FULL='||count(*) FROM h_part;
+      SELECT 'PRUNED='||count(*) FROM h_part WHERE dept='Eng';
+      DROP EXTERNAL TABLE IF EXISTS h_part;
+      PGEOF
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      stdout_contains: ["FULL=3", "PRUNED=2", "Cara"]
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "negative-boundary(D 组): STRUCT/MAP via hdfs:parquet 报 not supported / STRUCT via hive 降级 JSON / 坏路径报 Input path does not exist"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      SET search_path = pxftest, public;
+      DROP EXTERNAL TABLE IF EXISTS n_struct_p;
+      CREATE EXTERNAL TABLE n_struct_p (id int, info text)
+       LOCATION ('pxf://user/hive/warehouse/pxftest.db/cplx_struct?PROFILE=hdfs:parquet&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT * FROM n_struct_p;
+      DROP EXTERNAL TABLE IF EXISTS n_map_p;
+      CREATE EXTERNAL TABLE n_map_p (id int, m text)
+       LOCATION ('pxf://user/hive/warehouse/pxftest.db/cplx_map?PROFILE=hdfs:parquet&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT * FROM n_map_p;
+      DROP EXTERNAL TABLE IF EXISTS n_struct_h;
+      CREATE EXTERNAL TABLE n_struct_h (id int, info text)
+       LOCATION ('pxf://pxftest.cplx_struct?PROFILE=hive&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT * FROM n_struct_h;
+      DROP EXTERNAL TABLE IF EXISTS n_badpath;
+      CREATE EXTERNAL TABLE n_badpath (id int)
+       LOCATION ('pxf://tmp/pxftest/does_not_exist?PROFILE=hdfs:parquet&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT * FROM n_badpath;
+      DROP EXTERNAL TABLE IF EXISTS n_struct_p; DROP EXTERNAL TABLE IF EXISTS n_map_p;
+      DROP EXTERNAL TABLE IF EXISTS n_struct_h; DROP EXTERNAL TABLE IF EXISTS n_badpath;
+      PGEOF
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "struct is not supported"
+        - "MAP is not supported"
+        - '{"a":"x","b":5}'
+        - "Input path does not exist"
+
+  - name: "write-roundtrip: 写 text/parquet-primitive/parquet-LIST(复杂)/orc 外表 + 读回(含 UTF-8 + 数组)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      SET search_path = pxftest, public;
+      -- A2 text 写 + 读回
+      DROP EXTERNAL TABLE IF EXISTS w_text;
+      CREATE WRITABLE EXTERNAL TABLE w_text (id int, name text, dept text, salary float8)
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/text?PROFILE=hdfs:text&SERVER=default') FORMAT 'TEXT' (DELIMITER '|');
+      INSERT INTO w_text VALUES (101,'Wally','D1',1.5),(102,'中文写',NULL,2.5);
+      DROP EXTERNAL TABLE IF EXISTS rb_text;
+      CREATE EXTERNAL TABLE rb_text (id int, name text, dept text, salary float8)
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/text?PROFILE=hdfs:text&SERVER=default') FORMAT 'TEXT' (DELIMITER '|');
+      SELECT 'RB_TEXT' tag, * FROM rb_text ORDER BY id;
+      -- A5 parquet primitive 写(snappy) + 读回
+      DROP EXTERNAL TABLE IF EXISTS w_parq;
+      CREATE WRITABLE EXTERNAL TABLE w_parq (id int, name text, salary float8)
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/parq?PROFILE=hdfs:parquet&SERVER=default&COMPRESSION_CODEC=snappy') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_export');
+      INSERT INTO w_parq VALUES (201,'Pat',10.1),(202,'中文Parq',20.2);
+      DROP EXTERNAL TABLE IF EXISTS rb_parq;
+      CREATE EXTERNAL TABLE rb_parq (id int, name text, salary float8)
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/parq?PROFILE=hdfs:parquet&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'RB_PARQ' tag, * FROM rb_parq ORDER BY id;
+      -- A7 parquet LIST 复杂写(snappy) + 读回（迁移闭环：标准 3-level LIST）
+      DROP EXTERNAL TABLE IF EXISTS w_parq_list;
+      CREATE WRITABLE EXTERNAL TABLE w_parq_list (id int, names text[], vals float8[])
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/parqlist?PROFILE=hdfs:parquet&SERVER=default&COMPRESSION_CODEC=snappy') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_export');
+      INSERT INTO w_parq_list VALUES (301, ARRAY['a','b'], ARRAY[1.1,2.2]), (302, ARRAY['x'], ARRAY[9.9]), (303, ARRAY['中','文'], ARRAY[3.3]);
+      DROP EXTERNAL TABLE IF EXISTS rb_parq_list;
+      CREATE EXTERNAL TABLE rb_parq_list (id int, names text[], vals float8[])
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/parqlist?PROFILE=hdfs:parquet&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'RB_LIST' tag, * FROM rb_parq_list ORDER BY id;
+      -- A11 orc 写 + 读回
+      DROP EXTERNAL TABLE IF EXISTS w_orc;
+      CREATE WRITABLE EXTERNAL TABLE w_orc (id int, name text)
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/orc?PROFILE=hdfs:orc&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_export');
+      INSERT INTO w_orc VALUES (1,'a'),(2,'中文');
+      DROP EXTERNAL TABLE IF EXISTS rb_orc;
+      CREATE EXTERNAL TABLE rb_orc (id int, name text)
+       LOCATION ('pxf://tmp/pxftest/wout/case1rw/orc?PROFILE=hdfs:orc&SERVER=default') FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      SELECT 'RB_ORC' tag, * FROM rb_orc ORDER BY id;
+      DROP EXTERNAL TABLE IF EXISTS w_text; DROP EXTERNAL TABLE IF EXISTS rb_text;
+      DROP EXTERNAL TABLE IF EXISTS w_parq; DROP EXTERNAL TABLE IF EXISTS rb_parq;
+      DROP EXTERNAL TABLE IF EXISTS w_parq_list; DROP EXTERNAL TABLE IF EXISTS rb_parq_list;
+      DROP EXTERNAL TABLE IF EXISTS w_orc; DROP EXTERNAL TABLE IF EXISTS rb_orc;
+      PGEOF
+    timeout_ms: 180000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Wally"
+        - "中文写"
+        - "中文Parq"
+        - "20.2"
+        - "{中,文}"
+        - "{3.3}"
+        - "{a,b}"
+        - "中文"
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP EXTERNAL TABLE IF EXISTS r_text, r_csv, r_json, r_parq, r_orc, r_avro, h_parq_txt, h_orc_s, h_text_s, h_part, n_struct_p, n_map_p, n_struct_h, n_badpath, w_text, rb_text, w_parq, rb_parq, w_parq_list, rb_parq_list, w_orc, rb_orc'"
+
+created_by: chenqiang
+created_at: "2026-10-21"
+notes: |
+  外部依赖 hadoop_simple（external/hadoop_simple.yml，HDFS 10.14.3.201:9000 simple auth；
+  本地集群 default server 的 core-site.xml 已配 fs.defaultFS=hdfs://10.14.3.201:9000；
+  PXF_HOME=/usr/local/synxdb4-pxf → 6.10.1 2.2.0）。
+
+  **外部数据为前置、本 case 不造数**：pxftest 多格式数据（Hive 库 pxftest 的
+  emp_parq/orc/avro/text/part + cplx_struct/cplx_map，及 HDFS /tmp/pxftest/{text,csv,json}
+  裸文件）由报告造数阶段预先建好（Hive CTAS + hdfs put）。本 case 只读不重建，precondition
+  守卫 NameNode 在线即可。
+
+  **写 round-trip 的幂等处理**：PXF 可写外表以 gpadmin 落盘，在 gpadmin 所属父目录
+  /tmp/pxftest/wout 下自建子目录 case1rw/*（无需 ssh 预建/chown）。GPDB/PXF 可写外表是
+  **追加语义**（无 overwrite），故重跑会在目录里累积文件、读回行数翻倍——因此断言刻意用
+  对**具体写入值**的 stdout_contains（"中文Parq" / "{中,文}" / "{3.3}" 等），而非精确行数，
+  重跑仍成立（幂等安全）。代价：/tmp/pxftest/wout/case1rw/ 下文件随重跑累积（小文件，无害，
+  可人工 hdfs dfs -rm 清理）；teardown 只清 DB 侧外表对象，不清 HDFS 文件（清 HDFS 需
+  ssh 远端写，按本项目外部数据"前置就绪"约定不在 case 内做）。
+
+  **判定信号**（design.md §4.1.1：正面 expect=修复后行为）：各组断言用确定性值
+  （标量 Alice/张三、UTF-8、一维数组 {x86,gpu}、分区 FULL=3/PRUNED=2、写回 {中,文}/{3.3}）。
+  D 组负向场景的"报错串出现"本身就是正面期望（STRUCT/MAP 经 hdfs:parquet 正确报 not
+  supported，坏路径正确报 Input path does not exist），故该步不设 not_contains。
+
+  **本机验证（2026-10-21，SynxDB4 4.5.4-3 build 204 / PXF 6.10.1 2.2.0，8 段）**：
+  - A 组六格式直读全 PASS（parquet/orc/avro 一维数组正常读出；text/csv/json 标量+UTF-8 正常）；
+  - B 组 hive 读 parquet 表数组→ '["x86","gpu"]' JSON 文本，hive:orc/hive:text 标量 PASS；
+  - C 组 分区裁剪 FULL=3 / PRUNED=2 PASS；
+  - D 组 STRUCT→"Parquet complex type customized struct is not supported"、MAP→"...MAP is
+    not supported"（类名 org.apache.cloudberry.pxf.*，证 6.10.1 换代）、STRUCT via hive→
+    {"a":"x","b":5}、坏路径→"Input path does not exist"，全部符合预期；
+  - 写 round-trip：text/parquet-primitive/parquet-LIST/orc 写+读回全 PASS（中文 + LIST 数组
+    正确往返；parquet LIST 复杂写=迁移闭环关键）。
+
+  **诚实边界 / 未覆盖**：
+  - 不含 eswa 真表 72 列复杂 LIST **读**（由姊妹 case xs-pxf-hdfs-parquet-complex-list-read
+    专门覆盖，issue #986）；
+  - 不校验写出 parquet 物理文件的 codec=SNAPPY / 标准 3-level LIST 结构（需 ssh + java
+    parquet-tools，超出 DB round-trip；写回值正确已证往返正确）；
+  - 无 hive:parquet profile（Hive parquet 表走通用 hive，写了会报 not defined）；
+  - orc 写出默认 ZLIB 压缩（未验 orc+snappy 写）；hive:orc/hive:text 声明数组列会报
+    TEXTARRAY 不支持（故 B 组只声明标量列 / parquet 表数组列声明 text）。
