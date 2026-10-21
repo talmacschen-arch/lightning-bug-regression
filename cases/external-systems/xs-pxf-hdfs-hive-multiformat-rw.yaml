@@ -87,7 +87,7 @@ steps:
   - name: "read-hdfs-direct(A 组): hdfs:text/csv/json/parquet/orc/avro 六格式直读(标量+UTF-8+一维数组)"
     kind: shell
     cmd: |
-      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -f -' 2>&1 <<'PGEOF'
       CREATE EXTENSION IF NOT EXISTS pxf;
       CREATE SCHEMA IF NOT EXISTS pxftest;
       SET search_path = pxftest, public;
@@ -140,7 +140,7 @@ steps:
   - name: "read-hive-metastore(B 组): hive 读 parquet 表(数组→JSON 文本) + hive:orc / hive:text 标量"
     kind: shell
     cmd: |
-      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -f -' 2>&1 <<'PGEOF'
       SET search_path = pxftest, public;
       DROP EXTERNAL TABLE IF EXISTS h_parq_txt;
       CREATE EXTERNAL TABLE h_parq_txt (id int, name text, dept text, salary float8, tags text)
@@ -167,7 +167,7 @@ steps:
   - name: "partition-pruning(C 组): hive 读 Hive 分区表，全量 3 行 + dept='Eng' 裁剪 2 行"
     kind: shell
     cmd: |
-      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -f -' 2>&1 <<'PGEOF'
       SET search_path = pxftest, public;
       DROP EXTERNAL TABLE IF EXISTS h_part;
       CREATE EXTERNAL TABLE h_part (id int, name text, dept text)
@@ -186,7 +186,7 @@ steps:
   - name: "negative-boundary(D 组): STRUCT/MAP via hdfs:parquet 报 not supported / STRUCT via hive 降级 JSON / 坏路径报 Input path does not exist"
     kind: shell
     cmd: |
-      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -f -' 2>&1 <<'PGEOF'
       SET search_path = pxftest, public;
       DROP EXTERNAL TABLE IF EXISTS n_struct_p;
       CREATE EXTERNAL TABLE n_struct_p (id int, info text)
@@ -219,7 +219,7 @@ steps:
   - name: "write-roundtrip: 写 text/parquet-primitive/parquet-LIST(复杂)/orc 外表 + 读回(含 UTF-8 + 数组)"
     kind: shell
     cmd: |
-      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      su - gpadmin -c 'psql -h 127.0.0.1 -p 5432 -d gpadmin -f -' 2>&1 <<'PGEOF'
       SET search_path = pxftest, public;
       -- A2 text 写 + 读回
       DROP EXTERNAL TABLE IF EXISTS w_text;
@@ -277,7 +277,7 @@ steps:
       not_contains: ["ERROR", "FATAL"]
 
 teardown:
-  - su - gpadmin -c "psql -d gpadmin -c 'DROP EXTERNAL TABLE IF EXISTS r_text, r_csv, r_json, r_parq, r_orc, r_avro, h_parq_txt, h_orc_s, h_text_s, h_part, n_struct_p, n_map_p, n_struct_h, n_badpath, w_text, rb_text, w_parq, rb_parq, w_parq_list, rb_parq_list, w_orc, rb_orc'"
+  - su - gpadmin -c "psql -h 127.0.0.1 -p 5432 -d gpadmin -c 'DROP EXTERNAL TABLE IF EXISTS r_text, r_csv, r_json, r_parq, r_orc, r_avro, h_parq_txt, h_orc_s, h_text_s, h_part, n_struct_p, n_map_p, n_struct_h, n_badpath, w_text, rb_text, w_parq, rb_parq, w_parq_list, rb_parq_list, w_orc, rb_orc'"
 
 created_by: chenqiang
 created_at: "2026-10-21"
