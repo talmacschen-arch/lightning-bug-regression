@@ -1,0 +1,154 @@
+id: xs-pxf-hdfs-parquet-complex-list-read
+title: "[PXF+HDFS] hdfs:parquet 读 HDFS Parquet 标准 3-level LIST(数组)复杂类型应正常返回，而非 Parquet complex type support is not yet available (issue #986 / PXF 升级 6.10.1 验证)"
+category: external_systems
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "pxf-hdfs-parquet-complex-list-read-issue986-202610"
+  reported_at: "2026-10-15"
+  fixed_version: "HashData Lightning SynxDB4 4.5.4-3 build 204 / PXF 6.10.1 (2.2.0, org.apache.cloudberry.pxf)"
+  ext_doc_url: ""
+issue_url: ""
+tags: [external_systems, pxf, hdfs, parquet, complex_type, list, array, issue986, hadoop_simple]
+
+description: |
+  issue #986（GPDB6 → SynxDB4.5 迁移）：PXF 以 hdfs:parquet profile 读取 HDFS 上标准
+  3-level LIST（数组）复杂类型的 Parquet 文件时，旧内置 PXF V6.4 在 ParquetResolver.java:84
+  对非-primitive 顶层列硬抛异常：
+    PXF server error : Parquet complex type support is not yet available.
+  根因是 V6.4 的 ParquetResolver 未实现复杂类型读取路径（判断依据是 Parquet 文件物理
+  schema 是否 primitive，与外表把列声明成什么类型无关——声明成 text[] 也绕不过）。
+  修复路径=方案 A：把本地集群 PXF 升级到 6.10.1（内部 version 2.2.0，已换代为
+  org.apache.cloudberry.pxf），它原生支持一维 + primitive 元素的 LIST 读写。
+
+  本 case 验证修复：本地集群 PXF 已升 6.10.1，对同一份 eswa 复杂 LIST Parquet 外表
+  读取应正常返回数组，不再抛 "Parquet complex type support is not yet available"。
+
+  外部数据（HDFS hadoop_simple 10.14.3.201 上已就绪，由复现工作预先造好，本 case 不重造）：
+    /user/hive/warehouse/eswa_mfg.db/tb_mspcb_spcp_asy_isp_rlt_f（72 列，20 个数组列
+    = 19 array<string> + 1 array<double>，标准 3-level LIST parquet + snappy），
+    2 分区 × 5 行。本 case 读其中 AREA01/etl_ldup_dt=2019-01-01 叶子分区（5 行）。
+
+procedure: |
+  1) precondition (step 1): curl hadoop_simple NameNode /jmx → 期望在线
+     （NameNode 不在线=外部依赖未就绪，case fail、后续步不跑，避免把连接错误误判成
+      复杂类型支持问题）。
+  2) assert-read-complex-list (step 2, 核心): 在 gpadmin 库 synxmig schema 建指向 AREA01
+     叶子分区目录的 72 列外表（数组列声明 text[]/float8[]，PROFILE=hdfs:parquet），
+     SELECT ste_id + 两个复杂 LIST 列（1 个 string 数组 + 1 个 double 数组），并跑确定性
+     聚合 ROWCNT/STRLEN/FIRSTNVL；期望读出数组内容，且不含
+     "Parquet complex type support is not yet available" / "not supported"（= 修复后行为）。
+expected: |
+  - NameNode 健康检查 stdout 含 "NameNodeStatus"，无连接错误；
+  - 核心读取步 exit 0，stdout 含数组值 "ste_id_001" / "ste_nm_001_1" / "10.5"，且含确定性
+    聚合 "ROWCNT=5"（5 行）/ "STRLEN=11"（string 数组总长 2+3+1+2+3）/ "FIRSTNVL=57.50"
+    （各行首个 double 元素之和 10.5+11+11.5+12+12.5），且不含
+    "Parquet complex type support is not yet available" / "not supported" / "ERROR" / "FATAL"
+    （= 6.10.1 复杂 LIST 读成功，issue #986 已修复）；
+  - BUG 复现时（如 PXF 回退到 V6.4）：读取抛 "Parquet complex type support is not yet
+    available" → 聚合鉴别值缺失 + 报错文案出现 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: [hadoop_simple]
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "precondition: 验证 hadoop_simple NameNode 在线"
+    kind: shell
+    cmd: |
+      curl -m 10 -sS "http://{{ external.hadoop_simple.host }}:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeStatus"
+    timeout_ms: 30000
+    expect:
+      exit_code: 0
+      stdout_contains: ["NameNodeStatus"]
+      not_contains: ["Connection refused", "Connection timed out", "Failed to connect"]
+
+  - name: "assert-read-complex-list（核心）: hdfs:parquet 读标准 3-level LIST 应返回数组(5 行, STRLEN=11, FIRSTNVL=57.50) 而非 complex type not supported"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -d gpadmin -f -' 2>&1 <<'PGEOF'
+      CREATE EXTENSION IF NOT EXISTS pxf;
+      CREATE SCHEMA IF NOT EXISTS synxmig;
+      DROP EXTERNAL TABLE IF EXISTS synxmig.ext_eswa_cplx;
+      CREATE EXTERNAL TABLE synxmig.ext_eswa_cplx (
+        ste_id text, ste_nm_ary_ctn text[], cop_cd text, cop_nm_ary_ctn text[], plnt_cd text, plnt_nm_ary_ctn text[],
+        pldo_cd text, pldo_nm_ary_ctn text[], proc_gr_id text, proc_gr_nm_ary_ctn text[], proc_id text, proc_nm_ary_ctn text[],
+        eqp_gr_id text, eqp_gr_nm_ary_ctn text[], ln_id text, ln_nm_ary_ctn text[], eqp_id text, eqp_nm_ary_ctn text[],
+        isp_eqp_id text, isp_eqp_nm_ary_ctn text[], rcp_id text, prj_nm text, mdl_id text, mdl_nm text, fert_cd text,
+        fert_nm text, lot_id text, bf_lot_id text, cell_id text, evt_dtm text, evt_seq text, ctgr_cd text, ctgr_nm text,
+        isp_atc_clct_cd_ary_ctn text[], isp_atc_seq_ary_ctn text[], isp_atc_gr_id_ary_ctn text[], isp_atc_gr_nm_ary_ctn text[],
+        isp_atc_id_ary_ctn text[], isp_atc_nm_ary_ctn text[], isp_rlt_val_ctn_ary_ctn text[], isp_rlt_nvl_ary_ctn float8[],
+        cont_url text, img_file_path_ctn_ary_ctn text[], img_file_nm_ary_ctn text[], del_yn text, crt_user_id text, crt_dtm text,
+        fin_upd_user_id text, fin_upd_dtm text, spc_trsf_yn text, spc_trsf_dtm text, cell_cunt_no text, virt_cell_id text,
+        cell_fin_judg_cd text, vsn_inpt_dtm text, vsn_otpt_dtm text, ng_otpt_yn text, isp_psg_tm_nvl text, isp_tatm_nvl text,
+        dim_judg_rlt_cd text, tot_dim_ng_cnt text, all_dim_dfct_rsn_nm text, main_dim_dfct_rsn_nm text, main_dim_ng_nvl text,
+        aprc_judg_rlt_cd text, tot_aprc_ng_cnt text, all_aprc_dfct_rsn_nm text, main_aprc_dfct_rsn_nm text, alin_judg_rlt_cd text,
+        all_alin_dfct_rsn_nm text, prs_dir_cd text, data_ldup_dtm text
+      )
+      LOCATION ('pxf://user/hive/warehouse/eswa_mfg.db/tb_mspcb_spcp_asy_isp_rlt_f/patn_area_id=AREA01/etl_ldup_dt=2019-01-01?PROFILE=hdfs:parquet&SERVER=default')
+      FORMAT 'CUSTOM' (FORMATTER='pxfwritable_import');
+      -- 原始复现读（数组列）：复杂 LIST 读出即证修复
+      SELECT ste_id, ste_nm_ary_ctn, isp_rlt_nvl_ary_ctn FROM synxmig.ext_eswa_cplx ORDER BY ste_id;
+      -- 确定性聚合：行数 + string 数组总长 + 各行首个 double 元素之和
+      SELECT 'ROWCNT='||count(*)||' STRLEN='||sum(array_length(ste_nm_ary_ctn,1))||' FIRSTNVL='||round(sum(isp_rlt_nvl_ary_ctn[1])::numeric,2) AS agg FROM synxmig.ext_eswa_cplx;
+      DROP EXTERNAL TABLE IF EXISTS synxmig.ext_eswa_cplx;
+      PGEOF
+    timeout_ms: 120000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "ste_id_001"
+        - "ste_nm_001_1"
+        - "10.5"
+        - "ROWCNT=5"
+        - "STRLEN=11"
+        - "FIRSTNVL=57.50"
+      not_contains:
+        - "Parquet complex type support is not yet available"
+        - "not supported"
+        - "ERROR"
+        - "FATAL"
+
+teardown:
+  - su - gpadmin -c "psql -d gpadmin -c 'DROP EXTERNAL TABLE IF EXISTS synxmig.ext_eswa_cplx'"
+
+created_by: chenqiang
+created_at: "2026-10-21"
+notes: |
+  外部依赖 hadoop_simple（external/hadoop_simple.yml，HDFS 10.14.3.201:9000 simple auth；
+  本地集群 default server 的 core-site.xml 已配 fs.defaultFS=hdfs://10.14.3.201:9000）。
+
+  **外部数据为前置、本 case 不造数**：eswa 复杂 LIST Parquet 表（标准 3-level LIST + snappy，
+  72 列 / 20 数组列 / 2 分区 × 5 行）由 issue #986 复现工作在 HDFS 上预先造好（底层 Parquet
+  API 手写标准 3-level 结构，Hive 自带写入端只能产旧式 2-level bag）。本 case 只读
+  AREA01/etl_ldup_dt=2019-01-01 叶子分区（5 行）。LOCATION 必须指到含 parquet 文件的叶子
+  分区目录（V6.4 的 hdfs:parquet 不递归下钻分区子目录；指根目录会先报 Not a file）。
+
+  **判定信号**（design.md §4.1.1：正面 expect=修复后行为，红=仍有此 BUG）：核心断言用
+  确定性聚合 ROWCNT=5 / STRLEN=11（2+3+1+2+3）/ FIRSTNVL=57.50（10.5+11+11.5+12+12.5），
+  既证复杂 LIST 解析成功、又证 5 行数据内容正确（rule：测试验证意图，非仅"不报错"）。
+  BUG 复现时（PXF 回退 V6.4）SELECT 抛 "Parquet complex type support is not yet available"
+  → 聚合鉴别值缺失 + 报错串出现 → 红。psql 报错在 stderr，故 cmd 用 2>&1 并进 stdout
+  （断言只读 stdout）。
+
+  **本机验证（2026-10-21，SynxDB4 4.5.4-3 build 204 / PXF 6.10.1 2.2.0，8 段）**：
+  - precondition：NameNode 在线（SecurityEnabled=false simple auth）→ PASS。
+  - 核心读：ste_id_001..005 复杂 LIST 正常读出（ste_nm_ary_ctn / isp_rlt_nvl_ary_ctn），
+    ROWCNT=5 STRLEN=11 FIRSTNVL=57.50，无 "complex type ... not supported" → BUG 不复现
+    = 已修复（issue #986 方案 A：PXF 升 6.10.1 生效）。报错类名若出现会是
+    org.apache.cloudberry.pxf（6.10.1 换代），V6.4 则是 org.greenplum.pxf。
+
+  **诚实边界**：仅在 6.10.1 build 验证不复现；未在本地现役环境实证 V6.4 报错（V6.4 install
+  仍在 /usr/local/synxdb4-pxf-6.4.0+synxdb4-4.5.4-2 但未激活，切换需改 PXF_HOME + restart，
+  按约定不动现役集群）。V6.4 复现证据见 issue #986 既有复现文档（ParquetResolver.java:84）。
+  复杂类型中仅 LIST（一维 + primitive 元素）被 6.10.1 支持；STRUCT / MAP / 多维数组仍不
+  支持（见姊妹 case xs-pxf-hdfs-hive-multiformat-rw 的 D 组负向场景）。
