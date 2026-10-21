@@ -1,0 +1,206 @@
+id: xs-cloudberry-fdw-coordinator-write-update-delete
+title: "[cloudberry_fdw] mpp_execute='coordinator' 写远端 GPDB 分布式表：UPDATE/DELETE 应真实生效且不跨段误伤(远端实际状态校验)，而非静默空操作 / 静默数据损坏"
+category: external_systems
+status: fixed
+severity: high
+destructive: false
+
+source:
+  feishu_anchor: "cloudberry-fdw-coordinator-write-update-delete-reportD-202609"
+  reported_at: "2026-09-18"
+  fixed_version: "HashData Lightning SynxDB4 4.5.4-3 build 204 / cloudberry_fdw 1.1"
+  ext_doc_url: ""
+issue_url: ""
+tags: [external_systems, cloudberry_fdw, foreign_data_wrapper, mpp_execute, coordinator, update, delete, gpdb, distributed_table, ctid, gp_segment_id, silent_data_corruption]
+
+description: |
+  reportD（2026-09-18，SynxDB4 4.5.3-4 → 远端 GPDB6）：cloudberry_fdw server 带
+  mpp_execute='coordinator' 写远端 GPDB 分布式表时，INSERT 正常，但 UPDATE / DELETE 坏，
+  且各有一个独立 bug：
+    - Bug1（autocommit UPDATE/DELETE）：走 direct-modify 路径，但执行期守卫
+      (postgres_fdw.c:3082 `executeSegment != GpIdentity.segindex`) 在 coordinator 模式下
+      恒成立（QD 的 segindex=-1 ≠ 随机段号）→ 远端 DML 从未下发 → 本地报 0 行、远端零改动
+      （静默空操作，客户反馈症状）。
+    - Bug2（事务块内 UPDATE/DELETE）：走 ctid 逐行路径，deparse 出的 `WHERE ctid=$1`
+      (deparse.c:1939/2056) 漏了 gp_segment_id；GPDB 分布式表上 ctid 只在单段内唯一，
+      一条逻辑"改 1 行"实际改掉所有段里同 ctid 的行（跨段误伤 + 本地谎报 1 行，
+      静默数据损坏，危害更大）。
+  根因均在 cloudberry_fdw（本机 SynxDB4）侧代码，与远端 GPDB 版本无关——只要远端是分布式
+  MPP 表（ctid 段内唯一）即可触发/验证，故本 case 用本地 GPDB7 作远端目标（external_deps:
+  [gpdb7]）。
+
+  **本 case 验证修复**（§4.1.1：正面 expect=修复后行为，红=仍有此 BUG）：对远端 GPDB7
+  分布式表经 coordinator-mode cloudberry_fdw 外表做 INSERT + autocommit UPDATE/DELETE +
+  事务块 UPDATE，然后**直连远端查实际状态**（不只看本地报告行数——BUG 要害是本地谎报）：
+  autocommit UPDATE/DELETE 真实生效（Bug1 修复）、事务块 UPDATE 恰好只改 1 行不跨段误伤
+  （Bug2 修复）。
+
+procedure: |
+  步骤全程用 psql（autocommit 默认开）精确区分两条事务语义路径——不用 runner 的 kind:sql
+  （会把单条 UPDATE 包进事务块、只走到 Bug2 路径、测不到 Bug1 的 direct-modify）。
+  1) precondition (step 1): 直连远端 GPDB7 select 1 → 期望在线（不在线=外部依赖未就绪 → 红）。
+  2) remote-fixture (step 2): 在 GPDB7 重建 fdwtest.wtest(a int,b text) DISTRIBUTED BY (a) +
+     灌 20 行 orig_1..orig_20；断言行数=20 且同一 ctid 横跨多段（Bug2 前提 CTID_MULTISEG=t）。
+  3) fdw-setup (step 3): 在 DUT(SynxDB4) 建 cloudberry_fdw server(coordinator 指向 GPDB7) +
+     user mapping(password_required false) + 外表 f_wtest；FDW 读回 20 行确认连通。
+  4) fdw-writes (step 4): 经外表 INSERT 2 行 + autocommit `UPDATE ... WHERE a=5` +
+     autocommit `DELETE ... WHERE a=2` + 事务块 `BEGIN;UPDATE ... WHERE a=3;COMMIT;`。
+  5) verify-remote (step 5, 核心): 直连 GPDB7 查实际：a=5 的 b / a=2 行数 / b='DEMOB' 的行数
+     与行号 / 101,102 行数。
+expected: |
+  - precondition：远端 select 1 输出 "1"，无连接错误；
+  - remote-fixture：含 "FIXTURE_ROWS=20" + "CTID_MULTISEG=t"（ctid (0,1) 横跨多段，Bug2 前提）；
+  - fdw-setup：含 "FDW_READ=20"（coordinator 外表读回 20 行），无 ERROR/FATAL；
+  - fdw-writes：exit 0，无 ERROR/FATAL；
+  - verify-remote（核心）：直连远端实际状态含
+      "UPD_A5=DEMOA"（autocommit UPDATE 真实生效 → Bug1 修复）、
+      "DEL_A2_CNT=0"（autocommit DELETE 真实生效 → Bug1 修复）、
+      "DEMOB_CNT=1" + "DEMOB_A=3"（事务块 UPDATE 恰好只改 a=3 一行、不跨段误伤 → Bug2 修复）、
+      "INS_CNT=2"（INSERT 正常），无 ERROR/FATAL；
+  - BUG 复现时：Bug1 → UPD_A5=orig_5 / DEL_A2_CNT=1（远端没变）；Bug2 → DEMOB_CNT>1（跨段误改）
+    → 对应正面 marker 缺失 → 红。
+
+applies_to: {}
+preconditions: {}
+external_deps: [gpdb7]
+
+defaults:
+  database: gpadmin
+
+sessions: []
+
+setup: []
+
+steps:
+  - name: "precondition: 远端 GPDB7 在线(直连 select 1)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c "psql -h {{ external.gpdb7.host }} -p {{ external.gpdb7.port }} -d {{ external.gpdb7.database }} -U {{ external.gpdb7.user }} -tAc 'select 1'"
+    timeout_ms: 30000
+    expect:
+      exit_code: 0
+      stdout_contains: ["1"]
+      not_contains: ["could not connect", "Connection refused", "timeout expired", "FATAL"]
+
+  - name: "remote-fixture: 在 GPDB7 重建 fdwtest.wtest(20 行 orig_1..20) + 确认 ctid 横跨多段(Bug2 前提)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -h {{ external.gpdb7.host }} -p {{ external.gpdb7.port }} -d {{ external.gpdb7.database }} -U {{ external.gpdb7.user }} -v ON_ERROR_STOP=1 -f -' 2>&1 <<'PGEOF'
+      CREATE SCHEMA IF NOT EXISTS fdwtest;
+      DROP TABLE IF EXISTS fdwtest.wtest;
+      CREATE TABLE fdwtest.wtest (a int, b text) DISTRIBUTED BY (a);
+      INSERT INTO fdwtest.wtest SELECT g, 'orig_'||g FROM generate_series(1,20) g;
+      SELECT 'FIXTURE_ROWS='||count(*) FROM fdwtest.wtest;
+      SELECT 'CTID_MULTISEG='||(count(DISTINCT gp_segment_id) > 1) FROM fdwtest.wtest WHERE ctid='(0,1)';
+      PGEOF
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains: ["FIXTURE_ROWS=20", "CTID_MULTISEG=t"]
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "fdw-setup: DUT 建 cloudberry_fdw server(coordinator→GPDB7) + user mapping + 外表 f_wtest + 读回 20 行"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -h {{ external.dut.host }} -p {{ external.dut.port }} -d {{ external.dut.database }} -f -' 2>&1 <<'PGEOF'
+      CREATE EXTENSION IF NOT EXISTS cloudberry_fdw;
+      DROP SERVER IF EXISTS gp7_wtest CASCADE;
+      CREATE SERVER gp7_wtest FOREIGN DATA WRAPPER cloudberry_fdw
+        OPTIONS (host '{{ external.gpdb7.host }}', port '{{ external.gpdb7.port }}', dbname '{{ external.gpdb7.database }}', mpp_execute 'coordinator');
+      CREATE USER MAPPING FOR {{ external.dut.user }} SERVER gp7_wtest
+        OPTIONS (user '{{ external.gpdb7.user }}', password_required 'false');
+      CREATE FOREIGN TABLE f_wtest (a int, b text)
+        SERVER gp7_wtest OPTIONS (schema_name 'fdwtest', table_name 'wtest');
+      SELECT 'FDW_READ='||count(*) FROM f_wtest;
+      PGEOF
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains: ["FDW_READ=20"]
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "fdw-writes: 经 coordinator 外表 INSERT + autocommit UPDATE(a=5)/DELETE(a=2) + 事务块 UPDATE(a=3)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -h {{ external.dut.host }} -p {{ external.dut.port }} -d {{ external.dut.database }} -f -' 2>&1 <<'PGEOF'
+      -- INSERT（对照，coordinator 模式本就可用）
+      INSERT INTO f_wtest VALUES (101,'ins_101'),(102,'ins_102');
+      -- Bug1 路径：autocommit（不在事务块）→ direct-modify 整条下推
+      UPDATE f_wtest SET b='DEMOA' WHERE a=5;
+      DELETE FROM f_wtest WHERE a=2;
+      -- Bug2 路径：事务块内 → ctid 逐行（deparse 须带 gp_segment_id 才不跨段误伤）
+      BEGIN;
+      UPDATE f_wtest SET b='DEMOB' WHERE a=3;
+      COMMIT;
+      PGEOF
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      not_contains: ["ERROR", "FATAL"]
+
+  - name: "verify-remote（核心）: 直连 GPDB7 查实际状态(a5=DEMOA / a2 删 / DEMOB 恰 1 行=a3 / 101,102 在)"
+    kind: shell
+    cmd: |
+      su - gpadmin -c 'psql -h {{ external.gpdb7.host }} -p {{ external.gpdb7.port }} -d {{ external.gpdb7.database }} -U {{ external.gpdb7.user }} -f -' 2>&1 <<'PGEOF'
+      SELECT 'UPD_A5='||coalesce(max(b),'<MISSING>') FROM fdwtest.wtest WHERE a=5;
+      SELECT 'DEL_A2_CNT='||count(*) FROM fdwtest.wtest WHERE a=2;
+      SELECT 'DEMOB_CNT='||count(*) FROM fdwtest.wtest WHERE b='DEMOB';
+      SELECT 'DEMOB_A='||coalesce(string_agg(a::text, ',' ORDER BY a), '<NONE>') FROM fdwtest.wtest WHERE b='DEMOB';
+      SELECT 'INS_CNT='||count(*) FROM fdwtest.wtest WHERE a IN (101,102);
+      PGEOF
+    timeout_ms: 60000
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "UPD_A5=DEMOA"
+        - "DEL_A2_CNT=0"
+        - "DEMOB_CNT=1"
+        - "DEMOB_A=3"
+        - "INS_CNT=2"
+      not_contains: ["ERROR", "FATAL"]
+
+teardown:
+  - su - gpadmin -c "psql -h 127.0.0.1 -p 5432 -d gpadmin -c 'DROP SERVER IF EXISTS gp7_wtest CASCADE'"
+  - su - gpadmin -c "psql -h synxdb-0001 -p 6432 -d gpadmin -U gpadmin -c 'DROP TABLE IF EXISTS fdwtest.wtest'"
+
+created_by: chenqiang
+created_at: "2026-10-21"
+notes: |
+  外部依赖 gpdb7（external/gpdb7.yml，本地 GPDB7 7.4.0 coordinator synxdb-0001:6432，9 primary +
+  9 mirror 分布式，gpadmin 免密）。**这是与 DUT 分离的集群**：DUT=SynxDB4 lightning:5432
+  （cloudberry_fdw 所在、case DML 执行处），GPDB7 只是 FDW 的远端目标。
+
+  **为何用 GPDB7 替代 report 原文的 GPDB6**：根因两个 bug 都在 cloudberry_fdw（SynxDB4）侧
+  代码，与远端 GPDB 版本无关——Bug1 是 QD 上 executeSegment 守卫、Bug2 是 deparse 漏
+  gp_segment_id；只要远端是分布式 MPP 表（ctid 段内唯一）即可验证。GPDB6 集群当时不可用，
+  用户确认用本地 GPDB7。
+
+  **为何全程 kind:shell + psql、不用 kind:sql**：Bug1（direct-modify）只在 autocommit（非
+  事务块）下触发——postgresPlanDirectModify 遇 IsTransactionBlock() 即 return false 改走
+  ctid 路径。runner 的 kind:sql 用长连接 + step 末尾 commit，会把单条 UPDATE 包进事务块，
+  只能走到 Bug2 的 ctid 路径、测不到 Bug1。psql -f 默认 AUTOCOMMIT=on，裸 UPDATE/DELETE 走
+  autocommit(Bug1 路径)、显式 BEGIN..COMMIT 走事务块(Bug2 路径)，两条都覆盖到。
+
+  **判定信号**（正面 expect=修复后行为）：核心断言**直连远端查实际状态**，非看本地报告行数
+  （本 BUG 要害是本地谎报——GP6 上 Bug1 报 0 行、Bug2 报 1 行但实改多行）。确定性 marker：
+  UPD_A5=DEMOA（autocommit UPDATE 真生效）/ DEL_A2_CNT=0（autocommit DELETE 真生效）/
+  DEMOB_CNT=1 + DEMOB_A=3（事务块 UPDATE 恰改 1 行、不跨段）/ INS_CNT=2。BUG 复现时：
+  Bug1 → UPD_A5=orig_5、DEL_A2_CNT=1；Bug2 → DEMOB_CNT>1（本机 ctid (0,1) 横跨 8 段，复现
+  时会误改最多 8 行）→ 正面 marker 缺失 → 红。
+
+  **幂等**：remote-fixture 每次 DROP+CREATE 重置远端表（INSERT 的 101/102 也随之清零重来）；
+  fdw-setup DROP SERVER IF EXISTS ... CASCADE 先清外表+user mapping；teardown 清 DUT 侧
+  server(CASCADE) + GPDB7 侧 fdwtest.wtest。teardown **不** DROP EXTENSION cloudberry_fdw
+  （共享资源）、**不** DROP SCHEMA fdwtest（只删表，schema 留着无害）。
+
+  **user mapping password_required 'false'**：gpadmin(DUT 超级用户) → GPDB7 gpadmin 走 trust
+  免密；cloudberry_fdw/postgres_fdw 默认要求非超级用户带密码，超级用户可用此选项放行 trust。
+
+  **本机验证（2026-10-21，DUT SynxDB4 4.5.4-3 build 204 / cloudberry_fdw 1.1 → GPDB7 7.4.0）**：
+  - 远端实际：a=5→DEMOA、a=2 已删(0 行)、b='DEMOB' 恰 1 行(a=3@seg7)、101/102 在，其余 orig → PASS。
+  - EXPLAIN VERBOSE 佐证修复机制：autocommit UPDATE/DELETE 走 direct-modify
+    (Remote SQL `... WHERE ((a=5))` 真下发)；事务块 UPDATE 走 ctid 路径且 Remote SQL =
+    `UPDATE ... WHERE ctid=$1 AND gp_segment_id=$3`（gp_segment_id 已拼进 WHERE = Bug2 修复，
+    对齐 report §5 修复方向）→ 两 bug 均已修复(status=fixed)。
+  - 诚实边界：仅在 build 204 验证不复现；report 原文 2026-09-18 在 4.5.3-4 + 远端 GP6 复现，
+    本 case 未在 4.5.3-4 实证复现（版本已过）。

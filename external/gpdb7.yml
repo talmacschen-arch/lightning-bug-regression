@@ -1,0 +1,34 @@
+# external/gpdb7.yml — local GPDB7 (Greenplum 7.4.0) cluster used as the
+# REMOTE target for cloudberry_fdw / postgres_fdw cross-cluster write tests.
+#
+# Topology (实测 2026-10-21): coordinator on this same box (synxdb-0001),
+# datadir /data0/gp7data/coordinator/gpseg-1, 9 primary + 9 mirror segments
+# (distributed MPP → ctid is per-segment-unique, which is what the
+# cloudberry_fdw coordinator-write bug hinges on). gpadmin connects by
+# trust (no password).
+#
+# NOTE: this is a SEPARATE cluster from the DUT. The DUT (the system under
+# test, external/dut.yml) is the SynxDB4 lightning cluster on port 5432 —
+# that is where cloudberry_fdw lives and where cases run their DML. GPDB7
+# here is only the FDW's remote endpoint.
+#
+# Case YAMLs reference this via Jinja:
+#   {{ external.gpdb7.host }}      -> synxdb-0001
+#   {{ external.gpdb7.port }}      -> 6432
+#   {{ external.gpdb7.database }}  -> gpadmin
+#   {{ external.gpdb7.user }}      -> gpadmin
+#
+# Declare in case: `external_deps: [gpdb7]`
+#
+# The cloudberry_fdw SERVER points at host/port above with
+# mpp_execute 'coordinator'; the user mapping uses `password_required 'false'`
+# since gpadmin (DUT superuser) → GPDB7 gpadmin is trust-authenticated.
+host: synxdb-0001
+port: 6432
+database: gpadmin
+user: gpadmin
+extras:
+  gp_version: "7.4.0"
+  segments: 9
+  # reachable from the DUT coordinator (same host); coordinator-mode FDW
+  # only connects from the QD, so a loopback-resolvable hostname is enough.
