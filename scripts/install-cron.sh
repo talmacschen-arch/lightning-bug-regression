@@ -7,8 +7,13 @@
 # Default = dry-run: show what *would* change, don't touch crontab.
 # Pass --apply to actually write.
 #
-# Idempotent: detects whether our two entries are already present and skips
-# them. Adding a third / fourth time is a no-op.
+# Idempotent: detects whether our entry is already present and skips it.
+# Re-running is a no-op.
+#
+# History: originally managed two entries (12:00 + 20:00). The 20:00 evening
+# fire was dropped on 2026-11-20 per request — one noon rollup is enough while
+# the pipeline is idle; the tag-based apply below also cleans out any leftover
+# 20:00 line from older crontabs.
 
 set -euo pipefail
 
@@ -17,7 +22,6 @@ CLAUDE_BIN="/root/.local/bin/claude"
 CRON_TAG="lightning-bug-regression /report-status"
 
 ENTRY_NOON="0 12 * * * ${REPO_ABS}/scripts/cron-report-status.sh >> ${REPO_ABS}/docs/status/cron.log 2>&1  # ${CRON_TAG}"
-ENTRY_EVENING="0 20 * * * ${REPO_ABS}/scripts/cron-report-status.sh >> ${REPO_ABS}/docs/status/cron.log 2>&1  # ${CRON_TAG}"
 
 usage() {
   cat <<USAGE
@@ -25,15 +29,14 @@ Usage: $(basename "$0") [--apply | --dry-run | --check]
 
   --dry-run   (default) Show what would be added; touch nothing.
   --apply               Actually write the crontab.
-  --check               Report whether the two entries are already in place;
-                        exit 0 = both present, 1 = missing one or both.
+  --check               Report whether the entry is already in place;
+                        exit 0 = present, 1 = missing.
 
 Per design.md §15.3.1, this script runs as root (root crontab is the one we
 add to). It refuses to run as a non-root user.
 
-The two entries it manages are:
+The entry it manages is:
   ${ENTRY_NOON}
-  ${ENTRY_EVENING}
 USAGE
 }
 
@@ -66,20 +69,13 @@ has_entry() {
 cmd_check() {
   local current
   current="$(read_crontab)"
-  local missing=0
   if has_entry "${current}" "${ENTRY_NOON}"; then
     echo "✓ noon entry present"
+    exit 0
   else
     echo "✗ noon entry MISSING"
-    missing=1
+    exit 1
   fi
-  if has_entry "${current}" "${ENTRY_EVENING}"; then
-    echo "✓ evening (20:00) entry present"
-  else
-    echo "✗ evening (20:00) entry MISSING"
-    missing=1
-  fi
-  exit "${missing}"
 }
 
 cmd_dry_run() {
@@ -92,38 +88,33 @@ cmd_dry_run() {
     echo "${current}"
   fi
   echo
-  echo "=== entries this script manages ==="
+  echo "=== entry this script manages ==="
   echo "${ENTRY_NOON}"
-  echo "${ENTRY_EVENING}"
   echo
-  local add_noon=1 add_mid=1
-  has_entry "${current}" "${ENTRY_NOON}" && add_noon=0
-  has_entry "${current}" "${ENTRY_EVENING}" && add_mid=0
-  if [[ "${add_noon}" -eq 0 && "${add_mid}" -eq 0 ]]; then
-    echo "=== verdict: both entries already present; nothing to do ==="
+  if has_entry "${current}" "${ENTRY_NOON}"; then
+    echo "=== verdict: entry already present; nothing to do ==="
     exit 0
   fi
   echo "=== verdict: would add ===  (run with --apply to write)"
-  [[ "${add_noon}" -eq 1 ]] && echo "  + ${ENTRY_NOON}"
-  [[ "${add_mid}"  -eq 1 ]] && echo "  + ${ENTRY_EVENING}"
+  echo "  + ${ENTRY_NOON}"
 }
 
 cmd_apply() {
   # Strategy: tag-based idempotency. Remove every existing line that
-  # contains CRON_TAG (handles format upgrades — old entries that called
-  # claude directly get cleaned out before the new wrapper-based entries
-  # are added). Then write the two canonical entries.
+  # contains CRON_TAG (handles format upgrades and the dropped 20:00 entry —
+  # old entries get cleaned out before the canonical entry is added).
+  # Then write the single canonical entry.
   local current other
   current="$(read_crontab)"
   other="$(grep -Fv "${CRON_TAG}" <<<"${current}" || true)"
   # Trim trailing blank lines that grep -v can leave behind.
   other="$(printf '%s' "${other}" | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
-  local new="${other}${other:+$'\n'}${ENTRY_NOON}"$'\n'"${ENTRY_EVENING}"
+  local new="${other}${other:+$'\n'}${ENTRY_NOON}"
   printf '%s\n' "${new}" | crontab -
   echo "=== new root crontab ==="
   crontab -l
   echo
-  echo "next fires at the next 12:00 or 20:00 (local time)."
+  echo "next fires at the next 12:00 (local time)."
   echo "to force an immediate end-to-end test, add a temp entry that"
   echo "fires in ~3 minutes pointing at the same wrapper, wait for"
   echo "docs/status/cron.log + new docs/status/*.md, then remove the"
